@@ -14,6 +14,7 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 - 右侧对话区：`src/chat/ChatPanel.tsx`
 - 聊天输入组件：`src/chat/CopilotPromptEditor.tsx`
 - 聊天消息仓库：`src/chat/messageRepository.ts`
+- 正文替换保护：`src/editor/draftReplaceGuard.ts`
 - 主要样式：`src/App.css`
 - Tauri 组装入口：`src-tauri/src/lib.rs`
 - 后端模块：
@@ -55,6 +56,7 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 - 右侧侧边面板应支持模式切换，第一版至少区分“共创”和“记忆”。
 - 记忆提取是显式动作；模型不得在普通共创发送时直接写长期记忆。
 - 当前已完成最小共创/记忆分离：底部输入调用共创命令并打开“共创”侧边面板，不再创建候选记忆；顶部“记忆”按钮仍打开记忆面板。
+- 正文 inline diff 的确认链路参考 `obsidian-copilot` 的 `replaceGuard.ts`，已接入纯文本替换保护：只有 target 在当前正文中唯一命中且不与其他修改范围重叠时才渲染和确认；找不到、重复出现或重叠的建议会保持待确认状态并提示需要重新定位，禁止默认改第一处。
 
 ## 作品类型
 

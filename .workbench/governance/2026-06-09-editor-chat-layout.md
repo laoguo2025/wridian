@@ -29,6 +29,7 @@
   - 追加迁移：按 `MessageRepository.ts` 的单一消息源思路拆出 `src/chat/messageRepository.ts`，集中管理消息类型、消息 ID、用户/助手消息创建、上下文 pill 序列化、编辑恢复和重试定位。
   - 追加迁移：将 `CopilotPromptEditor`、键盘发送、受控值同步、`@`/`/` 类型提示从 `App.tsx` 拆到 `src/chat/CopilotPromptEditor.tsx`，为后续完整 pill node、URL/tool pill 和文件内容检索预留模块入口。
   - 追加迁移：将右侧消息流、消息动作、上下文 pill 区和输入组件组合从 `App.tsx` 拆到 `src/chat/ChatPanel.tsx`，对齐 `ChatMessages` / `ChatSingleMessage` 的组件边界。
+  - 追加迁移：参考 `obsidian-copilot/src/editor/replaceGuard.ts` 新增 `src/editor/draftReplaceGuard.ts`。正文 inline diff 只允许唯一命中且不重叠的 target 被渲染和确认；重复、找不到或重叠的修改会提示需要重新定位，避免误改第一处同名文本。
   - 暂未引入 Copilot 的完整自定义 pill node、图片 pill、URL pill、工具开关、模型选择、文件内容异步检索、ChatManager 和持久化；这些属于后续上下文系统，不再标记为已复刻。
 - 根页面和工作区固定视口高度，隐藏窗口级滚动；正文编辑器、文件树、右侧聊天消息区使用内部滚动。
 - 增加主题化滚动条样式。

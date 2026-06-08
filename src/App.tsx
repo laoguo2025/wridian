@@ -9,6 +9,10 @@ import {
   type PromptSuggestion,
 } from "./chat/messageRepository";
 import { ChatPanel } from "./chat/ChatPanel";
+import {
+  createDraftReplaceGuardReport,
+  describeDraftReplaceSkip,
+} from "./editor/draftReplaceGuard";
 import "./App.css";
 
 type Theme = "light" | "dark";
@@ -418,12 +422,14 @@ function App() {
   const acceptEdit = (id: string) => {
     const edit = pendingEdits.find((item) => item.id === id && item.status === "pending");
     if (!edit) return;
-    const match = matchDraftEditSuggestions(editorContent, pendingEdits.filter((item) => item.status === "pending")).find(
-      (item) => item.edit.id === id,
-    );
+    const guardReport = createDraftReplaceGuardReport(editorContent, pendingEdits.filter((item) => item.status === "pending"));
+    const match = guardReport.matches.find((item) => item.edit.id === id);
     if (!match) {
+      const skipped = guardReport.skipped.find((item) => item.edit.id === id);
+      setCocreationError(skipped ? describeDraftReplaceSkip(skipped.reason) : "这处修改无法安全定位。");
       return;
     }
+    setCocreationError("");
     applyTextToDraft(edit.replacement, { start: match.index, end: match.index + edit.target.length });
     setPendingEdits((edits) => edits.map((item) => (item.id === id ? { ...item, status: "accepted" } : item)));
   };
@@ -434,9 +440,11 @@ function App() {
 
   const acceptAllEdits = () => {
     const pending = pendingEdits.filter((edit) => edit.status === "pending");
-    const matches = matchDraftEditSuggestions(editorContent, pending);
+    const guardReport = createDraftReplaceGuardReport(editorContent, pending);
+    const matches = guardReport.matches;
 
     if (!matches.length) {
+      setCocreationError("没有可以安全确认的修改。");
       return;
     }
 
@@ -449,6 +457,7 @@ function App() {
 
     setEditorContent(nextContent);
     setPendingEdits((edits) => edits.map((edit) => (appliedIds.has(edit.id) ? { ...edit, status: "accepted" } : edit)));
+    setCocreationError(guardReport.skipped.length ? `${guardReport.skipped.length} 处修改需要重新定位。` : "");
     draftSelectionRef.current = { start: 0, end: 0 };
     setDraftSelection({ start: 0, end: 0 });
     setHasDraftSelection(false);
@@ -459,7 +468,12 @@ function App() {
     setPendingEdits((edits) => edits.map((edit) => (edit.status === "pending" ? { ...edit, status: "rejected" } : edit)));
   };
 
-  const pendingDraftEdits = pendingEdits.filter((edit) => edit.status === "pending");
+  const pendingDraftEdits = useMemo(() => pendingEdits.filter((edit) => edit.status === "pending"), [pendingEdits]);
+  const draftReplaceGuardReport = useMemo(
+    () => createDraftReplaceGuardReport(editorContent, pendingDraftEdits),
+    [editorContent, pendingDraftEdits],
+  );
+  const blockedDraftEditCount = draftReplaceGuardReport.skipped.length;
   const promptSuggestions = useMemo(() => {
     const suggestions: PromptSuggestion[] = [];
     const selectedDraftText = editorContent.slice(draftSelection.start, draftSelection.end).trim();
@@ -717,6 +731,7 @@ function App() {
                 <h1 className="chapter-heading">{editorTitle}</h1>
                 <div className="draft-suggestion-actions" aria-label="待确认修改操作" hidden={!pendingDraftEdits.length}>
                     <span>{pendingDraftEdits.length} 处待确认修改</span>
+                    {blockedDraftEditCount ? <span className="draft-guard-note">{blockedDraftEditCount} 处需重新定位</span> : null}
                     <button type="button" onClick={acceptAllEdits}>全部确认</button>
                     <button type="button" className="secondary" onClick={rejectAllEdits}>全部取消</button>
                 </div>
@@ -1094,35 +1109,8 @@ type DraftSuggestionChunk =
   | { kind: "text"; text: string }
   | { kind: "edit"; edit: DraftEdit };
 
-type DraftEditMatch = {
-  edit: DraftEdit;
-  index: number;
-};
-
-function matchDraftEditSuggestions(content: string, edits: DraftEdit[]): DraftEditMatch[] {
-  const claimed: Array<{ start: number; end: number }> = [];
-  const matches: DraftEditMatch[] = [];
-
-  for (const edit of edits) {
-    if (!edit.target) continue;
-    let index = content.indexOf(edit.target);
-    while (index >= 0) {
-      const end = index + edit.target.length;
-      const overlaps = claimed.some((range) => index < range.end && end > range.start);
-      if (!overlaps) {
-        claimed.push({ start: index, end });
-        matches.push({ edit, index });
-        break;
-      }
-      index = content.indexOf(edit.target, index + 1);
-    }
-  }
-
-  return matches.sort((left, right) => left.index - right.index);
-}
-
 function buildDraftSuggestionChunks(content: string, edits: DraftEdit[]): DraftSuggestionChunk[] {
-  const matches = matchDraftEditSuggestions(content, edits);
+  const matches = createDraftReplaceGuardReport(content, edits).matches;
   const chunks: DraftSuggestionChunk[] = [];
   let cursor = 0;
 
