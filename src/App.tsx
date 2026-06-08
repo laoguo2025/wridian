@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 
 type Theme = "light" | "dark";
-type SaveStatus = "demo" | "idle" | "dirty" | "saving" | "saved" | "error";
+type SaveStatus = "idle" | "dirty" | "saving" | "saved" | "error";
 
 type WorkspaceInfo = {
   vaultPath: string;
@@ -102,81 +102,9 @@ type TextSelection = {
   end: number;
 };
 
-const fallbackFiles: WorkFileNode[] = [
-  {
-    name: "雾城手记",
-    path: "demo://雾城手记",
-    folder: true,
-    children: [
-      { name: "outline.md", path: "demo://outline.md", folder: false, children: [] },
-      {
-        name: "chapters",
-        path: "demo://chapters",
-        folder: true,
-        children: [
-          { name: "01.md", path: "demo://chapters/01.md", folder: false, children: [] },
-          { name: "02.md", path: "demo://chapters/02.md", folder: false, children: [] },
-          { name: "03.md", path: "demo://chapters/03.md", folder: false, children: [] },
-        ],
-      },
-      {
-        name: "characters",
-        path: "demo://characters",
-        folder: true,
-        children: [{ name: "女主.md", path: "demo://characters/女主.md", folder: false, children: [] }],
-      },
-      { name: "world.md", path: "demo://world.md", folder: false, children: [] },
-    ],
-  },
-];
-
-const demoContent: Record<string, string> = {
-  "demo://outline.md": "# 雾城手记\n\n## 核心悬念\n\n女主回到旧楼，发现父亲失踪前留下的线索。\n\n## 当前推进\n\n第三章需要强化她主动进门的理由。",
-  "demo://chapters/01.md": "第一章\n\n雨从黄昏开始下。她在车站站了很久，直到最后一班公交车亮着灯驶出站台。",
-  "demo://chapters/02.md": "第二章\n\n电话里的人只说了一句话：不要回那栋楼。",
-  "demo://chapters/03.md": [
-    "她推开门的时候，雨水顺着袖口往下滴。",
-    "",
-    "屋里没有开灯，只有楼道里的光斜斜切进来。她没有立刻喊人。那一秒的停顿不像恐惧，更像确认。",
-    "",
-    "她已经知道里面会有什么。",
-  ].join("\n"),
-  "demo://characters/女主.md": "# 女主\n\n- 不轻易解释自己的判断。\n- 对父亲的失踪有长期愧疚。\n- 第三章进入房间不是冲动，而是确认。",
-  "demo://world.md": "# 世界设定\n\n雾城常年潮湿，旧楼区在十年前的事故后逐步空置。",
-};
-
-const memoryItems = [
-  "女主知道父亲失踪真相，但还没有证据。",
-  "雨夜场景不能提前暴露凶手。",
-  "第三章要强化她进门前的主动选择。",
-];
-
-const demoMemoryState: MemoryState = {
-  memories: memoryItems.map((text, index) => ({
-    id: `demo-memory-${index}`,
-    text,
-    sourcePath: "demo://chapters/03.md",
-    title: "03.md",
-    createdAt: "demo",
-  })),
-  candidates: [],
-};
-
-const demoCocreationReply =
-  "可以。我会把动机提前到进门动作里，让她不是被剧情推着走，而是主动验证线索。";
-
-const demoCocreationEdits: CoCreateEdit[] = [
-  {
-    target: "她没有立刻喊人。",
-    replacement: "她没有立刻喊人，而是先摸了摸口袋里那把旧钥匙。",
-    rationale: "用动作提前交代她进门是为了确认父亲线索。",
-  },
-];
-
 function App() {
   const [theme, setTheme] = useState<Theme>("light");
   const [memoryOpen, setMemoryOpen] = useState(false);
-  const [cocreationOpen, setCocreationOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [workspace, setWorkspace] = useState<WorkspaceInfo | null>(null);
   const [workspaceError, setWorkspaceError] = useState("");
@@ -189,13 +117,13 @@ function App() {
   const [attachedSelection, setAttachedSelection] = useState("");
   const [hasDraftSelection, setHasDraftSelection] = useState(false);
   const [cocreationActionStatus, setCocreationActionStatus] = useState("");
-  const [selectedPath, setSelectedPath] = useState("demo://chapters/03.md");
-  const [editorTitle, setEditorTitle] = useState("03.md");
-  const [editorContent, setEditorContent] = useState(demoContent["demo://chapters/03.md"]);
-  const [lastSavedContent, setLastSavedContent] = useState(demoContent["demo://chapters/03.md"]);
-  const [saveStatus, setSaveStatus] = useState<SaveStatus>("demo");
+  const [selectedPath, setSelectedPath] = useState("");
+  const [editorTitle, setEditorTitle] = useState("");
+  const [editorContent, setEditorContent] = useState("");
+  const [lastSavedContent, setLastSavedContent] = useState("");
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [saveError, setSaveError] = useState("");
-  const [memoryState, setMemoryState] = useState<MemoryState>(demoMemoryState);
+  const [memoryState, setMemoryState] = useState<MemoryState>({ memories: [], candidates: [] });
   const [memoryError, setMemoryError] = useState("");
   const [extractingMemory, setExtractingMemory] = useState(false);
   const [fileMenu, setFileMenu] = useState<FileContextMenu | null>(null);
@@ -216,7 +144,6 @@ function App() {
     const userInput = (override?.text ?? prompt).trim();
     if (!userInput || cocreating) return;
     if (!override) setPrompt("");
-    setCocreationOpen(true);
     setMemoryOpen(false);
     setCocreating(true);
     setCocreationError("");
@@ -230,26 +157,10 @@ function App() {
     setChatMessages((messages) => [...messages, userMessage]);
     if (!override) setAttachedSelection("");
     try {
-      if (selectedPath.startsWith("demo://")) {
-        setChatMessages((messages) => [
-          ...messages,
-          {
-            id: `assistant-${Date.now()}`,
-            role: "assistant",
-            text: demoCocreationReply,
-          },
-        ]);
-        setPendingEdits((edits) => [
-          ...edits,
-          ...demoCocreationEdits.map((edit) => ({ ...edit, id: `edit-${Date.now()}-${edit.target}`, status: "pending" as const })),
-        ]);
-        setCocreationMemories(memoryState.memories.slice(0, 3).map((item) => `【${item.category ?? "其他"}】${item.text}`));
-        return;
-      }
       const response = await invoke<CoCreateResponse>("wridian_cocreate", {
         input: {
-          sourcePath: selectedPath,
-          title: editorTitle,
+          sourcePath: selectedPath || "未选择文件",
+          title: editorTitle || "未选择文件",
           content: editorContent,
           userInput,
           selectedText: selectedText || null,
@@ -320,8 +231,8 @@ function App() {
     void loadMemoryState();
   }, [loadMemoryState]);
 
-  const files = workspace?.files?.length ? workspace.files : fallbackFiles;
-  const isRealFile = selectedPath && !selectedPath.startsWith("demo://");
+  const files = workspace?.files ?? [];
+  const isRealFile = Boolean(selectedPath);
   const dirty = isRealFile && editorContent !== lastSavedContent;
 
   const saveCurrentFile = useCallback(async () => {
@@ -435,17 +346,6 @@ function App() {
     setSelectedPath(node.path);
     setEditorTitle(node.name);
     setSaveError("");
-    if (node.path.startsWith("demo://")) {
-      const content = demoContent[node.path] ?? "";
-      setEditorContent(content);
-      setLastSavedContent(content);
-      draftSelectionRef.current = { start: content.length, end: content.length };
-      setHasDraftSelection(false);
-      setAttachedSelection("");
-      setPendingEdits([]);
-      setSaveStatus("demo");
-      return;
-    }
     setSaveStatus("idle");
     try {
       const response = await invoke<OpenFileResponse>("wridian_open_file", { input: { path: node.path } });
@@ -574,7 +474,6 @@ function App() {
   const pendingDraftEdits = pendingEdits.filter((edit) => edit.status === "pending");
 
   const statusLabel = useMemo(() => {
-    if (saveStatus === "demo") return "示例";
     if (saveStatus === "idle") return "读取中";
     if (saveStatus === "dirty") return "未保存";
     if (saveStatus === "saving") return "正在保存";
@@ -674,7 +573,6 @@ function App() {
         <nav className="top-actions" aria-label="Wridian actions">
           <button type="button" onClick={() => {
             setMemoryOpen(true);
-            setCocreationOpen(false);
           }}>
             记忆
           </button>
@@ -726,87 +624,72 @@ function App() {
         </aside>
 
         <main className="writing-pane">
-          <section className="paper" aria-label="正文编辑区">
-            <div className="paper-topline">
-              <div className="paper-kicker">{selectedPath.startsWith("demo://") ? "示例作品" : baseName(selectedPath)}</div>
-              <div className="paper-actions">
-                <button type="button" className="paper-action" onClick={attachCurrentSelectionToPrompt} disabled={!hasDraftSelection}>
-                  添加选区到输入框
-                </button>
-                <button type="button" className="paper-action" onClick={() => {
-                  setMemoryOpen(true);
-                  setCocreationOpen(false);
-                  void extractMemoryCandidates();
-                }}>
-                  提取当前内容到记忆
-                </button>
-                <div className={`save-state ${saveStatus}`} title={saveError || undefined}>
-                  {statusLabel}
+          <section className={`paper ${selectedPath ? "" : "paper-empty"}`} aria-label="正文编辑区">
+            {selectedPath ? (
+              <div className="paper-topline">
+                <div className="paper-kicker">{baseName(selectedPath)}</div>
+                <div className="paper-actions">
+                  <button type="button" className="paper-action" onClick={attachCurrentSelectionToPrompt} disabled={!hasDraftSelection}>
+                    添加选区到输入框
+                  </button>
+                  <button type="button" className="paper-action" onClick={() => {
+                    setMemoryOpen(true);
+                    void extractMemoryCandidates();
+                  }} disabled={!editorContent.trim()}>
+                    提取当前内容到记忆
+                  </button>
+                  <div className={`save-state ${saveStatus}`} title={saveError || undefined}>
+                    {statusLabel}
+                  </div>
                 </div>
               </div>
-            </div>
-            <h1 className="chapter-heading">{editorTitle}</h1>
-            <div className="draft-suggestion-actions" aria-label="待确认修改操作" hidden={!pendingDraftEdits.length}>
-                <span>{pendingDraftEdits.length} 处待确认修改</span>
-                <button type="button" onClick={acceptAllEdits}>全部确认</button>
-                <button type="button" className="secondary" onClick={rejectAllEdits}>全部取消</button>
-            </div>
-            <DraftEditor
-              content={editorContent}
-              edits={pendingDraftEdits}
-              editorRef={draftEditorRef}
-              onAcceptEdit={acceptEdit}
-              onChange={setEditorContent}
-              onKeyDown={handleDraftKeyDown}
-              onRejectEdit={rejectEdit}
-              onSelectionChange={updateDraftSelection}
-            />
+            ) : null}
+            {selectedPath ? (
+              <>
+                <h1 className="chapter-heading">{editorTitle}</h1>
+                <div className="draft-suggestion-actions" aria-label="待确认修改操作" hidden={!pendingDraftEdits.length}>
+                    <span>{pendingDraftEdits.length} 处待确认修改</span>
+                    <button type="button" onClick={acceptAllEdits}>全部确认</button>
+                    <button type="button" className="secondary" onClick={rejectAllEdits}>全部取消</button>
+                </div>
+                <DraftEditor
+                  content={editorContent}
+                  edits={pendingDraftEdits}
+                  editorRef={draftEditorRef}
+                  onAcceptEdit={acceptEdit}
+                  onChange={setEditorContent}
+                  onKeyDown={handleDraftKeyDown}
+                  onRejectEdit={rejectEdit}
+                  onSelectionChange={updateDraftSelection}
+                />
+              </>
+            ) : (
+              <div className="empty-editor" aria-label="空文件编辑区">文件编辑区</div>
+            )}
             {saveError ? <div className="paper-error">{saveError}</div> : null}
           </section>
-
-          <form
-            className="prompt-bar"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void sendPrompt();
-            }}
-          >
-            {attachedSelection ? (
-              <div className="prompt-attachment">
-                <span>已附加片段</span>
-                <button type="button" onClick={() => setAttachedSelection("")} aria-label="移除片段">×</button>
-                <p>{attachedSelection}</p>
-              </div>
-            ) : null}
-            <textarea
-              value={prompt}
-              onChange={(event) => setPrompt(event.currentTarget.value)}
-              onKeyDown={handlePromptKeyDown}
-              placeholder="Enter 发送，Shift + Enter 换行"
-              aria-label="共创输入"
-            />
-            <button type="submit" aria-label="发送" disabled={cocreating || !prompt.trim()}>
-              {cocreating ? "…" : "↑"}
-            </button>
-          </form>
         </main>
-      </div>
 
-      {cocreationOpen ? (
-        <CoCreationDrawer
-          currentTitle={editorTitle}
-          error={cocreationError}
+        <ChatPanel
           actionStatus={cocreationActionStatus}
+          currentTitle={editorTitle || "未选择文件"}
+          error={cocreationError}
           messages={chatMessages}
           memoriesUsed={cocreationMemories}
           onAddToMemory={addTextToMemory}
-          onClose={() => setCocreationOpen(false)}
           onCopy={copyText}
           onEditUserMessage={editUserMessage}
           onRetry={retryLastUserMessage}
           pending={cocreating}
+          prompt={prompt}
+          attachedSelection={attachedSelection}
+          onPromptChange={setPrompt}
+          onRemoveSelection={() => setAttachedSelection("")}
+          onSubmit={() => void sendPrompt()}
+          onKeyDown={handlePromptKeyDown}
         />
-      ) : null}
+      </div>
+
       {memoryOpen ? (
         <MemoryDrawer
           currentTitle={editorTitle}
@@ -1186,99 +1069,128 @@ function buildDraftSuggestionChunks(content: string, edits: DraftEdit[]): DraftS
   return chunks.length ? chunks : [{ kind: "text", text: content }];
 }
 
-function CoCreationDrawer({
+function ChatPanel({
   actionStatus,
+  attachedSelection,
   currentTitle,
   error,
   messages,
   memoriesUsed,
   onAddToMemory,
-  onClose,
   onCopy,
   onEditUserMessage,
+  onKeyDown,
+  onPromptChange,
+  onRemoveSelection,
   onRetry,
+  onSubmit,
   pending,
+  prompt,
 }: {
   actionStatus: string;
+  attachedSelection: string;
   currentTitle: string;
   error: string;
   messages: ChatMessage[];
   memoriesUsed: string[];
   onAddToMemory: (text: string) => void;
-  onClose: () => void;
   onCopy: (text: string) => void;
   onEditUserMessage: (message: ChatMessage) => void;
+  onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
+  onPromptChange: (value: string) => void;
+  onRemoveSelection: () => void;
   onRetry: (message: ChatMessage) => void;
+  onSubmit: () => void;
   pending: boolean;
+  prompt: string;
 }) {
   const lastUserMessage = [...messages].reverse().find((message) => message.role === "user");
 
   return (
-    <div className="drawer-backdrop" onMouseDown={onClose} role="presentation">
-      <aside className="side-drawer cocreation-drawer" role="dialog" aria-modal="true" aria-label="共创" onMouseDown={(event) => event.stopPropagation()}>
-        <div className="drawer-header">
-          <div>
-            <div className="drawer-title">共创</div>
-            <div className="drawer-subtitle">当前文件：{currentTitle}</div>
+    <aside className="chat-panel" aria-label="对话区">
+      <div className="chat-panel-header">
+        <div>
+          <div className="drawer-title">对话区</div>
+          <div className="drawer-subtitle">当前文件：{currentTitle}</div>
+        </div>
+      </div>
+
+      <div className="chat-thread">
+        {messages.length ? (
+          messages.map((message) => (
+            <article className={`chat-message ${message.role}`} key={message.id}>
+              <div className="chat-message-label">{message.role === "user" ? "你" : "Wridian"}</div>
+              {message.selectedText ? (
+                <blockquote>{message.selectedText}</blockquote>
+              ) : null}
+              <p className="cocreation-reply">{message.text}</p>
+              <div className="message-actions">
+                {message.role === "user" ? (
+                  <>
+                    <button type="button" onClick={() => onEditUserMessage(message)}>编辑</button>
+                    <button type="button" onClick={() => onCopy(message.text)}>复制</button>
+                    <button type="button" onClick={() => onAddToMemory(message.text)}>添加到记忆</button>
+                  </>
+                ) : (
+                  <>
+                    <button type="button" onClick={() => lastUserMessage ? onRetry(lastUserMessage) : undefined}>重试</button>
+                    <button type="button" onClick={() => onCopy(message.text)}>复制</button>
+                    <button type="button" onClick={() => onAddToMemory(message.text)}>添加到记忆</button>
+                  </>
+                )}
+              </div>
+            </article>
+          ))
+        ) : (
+          <section className="memory-card cocreation-card">
+            <h2>共创对话</h2>
+            <p>在下方输入框发送消息后，这里会显示你和 Wridian 的讨论。</p>
+          </section>
+        )}
+        {pending ? <div className="inline-status">Wridian 正在回复。</div> : null}
+        {error ? <div className="rail-error">{error}</div> : null}
+        {actionStatus ? <div className="inline-status">{actionStatus}</div> : null}
+      </div>
+
+      <section className="memory-card cocreation-card">
+        <h2>本次使用的记忆</h2>
+        {memoriesUsed.length ? (
+          <ul>
+            {memoriesUsed.map((memory, index) => (
+              <li key={`${memory}-${index}`}>{memory}</li>
+            ))}
+          </ul>
+        ) : (
+          <p>本次没有注入已确认记忆。</p>
+        )}
+      </section>
+
+      <form
+        className="prompt-bar"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSubmit();
+        }}
+      >
+        {attachedSelection ? (
+          <div className="prompt-attachment">
+            <span>已附加片段</span>
+            <button type="button" onClick={onRemoveSelection} aria-label="移除片段">×</button>
+            <p>{attachedSelection}</p>
           </div>
-          <button type="button" className="icon-button" onClick={onClose} aria-label="关闭">
-            ×
-          </button>
-        </div>
-
-        <div className="chat-thread">
-          {messages.length ? (
-            messages.map((message) => (
-              <article className={`chat-message ${message.role}`} key={message.id}>
-                <div className="chat-message-label">{message.role === "user" ? "你" : "Wridian"}</div>
-                {message.selectedText ? (
-                  <blockquote>{message.selectedText}</blockquote>
-                ) : null}
-                <p className="cocreation-reply">{message.text}</p>
-                <div className="message-actions">
-                  {message.role === "user" ? (
-                    <>
-                      <button type="button" onClick={() => onEditUserMessage(message)}>编辑</button>
-                      <button type="button" onClick={() => onCopy(message.text)}>复制</button>
-                      <button type="button" onClick={() => onAddToMemory(message.text)}>添加到记忆</button>
-                    </>
-                  ) : (
-                    <>
-                      <button type="button" onClick={() => lastUserMessage ? onRetry(lastUserMessage) : undefined}>重试</button>
-                      <button type="button" onClick={() => onCopy(message.text)}>复制</button>
-                      <button type="button" onClick={() => onAddToMemory(message.text)}>添加到记忆</button>
-                    </>
-                  )}
-                </div>
-              </article>
-            ))
-          ) : (
-            <section className="memory-card cocreation-card">
-              <h2>共创对话</h2>
-              <p>在底部输入框发送消息后，这里会显示你和 Wridian 的讨论。</p>
-            </section>
-          )}
-          {pending ? <div className="inline-status">Wridian 正在回复。</div> : null}
-          {error ? <div className="rail-error">{error}</div> : null}
-          {actionStatus ? <div className="inline-status">{actionStatus}</div> : null}
-        </div>
-
-        <section className="memory-card cocreation-card">
-          <h2>本次使用的记忆</h2>
-          {memoriesUsed.length ? (
-            <ul>
-              {memoriesUsed.map((memory, index) => (
-                <li key={`${memory}-${index}`}>{memory}</li>
-              ))}
-            </ul>
-          ) : (
-            <p>本次没有注入已确认记忆。</p>
-          )}
-        </section>
-
-        <footer className="drawer-footer">共创回复不会自动写入正文，也不会直接写入长期记忆。</footer>
-      </aside>
-    </div>
+        ) : null}
+        <textarea
+          value={prompt}
+          onChange={(event) => onPromptChange(event.currentTarget.value)}
+          onKeyDown={onKeyDown}
+          placeholder="Enter 发送，Shift + Enter 换行"
+          aria-label="共创输入"
+        />
+        <button type="submit" aria-label="发送" disabled={pending || !prompt.trim()}>
+          {pending ? "…" : "↑"}
+        </button>
+      </form>
+    </aside>
   );
 }
 
