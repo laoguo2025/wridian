@@ -1,3 +1,5 @@
+import { serializePromptContextPills, type PromptContextPill } from "./promptContext";
+
 export type ChatMessage = {
   id: string;
   role: "user" | "assistant";
@@ -6,26 +8,8 @@ export type ChatMessage = {
   contextPills?: PromptContextPill[];
 };
 
-export type PromptContextPill = {
-  id: string;
-  label: string;
-  value: string;
-};
-
-export type PromptSuggestion = {
-  id: string;
-  label: string;
-  detail: string;
-  insertText: string;
-  kind: "context" | "command";
-};
-
 function createChatMessageId(prefix: ChatMessage["role"]) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-export function serializePromptContextPills(pills: PromptContextPill[]) {
-  return pills.map((pill) => `【${pill.label}】\n${pill.value}`).join("\n\n").trim();
 }
 
 export function createUserChatMessage(params: {

@@ -13,6 +13,7 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 - 前端入口：`src/App.tsx`
 - 右侧对话区：`src/chat/ChatPanel.tsx`
 - 聊天输入组件：`src/chat/CopilotPromptEditor.tsx`
+- 聊天上下文：`src/chat/promptContext.ts`
 - 聊天消息仓库：`src/chat/messageRepository.ts`
 - 正文替换保护：`src/editor/draftReplaceGuard.ts`
 - 主要样式：`src/App.css`
@@ -48,7 +49,8 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
   - `ChatInput.tsx`：带边框的底部输入容器、上下文 pill 区、中间约 60px 起步输入区、24px 底部工具栏、小发送/停止动作。
   - `LexicalEditor.tsx`：输入区内部滚动，长文本不撑高右栏；Wridian 聊天输入区已从 textarea 切换为 Lexical `ContentEditable`，使用受控文本同步、历史插件和 Enter 发送；实现入口为 `src/chat/CopilotPromptEditor.tsx`。
   - `AtMentionCommandPlugin.tsx` / `SlashCommandPlugin.tsx`：Wridian 已接入本地第一版 `@` 上下文选择和 `/` 写作命令提示，实现在 `src/chat/CopilotPromptEditor.tsx` 内。`@` 可把当前选区、当前文件、当前正文放入输入框上方上下文 pill；`/` 可插入改对白、增强冲突、加结尾钩子、检查角色口吻、批量改角色名、提取记忆等小说和短剧共用命令。
-  - `MessageRepository.ts`：Wridian 已开始拆出前端消息仓库边界，`src/chat/messageRepository.ts` 负责消息类型、ID、用户/助手消息创建、上下文 pill 序列化、编辑恢复和重试定位；`App.tsx` 仍负责调用 Tauri 共创命令。
+  - `ContextManager.ts` / `PromptContextTypes.ts`：Wridian 已开始拆出聊天上下文边界，`src/chat/promptContext.ts` 负责 prompt pill 类型、序列化、上下文建议构造和写作命令建议；消息仓库只保存消息和已绑定的上下文快照。
+  - `MessageRepository.ts`：Wridian 已开始拆出前端消息仓库边界，`src/chat/messageRepository.ts` 负责消息类型、ID、用户/助手消息创建、编辑恢复和重试定位；`App.tsx` 仍负责调用 Tauri 共创命令。
   - `ChatMessages.tsx`：空消息流保持空白，Relevant Notes / Suggested Prompts 这类辅助块不固定展示；Wridian 右侧消息流和输入组合入口为 `src/chat/ChatPanel.tsx`。
   - `ChatSingleMessage.tsx` / `ChatButtons.tsx`：用户消息使用浅边框背景，AI 消息不做重卡片；消息动作放在底部紧凑行。
   - 后续仍需补齐 Copilot 的完整文件内容检索、URL/工具 pill 节点、模型/工具选择器、图片粘贴和独立 ChatManager/ChatPersistenceManager；当前 `@`/`/` 是本地 MVP，不是最终完整 Copilot 插件边界。

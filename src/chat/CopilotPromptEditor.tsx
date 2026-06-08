@@ -17,7 +17,7 @@ import {
   KEY_ENTER_COMMAND,
   TextNode,
 } from "lexical";
-import type { PromptSuggestion } from "./messageRepository";
+import type { PromptSuggestion } from "./promptContext";
 
 export function CopilotPromptEditor({
   onChange,

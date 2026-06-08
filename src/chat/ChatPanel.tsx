@@ -4,9 +4,8 @@ import {
   findPreviousUserMessage,
   restorePromptPillsFromMessage,
   type ChatMessage,
-  type PromptContextPill,
-  type PromptSuggestion,
 } from "./messageRepository";
+import type { PromptContextPill, PromptSuggestion } from "./promptContext";
 
 export function ChatPanel({
   error,

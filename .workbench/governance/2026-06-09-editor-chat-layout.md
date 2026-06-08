@@ -26,9 +26,10 @@
   - 输入容器继续按 `ChatInput` / `LexicalEditor` 的可见结构：边框容器、pill 区、约 60px 输入区、24px 底部动作、小发送按钮；长文本在输入区内部滚动。
   - 追加迁移：聊天输入区已从 textarea 改为 Lexical `ContentEditable`，引入 `@lexical/react` 和 `lexical`，实现受控文本同步、历史插件、Enter 发送、Shift+Enter 换行和中文输入法 composition 防误发送。
   - 追加迁移：按 `AtMentionCommandPlugin.tsx` / `SlashCommandPlugin.tsx` 的交互形态接入 Wridian 本地第一版类型提示。输入 `@` 显示当前选区、当前文件、当前正文并转为输入框上方上下文 pill；输入 `/` 显示小说和短剧共用写作命令并插入提示文本。
-  - 追加迁移：按 `MessageRepository.ts` 的单一消息源思路拆出 `src/chat/messageRepository.ts`，集中管理消息类型、消息 ID、用户/助手消息创建、上下文 pill 序列化、编辑恢复和重试定位。
+  - 追加迁移：按 `MessageRepository.ts` 的单一消息源思路拆出 `src/chat/messageRepository.ts`，集中管理消息类型、消息 ID、用户/助手消息创建、上下文快照保存、编辑恢复和重试定位。
   - 追加迁移：将 `CopilotPromptEditor`、键盘发送、受控值同步、`@`/`/` 类型提示从 `App.tsx` 拆到 `src/chat/CopilotPromptEditor.tsx`，为后续完整 pill node、URL/tool pill 和文件内容检索预留模块入口。
   - 追加迁移：将右侧消息流、消息动作、上下文 pill 区和输入组件组合从 `App.tsx` 拆到 `src/chat/ChatPanel.tsx`，对齐 `ChatMessages` / `ChatSingleMessage` 的组件边界。
+  - 追加迁移：按 `ContextManager.ts` / `PromptContextTypes.ts` 的分层方向新增 `src/chat/promptContext.ts`，承载 prompt pill 类型、序列化、上下文建议构造和写作命令建议；`messageRepository.ts` 不再定义这些上下文类型。
   - 追加迁移：参考 `obsidian-copilot/src/editor/replaceGuard.ts` 新增 `src/editor/draftReplaceGuard.ts`。正文 inline diff 只允许唯一命中且不重叠的 target 被渲染和确认；重复、找不到或重叠的修改会提示需要重新定位，避免误改第一处同名文本。
   - 暂未引入 Copilot 的完整自定义 pill node、图片 pill、URL pill、工具开关、模型选择、文件内容异步检索、ChatManager 和持久化；这些属于后续上下文系统，不再标记为已复刻。
 - 根页面和工作区固定视口高度，隐藏窗口级滚动；正文编辑器、文件树、右侧聊天消息区使用内部滚动。

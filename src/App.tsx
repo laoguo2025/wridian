@@ -5,10 +5,16 @@ import {
   createUserChatMessage,
   restorePromptPillsFromMessage,
   type ChatMessage,
-  type PromptContextPill,
-  type PromptSuggestion,
 } from "./chat/messageRepository";
 import { ChatPanel } from "./chat/ChatPanel";
+import {
+  buildPromptSuggestions,
+  createFilePromptPill,
+  createPromptPillFromSuggestion,
+  createSelectionPromptPill,
+  upsertPromptContextPill,
+  type PromptContextPill,
+} from "./chat/promptContext";
 import {
   createDraftReplaceGuardReport,
   describeDraftReplaceSkip,
@@ -200,10 +206,7 @@ function App() {
     if (!selection) return;
     const selected = editorContent.slice(selection.start, selection.end).trim();
     if (!selected) return;
-    setPromptPills((current) => [
-      ...current.filter((pill) => pill.id !== "selection"),
-      { id: "selection", label: "选区", value: selected },
-    ]);
+    setPromptPills((current) => upsertPromptContextPill(current, createSelectionPromptPill(selected)));
     setPrompt((current) => current || "请修改这段。");
   };
 
@@ -317,10 +320,7 @@ function App() {
 
   const addNodeToPrompt = (node: WorkFileNode) => {
     if (node.folder) return;
-    setPromptPills((current) => [
-      ...current.filter((pill) => pill.id !== `file:${node.path}`),
-      { id: `file:${node.path}`, label: node.name, value: `路径：${node.path}` },
-    ]);
+    setPromptPills((current) => upsertPromptContextPill(current, createFilePromptPill(node.name, node.path)));
   };
 
   const openFileContextMenu = (node: WorkFileNode, x: number, y: number) => {
@@ -474,86 +474,14 @@ function App() {
     [editorContent, pendingDraftEdits],
   );
   const blockedDraftEditCount = draftReplaceGuardReport.skipped.length;
-  const promptSuggestions = useMemo(() => {
-    const suggestions: PromptSuggestion[] = [];
-    const selectedDraftText = editorContent.slice(draftSelection.start, draftSelection.end).trim();
-
-    if (selectedDraftText) {
-      suggestions.push({
-        id: "selection",
-        label: "当前选区",
-        detail: "把正文里划选的片段作为本轮上下文",
-        insertText: selectedDraftText,
-        kind: "context",
-      });
-    }
-
-    if (selectedPath && editorContent.trim()) {
-      suggestions.push(
-        {
-          id: "current-file",
-          label: "当前文件",
-          detail: editorTitle || baseName(selectedPath),
-          insertText: `标题：${editorTitle || baseName(selectedPath)}\n\n${editorContent}`,
-          kind: "context",
-        },
-        {
-          id: "current-draft",
-          label: "当前正文",
-          detail: "把全文作为重点上下文",
-          insertText: editorContent,
-          kind: "context",
-        },
-      );
-    }
-
-    suggestions.push(
-      {
-        id: "rewrite-dialogue",
-        label: "改对白",
-        detail: "让对白更像角色本人、更适合小说或短剧表演",
-        insertText: "请把这段对白改得更符合角色口吻，并增强短剧冲突。",
-        kind: "command",
-      },
-      {
-        id: "raise-conflict",
-        label: "增强冲突",
-        detail: "提高场景里的阻力、误会、压迫感或选择成本",
-        insertText: "请增强这一段的戏剧冲突，但不要改变既有人物关系和事件顺序。",
-        kind: "command",
-      },
-      {
-        id: "add-hook",
-        label: "加结尾钩子",
-        detail: "补一个适合章节、分场或短剧结尾的悬念",
-        insertText: "请给这一段补一个结尾钩子，让读者或观众想继续看下一段。",
-        kind: "command",
-      },
-      {
-        id: "voice-check",
-        label: "检查角色口吻",
-        detail: "检查人物说话是否串味，指出并改写",
-        insertText: "请检查这一段的角色口吻是否一致，指出问题并给出修改建议。",
-        kind: "command",
-      },
-      {
-        id: "rename-character",
-        label: "批量修改角色名",
-        detail: "跨段落替换当前文件里的角色名",
-        insertText: "请把当前文件里的角色名从「旧名字」批量改成「新名字」，并保持上下文自然。",
-        kind: "command",
-      },
-      {
-        id: "extract-memory",
-        label: "提取记忆",
-        detail: "提取人物、设定、伏笔、风格、禁区和剧本规则",
-        insertText: "请从当前稿件中提取可以进入写作记忆的人物、设定、伏笔、风格、禁区和剧本规则。",
-        kind: "command",
-      },
-    );
-
-    return suggestions;
-  }, [draftSelection.end, draftSelection.start, editorContent, editorTitle, selectedPath]);
+  const promptSuggestions = useMemo(() => buildPromptSuggestions({
+    draftSelectionEnd: draftSelection.end,
+    draftSelectionStart: draftSelection.start,
+    editorContent,
+    editorTitle,
+    selectedPath,
+    titleFallback: selectedPath ? baseName(selectedPath) : "",
+  }), [draftSelection.end, draftSelection.start, editorContent, editorTitle, selectedPath]);
 
   const statusLabel = useMemo(() => {
     if (saveStatus === "idle") return "读取中";
@@ -768,10 +696,7 @@ function App() {
           onRemovePill={(id) => setPromptPills((current) => current.filter((pill) => pill.id !== id))}
           onSelectSuggestion={(suggestion) => {
             if (suggestion.kind !== "context") return;
-            setPromptPills((current) => [
-              ...current.filter((pill) => pill.id !== suggestion.id),
-              { id: suggestion.id, label: suggestion.label, value: suggestion.insertText },
-            ]);
+            setPromptPills((current) => upsertPromptContextPill(current, createPromptPillFromSuggestion(suggestion)));
           }}
           onSubmit={() => void sendPrompt()}
         />
