@@ -172,7 +172,7 @@ function App() {
     if (!selection) return;
     const selected = editorContent.slice(selection.start, selection.end).trim();
     if (!selected) return;
-    setPromptPills((current) => upsertPromptContextPill(current, createSelectionPromptPill(selected)));
+    setPromptPills((current) => upsertPromptContextPill(current, createSelectionPromptPill(selected, selection)));
     setPrompt((current) => current || "请修改这段。");
   };
 

@@ -1,5 +1,6 @@
 export type DraftReplaceEdit = {
   id: string;
+  sourceRange?: { end: number; start: number };
   target: string;
 };
 
@@ -39,6 +40,21 @@ export function createDraftReplaceGuardReport<TEdit extends DraftReplaceEdit>(
       continue;
     }
 
+    if (edit.sourceRange) {
+      const rangedMatch = matchSourceRange(content, edit);
+      if (rangedMatch) {
+        const range = { start: rangedMatch.index, end: rangedMatch.index + target.length };
+        const overlaps = claimed.some((claimedRange) => range.start < claimedRange.end && range.end > claimedRange.start);
+        if (overlaps) {
+          skipped.push({ edit, reason: "overlap" });
+          continue;
+        }
+        claimed.push(range);
+        matches.push(rangedMatch);
+        continue;
+      }
+    }
+
     const positions = findAllOccurrences(content, target);
     if (!positions.length) {
       skipped.push({ edit, reason: "target_not_found" });
@@ -65,6 +81,19 @@ export function createDraftReplaceGuardReport<TEdit extends DraftReplaceEdit>(
     matches: matches.sort((left, right) => left.index - right.index),
     skipped,
   };
+}
+
+function matchSourceRange<TEdit extends DraftReplaceEdit>(
+  content: string,
+  edit: TEdit,
+): DraftReplaceMatch<TEdit> | null {
+  if (!edit.sourceRange) return null;
+  const start = Math.max(0, Math.min(edit.sourceRange.start, content.length));
+  const end = Math.max(start, Math.min(edit.sourceRange.end, content.length));
+  if (content.slice(start, end) !== edit.target) {
+    return null;
+  }
+  return { edit, index: start };
 }
 
 export function describeDraftReplaceSkip(reason: DraftReplaceGuardReason) {

@@ -10,7 +10,13 @@ export type PromptContextPill = {
   id: string;
   kind: PromptContextPillKind;
   label: string;
+  range?: PromptContextRange;
   value: string;
+};
+
+export type PromptContextRange = {
+  end: number;
+  start: number;
 };
 
 export type PromptSuggestion = {
@@ -20,6 +26,7 @@ export type PromptSuggestion = {
   insertText: string;
   kind: "context" | "command";
   pillKind?: PromptContextPillKind;
+  range?: PromptContextRange;
 };
 
 export type PromptSuggestionInput = {
@@ -45,11 +52,12 @@ export function upsertPromptContextPill(pills: PromptContextPill[], pill: Prompt
   return [...pills.filter((item) => item.id !== pill.id), pill];
 }
 
-export function createSelectionPromptPill(value: string): PromptContextPill {
+export function createSelectionPromptPill(value: string, range?: PromptContextRange): PromptContextPill {
   return {
     id: "selection",
     kind: "selection",
     label: "选区",
+    range,
     value,
   };
 }
@@ -104,6 +112,7 @@ export function createPromptPillFromSuggestion(suggestion: PromptSuggestion): Pr
     id: suggestion.id,
     kind: suggestion.pillKind ?? "selection",
     label: suggestion.label,
+    range: suggestion.range,
     value: suggestion.insertText,
   };
 }
@@ -120,6 +129,10 @@ export function buildPromptSuggestions(input: PromptSuggestionInput): PromptSugg
       insertText: selectedDraftText,
       kind: "context",
       pillKind: "selection",
+      range: {
+        start: input.draftSelectionStart,
+        end: input.draftSelectionEnd,
+      },
     });
   }
 

@@ -2,10 +2,11 @@ import { useCallback, useRef, useState } from "react";
 import { requestCocreation, type CoCreateEdit } from "./cocreationClient";
 import { createChatSessionId, saveChatTranscript } from "./chatPersistence";
 import { createAssistantChatMessage, createUserChatMessage, type ChatMessage } from "./messageRepository";
-import type { PromptContextPill } from "./promptContext";
+import type { PromptContextPill, PromptContextRange } from "./promptContext";
 
 export type ChatDraftEdit = CoCreateEdit & {
   id: string;
+  sourceRange?: PromptContextRange;
   status: "pending" | "accepted" | "rejected";
 };
 
@@ -52,7 +53,7 @@ export function useChatManager({ onDraftEdits }: { onDraftEdits: (edits: ChatDra
       const messagesWithAssistant = [...messagesWithUser, createAssistantChatMessage(response.reply)];
       setMessages(messagesWithAssistant);
       void persistChat(messagesWithAssistant, input, sessionIdRef.current, setError);
-      onDraftEdits(createPendingDraftEdits(response.edits));
+      onDraftEdits(createPendingDraftEdits(response.edits, input.contextPills));
       return true;
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : String(requestError));
@@ -89,11 +90,13 @@ async function persistChat(
   }
 }
 
-function createPendingDraftEdits(edits: CoCreateEdit[]): ChatDraftEdit[] {
+function createPendingDraftEdits(edits: CoCreateEdit[], contextPills: PromptContextPill[]): ChatDraftEdit[] {
   const createdAt = Date.now();
+  const selectedRangePill = contextPills.find((pill) => pill.kind === "selection" && pill.range);
   return edits.map((edit, index) => ({
     ...edit,
     id: `edit-${createdAt}-${index}`,
+    sourceRange: selectedRangePill?.value.trim() === edit.target.trim() ? selectedRangePill.range : undefined,
     status: "pending" as const,
   }));
 }

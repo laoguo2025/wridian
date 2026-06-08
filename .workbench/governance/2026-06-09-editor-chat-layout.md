@@ -36,6 +36,7 @@
   - 追加迁移：扩展 `src/chat/promptContext.ts` 的本地 pill 数据结构，新增 `PromptContextPillKind`，覆盖 selection、active-file、file、url、tool、memory；右侧输入区和消息上下文按类型显示 pill，为后续 Lexical DecoratorNode 留稳定数据接口。
   - 追加迁移：将当前工作区文件树 flatten 为 prompt file candidates，`@` 菜单支持文件名/路径检索并注入 `file` pill；暂未建立全文内容缓存。
   - 追加迁移：参考 `obsidian-copilot/src/editor/replaceGuard.ts` 新增 `src/editor/draftReplaceGuard.ts`。正文 inline diff 只允许唯一命中且不重叠的 target 被渲染和确认；重复、找不到或重叠的修改会提示需要重新定位，避免误改第一处同名文本。
+  - 追加迁移：选区 pill 现在保存 start/end/text 快照；ChatManager 会把匹配选区原文的 edit 标记为 `sourceRange`，replace guard 优先验证该范围，降低重复文本场景下的重新定位率。
   - 暂未引入 Copilot 的完整自定义 pill node、图片 pill、URL pill、工具开关、模型选择、文件内容异步检索、ChatManager 和持久化；这些属于后续上下文系统，不再标记为已复刻。
 - 根页面和工作区固定视口高度，隐藏窗口级滚动；正文编辑器、文件树、右侧聊天消息区使用内部滚动。
 - 增加主题化滚动条样式。
