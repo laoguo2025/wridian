@@ -40,6 +40,7 @@
   - 追加迁移：选区 pill 现在保存 start/end/text 快照；ChatManager 会把匹配选区原文的 edit 标记为 `sourceRange`，replace guard 优先验证该范围，降低重复文本场景下的重新定位率。
   - 追加迁移：新增 Claude-Obsidian 式 Markdown 记忆 vault 骨架 `.wridian/wiki/`，包含 sources、entities、concepts、index、hot、log；确认记忆时继续写 JSON，同时镜像为 Markdown 条目。
   - 追加迁移：补短剧/剧本稿件模式。前端识别 `.fountain`、内景/外景/集/场和角色对白行；剧本模式下 `/` 增加分集节奏、场景钩子、对白口语化和场景成本检查命令；共创请求把稿件类型传到后端 prompt。
+  - 追加迁移：按 Copilot Projects / Relevant Notes 复刻本地 Project Mode。新增 `src-tauri/src/projects.rs` 与 `src/chat/projectContext.ts`，项目状态保存到 `.wridian/projects/projects.json`；项目可提供模型覆盖、系统提示、inclusions/exclusions 和 URL。Relevant Notes 用本地全文词项重合加 wikilink/backlink 权重召回，右侧点击后注入 file pill。
   - 暂未引入 Copilot 的完整自定义 pill node、图片 pill、URL pill、工具开关、模型选择、文件内容异步检索、ChatManager 和持久化；这些属于后续上下文系统，不再标记为已复刻。
 - 根页面和工作区固定视口高度，隐藏窗口级滚动；正文编辑器、文件树、右侧聊天消息区使用内部滚动。
 - 增加主题化滚动条样式。

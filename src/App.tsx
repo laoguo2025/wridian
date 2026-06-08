@@ -7,6 +7,14 @@ import {
 import { useChatManager, type ChatDraftEdit } from "./chat/chatManager";
 import { ChatPanel } from "./chat/ChatPanel";
 import {
+  findRelevantNotes,
+  getProjectState,
+  saveProject,
+  selectProject,
+  type ProjectState,
+  type RelevantNote,
+} from "./chat/projectContext";
+import {
   buildPromptSuggestions,
   createFileContentPromptPill,
   createFilePromptPill,
@@ -112,6 +120,9 @@ function App() {
   const [promptPills, setPromptPills] = useState<PromptContextPill[]>([]);
   const [promptFileContentCache, setPromptFileContentCache] = useState<Record<string, string>>({});
   const [activeModelLabel, setActiveModelLabel] = useState("");
+  const [projectState, setProjectState] = useState<ProjectState>({ projects: [] });
+  const [relevantNotes, setRelevantNotes] = useState<RelevantNote[]>([]);
+  const [projectError, setProjectError] = useState("");
   const [hasDraftSelection, setHasDraftSelection] = useState(false);
   const [draftSelection, setDraftSelection] = useState<TextSelection>({ start: 0, end: 0 });
   const [selectedPath, setSelectedPath] = useState("");
@@ -206,6 +217,12 @@ function App() {
       .catch(() => setActiveModelLabel("未配置模型"));
   }, []);
 
+  useEffect(() => {
+    void getProjectState()
+      .then(setProjectState)
+      .catch((error) => setProjectError(error instanceof Error ? error.message : String(error)));
+  }, []);
+
   const files = workspace?.files ?? [];
   const promptFileCandidates = useMemo(() => flattenPromptFileCandidates(files), [files]);
   const enrichedPromptFileCandidates = useMemo(
@@ -214,6 +231,7 @@ function App() {
   );
   const isRealFile = Boolean(selectedPath);
   const dirty = isRealFile && editorContent !== lastSavedContent;
+  const activeProject = projectState.projects.find((project) => project.id === projectState.activeProjectId);
 
   const saveCurrentFile = useCallback(async () => {
     if (!isRealFile || !dirty) return;
@@ -243,6 +261,52 @@ function App() {
     }, 1000);
     return () => window.clearTimeout(timer);
   }, [dirty, isRealFile, saveCurrentFile]);
+
+  useEffect(() => {
+    if (!selectedPath || !editorContent.trim()) {
+      setRelevantNotes([]);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void findRelevantNotes({
+        sourcePath: selectedPath,
+        content: editorContent,
+        limit: 6,
+      })
+        .then(setRelevantNotes)
+        .catch(() => setRelevantNotes([]));
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [editorContent, selectedPath, projectState.activeProjectId]);
+
+  const createProjectFromCurrentContext = async () => {
+    const name = window.prompt("新建 Project", editorTitle || "新项目");
+    if (!name) return;
+    try {
+      const response = await saveProject({
+        name,
+        description: selectedPath ? `围绕 ${baseName(selectedPath)} 的写作项目。` : "",
+        model: activeModelLabel && activeModelLabel !== "未配置模型" ? activeModelLabel : undefined,
+        systemPrompt: draftKind === "screenplay"
+          ? "你在这个项目中优先按短剧/剧本工作流协作，关注分集节奏、场次、对白可表演性、钩子和低成本拍摄约束。"
+          : "你在这个项目中优先按小说/长文写作工作流协作，关注人物动机、叙述节奏、伏笔和设定一致性。",
+        inclusions: selectedPath ? [baseName(selectedPath)] : [],
+      });
+      setProjectState(response);
+      setProjectError("");
+    } catch (error) {
+      setProjectError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const switchProject = async (id: string) => {
+    try {
+      setProjectState(await selectProject(id || null));
+      setProjectError("");
+    } catch (error) {
+      setProjectError(error instanceof Error ? error.message : String(error));
+    }
+  };
 
   const openWorkFolder = async () => {
     setWorkspaceError("");
@@ -690,6 +754,14 @@ function App() {
           promptPills={promptPills}
           promptSuggestions={promptSuggestions}
           activeModelLabel={activeModelLabel}
+          activeProjectName={activeProject?.name ?? ""}
+          projectError={projectError}
+          projects={projectState.projects}
+          relevantNotes={relevantNotes}
+          selectedProjectId={projectState.activeProjectId ?? ""}
+          onCreateProject={createProjectFromCurrentContext}
+          onSelectProject={(id) => void switchProject(id)}
+          onAddRelevantNote={(note) => void addFileToPrompt(note.title, note.path)}
           onPromptChange={setPrompt}
           onPromptPillsChange={setPromptPills}
           onImagePaste={(files) => {

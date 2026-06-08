@@ -954,9 +954,37 @@ button {
   backdrop-filter: blur(22px);
   padding: 8px;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
   gap: 6px;
   overflow: hidden;
+}
+
+.chat-modebar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chat-modebar select {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-size: 12px;
+  padding: 0 6px;
+}
+
+.chat-modebar button {
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 0 7px;
 }
 
 .drawer-header {
@@ -1021,6 +1049,39 @@ button {
   overflow: auto;
   padding: 0 0 4px;
   scroll-behavior: smooth;
+}
+
+.relevant-notes {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  padding: 3px 0;
+  scrollbar-width: thin;
+}
+
+.relevant-notes button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 156px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 2px 7px;
+}
+
+.relevant-notes span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.relevant-notes small {
+  color: var(--text-faint);
+  font-size: 10px;
 }
 
 .chat-message {

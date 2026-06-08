@@ -302,7 +302,7 @@ fn should_skip_entry(name: &str) -> bool {
     ) || name.starts_with('.')
 }
 
-fn is_supported_writing_file(path: &Path) -> bool {
+pub(crate) fn is_supported_writing_file(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .map(|extension| {
@@ -363,7 +363,7 @@ fn resolve_allowed_existing_node(data_dir: &Path, raw_path: &str) -> Result<Path
     }
 }
 
-fn allowed_work_roots(data_dir: &Path) -> Result<Vec<PathBuf>, String> {
+pub(crate) fn allowed_work_roots(data_dir: &Path) -> Result<Vec<PathBuf>, String> {
     let mut roots = vec![vault_root(data_dir)
         .canonicalize()
         .map_err(|error| format!("默认写作目录解析失败：{error}"))?];

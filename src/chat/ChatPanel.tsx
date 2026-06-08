@@ -6,12 +6,16 @@ import {
   type ChatMessage,
 } from "./messageRepository";
 import type { PromptContextPill, PromptSuggestion } from "./promptContext";
+import type { ProjectConfig, RelevantNote } from "./projectContext";
 
 export function ChatPanel({
   activeModelLabel,
+  activeProjectName,
   error,
   messages,
   onAddToMemory,
+  onAddRelevantNote,
+  onCreateProject,
   onCopy,
   onEditUserMessage,
   onPromptChange,
@@ -20,16 +24,24 @@ export function ChatPanel({
   onRemovePill,
   onRetry,
   onSelectSuggestion,
+  onSelectProject,
   onSubmit,
   pending,
+  projectError,
+  projects,
   prompt,
   promptPills,
   promptSuggestions,
+  relevantNotes,
+  selectedProjectId,
 }: {
   activeModelLabel: string;
+  activeProjectName: string;
   error: string;
   messages: ChatMessage[];
   onAddToMemory: (text: string) => void;
+  onAddRelevantNote: (note: RelevantNote) => void;
+  onCreateProject: () => void;
   onCopy: (text: string) => void;
   onEditUserMessage: (message: ChatMessage) => void;
   onPromptChange: (value: string) => void;
@@ -38,11 +50,16 @@ export function ChatPanel({
   onRemovePill: (id: string) => void;
   onRetry: (message: ChatMessage) => void;
   onSelectSuggestion: (suggestion: PromptSuggestion) => void;
+  onSelectProject: (id: string) => void;
   onSubmit: () => void;
   pending: boolean;
+  projectError: string;
+  projects: ProjectConfig[];
   prompt: string;
   promptPills: PromptContextPill[];
   promptSuggestions: PromptSuggestion[];
+  relevantNotes: RelevantNote[];
+  selectedProjectId: string;
 }) {
   const threadRef = useRef<HTMLDivElement | null>(null);
 
@@ -54,6 +71,16 @@ export function ChatPanel({
 
   return (
     <aside className="chat-panel" aria-label="对话区">
+      <div className="chat-modebar">
+        <select value={selectedProjectId} onChange={(event) => onSelectProject(event.currentTarget.value)} aria-label="Project Mode">
+          <option value="">Chat</option>
+          {projects.map((project) => (
+            <option value={project.id} key={project.id}>{project.name}</option>
+          ))}
+        </select>
+        <button type="button" onClick={onCreateProject}>新建</button>
+      </div>
+      {projectError ? <div className="chat-status error">{projectError}</div> : null}
       <div className="chat-thread" ref={threadRef}>
         {messages.length
           ? messages.map((message, index) => (
@@ -71,6 +98,17 @@ export function ChatPanel({
         {pending ? <div className="chat-status">正在回复。</div> : null}
         {error ? <div className="chat-status error">{error}</div> : null}
       </div>
+
+      {relevantNotes.length ? (
+        <div className="relevant-notes" aria-label="Relevant Notes">
+          {relevantNotes.map((note) => (
+            <button type="button" key={note.path} onClick={() => onAddRelevantNote(note)} title={note.path}>
+              <span>{note.title}</span>
+              <small>{note.hasBacklinks ? "backlink" : note.hasOutgoingLinks ? "link" : note.score.toFixed(2)}</small>
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       <form
         className="prompt-bar"
@@ -106,7 +144,9 @@ export function ChatPanel({
           {pending ? "..." : "↵"}
         </button>
         <div className="prompt-controls" aria-label="输入控制">
-          <span className="prompt-model" title="当前模型">{activeModelLabel || "未配置模型"}</span>
+          <span className="prompt-model" title={activeProjectName ? `Project: ${activeProjectName}` : "当前模型"}>
+            {activeProjectName || activeModelLabel || "未配置模型"}
+          </span>
           <button type="button" onClick={() => onPromptChange(appendPromptTool(prompt, "@project"))}>
             Project
           </button>

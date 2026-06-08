@@ -1,5 +1,6 @@
 use crate::memory::read_relevant_memory_snippets;
 use crate::model_accounts::{read_custom_api_settings, StoredCustomApiSettings};
+use crate::projects::{active_project_model, read_active_project_context};
 use crate::runtime::{ensure_workspace, runtime_root, wridian_data_dir};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -47,8 +48,17 @@ pub(crate) async fn wridian_cocreate(input: CoCreateInput) -> Result<CoCreateRes
     let memories_used =
         read_relevant_memory_snippets(&data_dir, &input.source_path, &input.title, 8)?;
     let active_context = read_active_context(&data_dir);
-    let model_output =
-        cocreate_with_model(&settings, &input, &memories_used, &active_context).await?;
+    let active_project_context = read_active_project_context(&data_dir)?;
+    let project_model = active_project_model(&data_dir)?;
+    let model_output = cocreate_with_model(
+        &settings,
+        project_model.as_deref(),
+        &input,
+        &memories_used,
+        &active_context,
+        &active_project_context,
+    )
+    .await?;
 
     Ok(CoCreateResponse {
         reply: model_output.reply,
@@ -72,9 +82,11 @@ struct ParsedCoCreateResponse {
 
 async fn cocreate_with_model(
     settings: &StoredCustomApiSettings,
+    project_model: Option<&str>,
     input: &CoCreateInput,
     memories: &[String],
     active_context: &str,
+    active_project_context: &str,
 ) -> Result<ParsedCoCreateResponse, String> {
     let url = format!("{}/chat/completions", settings.base_url);
     let client = reqwest::Client::builder()
@@ -85,7 +97,7 @@ async fn cocreate_with_model(
         .post(url)
         .bearer_auth(&settings.api_key)
         .json(&json!({
-            "model": settings.model,
+            "model": project_model.unwrap_or(&settings.model),
             "messages": [
                 {
                     "role": "system",
@@ -93,7 +105,7 @@ async fn cocreate_with_model(
                 },
                 {
                     "role": "user",
-                    "content": build_cocreation_prompt(input, memories, active_context)
+                    "content": build_cocreation_prompt(input, memories, active_context, active_project_context)
                 }
             ],
             "response_format": { "type": "json_object" },
@@ -131,6 +143,7 @@ fn build_cocreation_prompt(
     input: &CoCreateInput,
     memories: &[String],
     active_context: &str,
+    active_project_context: &str,
 ) -> String {
     let memories_block = if memories.is_empty() {
         "暂无已确认记忆。".to_string()
@@ -146,16 +159,22 @@ fn build_cocreation_prompt(
     } else {
         active_context.to_string()
     };
+    let active_project_block = if active_project_context.trim().is_empty() {
+        "未启用 Project Mode。".to_string()
+    } else {
+        active_project_context.to_string()
+    };
     let draft_kind = match input.draft_kind.as_deref() {
         Some("screenplay") => "短剧/剧本稿件",
         _ => "小说/散文稿件",
     };
 
     format!(
-        "稿件类型：{}\n当前文件：{}\n来源路径：{}\n\n当前现场：\n{}\n\n已确认相关记忆：\n{}\n\n用户选中的片段：\n{}\n\n稿件内容：\n{}\n\n用户这次想要：\n{}",
+        "稿件类型：{}\n当前文件：{}\n来源路径：{}\n\nProject Mode：\n{}\n\n当前现场：\n{}\n\n已确认相关记忆：\n{}\n\n用户选中的片段：\n{}\n\n稿件内容：\n{}\n\n用户这次想要：\n{}",
         draft_kind,
         input.title,
         input.source_path,
+        active_project_block,
         active_context_block,
         memories_block,
         input
@@ -245,6 +264,7 @@ mod tests {
             &input,
             &["【剧情线】雨夜场景不能提前暴露凶手。".to_string()],
             "{\"currentChapter\":\"第三章\"}",
+            "Project Mode：短剧项目",
         );
 
         assert!(prompt.contains("稿件内容"));

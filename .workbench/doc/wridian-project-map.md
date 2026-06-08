@@ -61,6 +61,7 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
   - `ChatSingleMessage.tsx` / `ChatButtons.tsx`：用户消息使用浅边框背景，AI 消息不做重卡片；消息动作放在底部紧凑行。
   - pill 节点：Wridian 已按 Copilot 的 `BasePillNode` / `URLPillNode` / `ToolPillNode` / `PastePlugin` / `GenericPillSyncPlugin` 形态引入本地 `PromptPillNode`，真实注册到 Lexical 编辑树；URL、工具、文件、图片、记忆等上下文会从 Lexical 树同步回 prompt pill 状态。
   - 输入控制：Wridian 已补 Copilot 式底部控制条，显示当前模型，并提供 Project / Relevant / Vault 工具开关；文件 pill 会优先读取并缓存文件内容再注入上下文；粘贴 URL、工具标记和图片会生成结构化 pill。后续仍可继续补模型池选择、真实图片内容处理和更多工具。
+  - Project Mode / Relevant Notes：Wridian 已按 Copilot `Projects` 和 `findRelevantNotes` 方向接入本地项目状态。项目持久化到 `.wridian/projects/projects.json`，包含名称、描述、项目模型、系统提示、inclusions/exclusions 和 URL；右侧可切换/创建项目。Relevant Notes 使用工作区本地全文词项重合 + wikilink/backlink 加权召回，点击可把相关稿件作为 file pill 注入。
 - 记忆命中、注入和上下文选择默认在后台执行，不在右侧对话区常驻展示“本次使用的记忆”等系统说明；记忆面板只由顶部“记忆”、显式“从当前正文提取”或“记住这条”动作打开。
 - 右侧侧边面板应支持模式切换，第一版至少区分“共创”和“记忆”。
 - 记忆提取是显式动作；模型不得在普通共创发送时直接写长期记忆。
@@ -122,7 +123,7 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
    - 对 `.fountain` 或剧本稿件显示剧本上下文提示。
    - 共创命令支持改对白、增强冲突、加结尾钩子、检查角色口吻、拆分分集节奏。
 6. 后续增强。
-   - Project Mode、Relevant Notes、实体/概念/来源拆分、Memory Tree 可视化、分支续接、时序冲突检测。
+  - 实体/概念/来源拆分、Memory Tree 可视化、分支续接、时序冲突检测。
 
 ## 后端约束
 
