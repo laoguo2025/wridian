@@ -33,20 +33,16 @@ export type PromptSuggestion = {
 };
 
 export type PromptSuggestionInput = {
-  draftSelectionEnd: number;
-  draftSelectionStart: number;
   draftKind: DraftKind;
-  editorContent: string;
-  editorTitle: string;
-  selectedPath: string;
-  titleFallback: string;
-  workspaceFiles: PromptFileCandidate[];
+  knowledgeCards: PromptKnowledgeCardCandidate[];
 };
 
-export type PromptFileCandidate = {
-  content?: string;
-  name: string;
-  path: string;
+export type PromptKnowledgeCardCandidate = {
+  category?: string;
+  id: string;
+  sourcePath: string;
+  text: string;
+  title: string;
 };
 
 export function serializePromptContextPills(pills: PromptContextPill[]) {
@@ -142,53 +138,15 @@ export function createPromptPillFromSuggestion(suggestion: PromptSuggestion): Pr
 
 export function buildPromptSuggestions(input: PromptSuggestionInput): PromptSuggestion[] {
   const suggestions: PromptSuggestion[] = [];
-  const selectedDraftText = input.editorContent.slice(input.draftSelectionStart, input.draftSelectionEnd).trim();
 
-  if (selectedDraftText) {
+  for (const card of input.knowledgeCards.slice(0, 40)) {
     suggestions.push({
-      id: "selection",
-      label: "当前选区",
-      detail: "把正文里划选的片段作为本轮上下文",
-      insertText: selectedDraftText,
+      id: `memory:${card.id}`,
+      label: card.title || card.category || "知识卡",
+      detail: [card.category ?? "知识卡", card.sourcePath].filter(Boolean).join(" · "),
+      insertText: `知识卡：${card.title || card.category || "未命名"}\n分类：${card.category ?? "其他"}\n来源：${card.sourcePath}\n\n${card.text}`,
       kind: "context",
-      pillKind: "selection",
-      range: {
-        start: input.draftSelectionStart,
-        end: input.draftSelectionEnd,
-      },
-    });
-  }
-
-  if (input.selectedPath && input.editorContent.trim()) {
-    suggestions.push(
-      {
-        id: "current-file",
-        label: "当前文件",
-        detail: input.editorTitle || input.titleFallback,
-        insertText: `标题：${input.editorTitle || input.titleFallback}\n\n${input.editorContent}`,
-        kind: "context",
-        pillKind: "active-file",
-      },
-      {
-        id: "current-draft",
-        label: "当前正文",
-        detail: "把全文作为重点上下文",
-        insertText: input.editorContent,
-        kind: "context",
-        pillKind: "active-file",
-      },
-    );
-  }
-
-  for (const file of input.workspaceFiles.slice(0, 20)) {
-    if (file.path === input.selectedPath) continue;
-    suggestions.push({
-      id: `file:${file.path}`,
-      label: file.name,
-      detail: file.path,
-      insertText: file.content ? `路径：${file.path}\n\n${file.content}` : `路径：${file.path}`,
-      kind: "context",
-      pillKind: "file",
+      pillKind: "memory",
     });
   }
 

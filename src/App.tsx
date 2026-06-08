@@ -137,7 +137,6 @@ function App() {
   const [relevantNotes, setRelevantNotes] = useState<RelevantNote[]>([]);
   const [projectError, setProjectError] = useState("");
   const [hasDraftSelection, setHasDraftSelection] = useState(false);
-  const [draftSelection, setDraftSelection] = useState<TextSelection>({ start: 0, end: 0 });
   const [selectedPath, setSelectedPath] = useState("");
   const [editorTitle, setEditorTitle] = useState("");
   const [editorContent, setEditorContent] = useState("");
@@ -205,7 +204,6 @@ function App() {
     if (!selection) return;
     const { start, end } = selection;
     draftSelectionRef.current = { start, end };
-    setDraftSelection({ start, end });
     setHasDraftSelection(end > start);
   }, []);
 
@@ -255,11 +253,6 @@ function App() {
   }, []);
 
   const files = workspace?.files ?? [];
-  const promptFileCandidates = useMemo(() => flattenPromptFileCandidates(files), [files]);
-  const enrichedPromptFileCandidates = useMemo(
-    () => promptFileCandidates.map((file) => ({ ...file, content: promptFileContentCache[file.path] })),
-    [promptFileCandidates, promptFileContentCache],
-  );
   const isRealFile = Boolean(selectedPath);
   const dirty = isRealFile && editorContent !== lastSavedContent;
   const activeProject = projectState.projects.find((project) => project.id === projectState.activeProjectId);
@@ -441,7 +434,6 @@ function App() {
       setEditorContent(response.content);
       setLastSavedContent(response.content);
       draftSelectionRef.current = { start: response.content.length, end: response.content.length };
-      setDraftSelection({ start: response.content.length, end: response.content.length });
       setHasDraftSelection(false);
       setPromptPills([]);
       setPendingEdits([]);
@@ -466,7 +458,6 @@ function App() {
     const nextCursor = start + text.length;
     setEditorContent(nextContent);
     draftSelectionRef.current = { start: nextCursor, end: nextCursor };
-    setDraftSelection({ start: nextCursor, end: nextCursor });
     setHasDraftSelection(false);
     window.requestAnimationFrame(() => {
       setContentEditableCaret(draftEditorRef.current, nextCursor);
@@ -549,7 +540,6 @@ function App() {
     setPendingEdits((edits) => edits.map((edit) => (appliedIds.has(edit.id) ? { ...edit, status: "accepted" } : edit)));
     chatManager.setError(guardReport.skipped.length ? `${guardReport.skipped.length} 处修改需要重新定位。` : "");
     draftSelectionRef.current = { start: 0, end: 0 };
-    setDraftSelection({ start: 0, end: 0 });
     setHasDraftSelection(false);
 
   };
@@ -566,14 +556,8 @@ function App() {
   const blockedDraftEditCount = draftReplaceGuardReport.skipped.length;
   const promptSuggestions = useMemo(() => buildPromptSuggestions({
     draftKind,
-    draftSelectionEnd: draftSelection.end,
-    draftSelectionStart: draftSelection.start,
-    editorContent,
-    editorTitle,
-    selectedPath,
-    titleFallback: selectedPath ? baseName(selectedPath) : "",
-    workspaceFiles: enrichedPromptFileCandidates,
-  }), [draftKind, draftSelection.end, draftSelection.start, editorContent, editorTitle, enrichedPromptFileCandidates, selectedPath]);
+    knowledgeCards: memoryState.memories,
+  }), [draftKind, memoryState.memories]);
 
   const statusLabel = useMemo(() => {
     if (saveStatus === "idle") return "读取中";
@@ -832,13 +816,6 @@ function App() {
           onRemovePill={(id) => setPromptPills((current) => current.filter((pill) => pill.id !== id))}
           onSelectSuggestion={(suggestion) => {
             if (suggestion.kind !== "context") return;
-            if (suggestion.pillKind === "file") {
-              const file = enrichedPromptFileCandidates.find((item) => item.path === suggestion.detail);
-              if (file) {
-                void addFileToPrompt(file.name, file.path);
-                return;
-              }
-            }
             setPromptPills((current) => upsertPromptContextPill(current, createPromptPillFromSuggestion(suggestion)));
           }}
           onSubmit={() => void sendPrompt()}
@@ -1020,19 +997,6 @@ function FileContextMenuView({
 
 function baseName(path: string) {
   return path.replace(/[\\/]+$/g, "").split(/[\\/]/).pop() || path;
-}
-
-function flattenPromptFileCandidates(nodes: WorkFileNode[]) {
-  const files: Array<{ name: string; path: string }> = [];
-  const visit = (node: WorkFileNode) => {
-    if (node.folder) {
-      node.children.forEach(visit);
-      return;
-    }
-    files.push({ name: node.name, path: node.path });
-  };
-  nodes.forEach(visit);
-  return files.sort((left, right) => left.name.localeCompare(right.name, "zh-Hans-CN"));
 }
 
 function detectDraftKind(path: string, content: string): DraftKind {

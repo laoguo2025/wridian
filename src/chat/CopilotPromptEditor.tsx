@@ -389,7 +389,7 @@ function PromptPastePlugin({ onImagePaste }: { onImagePaste?: (files: File[]) =>
         }
 
         const text = data.getData("text/plain");
-        if (!text || (!text.includes("http") && !/@(?:vault|web|project|relevant|memory|draft|screenplay)\b/i.test(text))) {
+        if (!text || (!text.includes("http") && !/@(?:web|memory|draft|screenplay)\b/i.test(text))) {
           return false;
         }
         event.preventDefault();

@@ -147,15 +147,6 @@ export function ChatPanel({
           <span className="prompt-model" title={activeProjectName ? `Project: ${activeProjectName}` : "当前模型"}>
             {activeProjectName || activeModelLabel || "未配置模型"}
           </span>
-          <button type="button" onClick={() => onPromptChange(appendPromptTool(prompt, "@project"))}>
-            Project
-          </button>
-          <button type="button" onClick={() => onPromptChange(appendPromptTool(prompt, "@relevant"))}>
-            Relevant
-          </button>
-          <button type="button" onClick={() => onPromptChange(appendPromptTool(prompt, "@vault"))}>
-            Vault
-          </button>
         </div>
       </form>
     </aside>
@@ -243,10 +234,4 @@ function pillKindLabel(pill: PromptContextPill) {
     case "selection":
       return "SEL";
   }
-}
-
-function appendPromptTool(prompt: string, tool: string) {
-  if (prompt.includes(tool)) return prompt;
-  const trimmed = prompt.trimEnd();
-  return `${trimmed}${trimmed ? " " : ""}${tool} `;
 }

@@ -51,16 +51,16 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 - 当前对齐的 `obsidian-copilot` 源码基线：
   - `ChatInput.tsx`：带边框的底部输入容器、上下文 pill 区、中间约 60px 起步输入区、24px 底部工具栏、小发送/停止动作。
   - `LexicalEditor.tsx`：输入区内部滚动，长文本不撑高右栏；Wridian 聊天输入区已从 textarea 切换为 Lexical `ContentEditable`，使用受控文本同步、历史插件和 Enter 发送；实现入口为 `src/chat/CopilotPromptEditor.tsx`。
-  - `AtMentionCommandPlugin.tsx` / `SlashCommandPlugin.tsx`：Wridian 已接入本地第一版 `@` 上下文选择和 `/` 写作命令提示，实现在 `src/chat/CopilotPromptEditor.tsx` 内。`@` 可把当前选区、当前文件、当前正文放入输入框上方上下文 pill；`/` 可插入改对白、增强冲突、加结尾钩子、检查角色口吻、批量改角色名、提取记忆等小说和短剧共用命令。
+  - `AtMentionCommandPlugin.tsx` / `SlashCommandPlugin.tsx`：Wridian 已接入本地第一版 `@` 知识卡选择和 `/` 写作命令提示，实现在 `src/chat/CopilotPromptEditor.tsx` 内。`@` 菜单只显示已确认写作记忆生成的知识卡，选中后以 memory pill 注入上下文；`/` 可插入改对白、增强冲突、加结尾钩子、检查角色口吻、批量改角色名、提取记忆等小说和短剧共用命令。
     - 剧本模式：前端按 `.fountain` 扩展名、内景/外景/集/场信号和角色对白行识别短剧/剧本稿件；识别后 `/` 命令额外显示拆分分集节奏、强化场景钩子、对白口语化和场景成本检查，共创请求会把稿件类型传给后端 prompt。
-  - 文件/上下文检索：Wridian 已把当前工作区文件树 flatten 为 prompt file candidates，`@` 菜单会展示匹配文件项，选择后以 `file` pill 注入上下文并读取文件内容缓存；当前候选召回仍以文件名/路径为主。
+  - 文件/上下文检索：右键文件或点击相关稿件仍可把文件内容作为 `file` pill 注入；`@` 菜单不再搜索作品文件，只搜索知识卡。
   - `ContextManager.ts` / `PromptContextTypes.ts`：Wridian 已开始拆出聊天上下文边界，`src/chat/promptContext.ts` 负责 prompt pill 类型、序列化、上下文建议构造和写作命令建议；消息仓库只保存消息和已绑定的上下文快照。
   - `MessageRepository.ts`：Wridian 已开始拆出前端消息仓库边界，`src/chat/messageRepository.ts` 负责消息类型、ID、用户/助手消息创建、编辑恢复和重试定位；`App.tsx` 仍负责调用 Tauri 共创命令。
   - `ChatManager.ts` / `ChatPersistenceManager.ts`：Wridian 已引入本地前端版 `src/chat/chatManager.ts`，负责消息列表、pending/error、发送共创请求、追加助手回复和生成待确认正文修改；聊天记录通过 `src/chat/chatPersistence.ts` 调用后端 `src-tauri/src/chat_persistence.rs` 保存为 `.wridian/chat/<session>.md`。
   - `ChatMessages.tsx`：空消息流保持空白，Relevant Notes / Suggested Prompts 这类辅助块不固定展示；Wridian 右侧消息流和输入组合入口为 `src/chat/ChatPanel.tsx`。
   - `ChatSingleMessage.tsx` / `ChatButtons.tsx`：用户消息使用浅边框背景，AI 消息不做重卡片；消息动作放在底部紧凑行。
   - pill 节点：Wridian 已按 Copilot 的 `BasePillNode` / `URLPillNode` / `ToolPillNode` / `PastePlugin` / `GenericPillSyncPlugin` 形态引入本地 `PromptPillNode`，真实注册到 Lexical 编辑树；URL、工具、文件、图片、记忆等上下文会从 Lexical 树同步回 prompt pill 状态。
-  - 输入控制：Wridian 已补 Copilot 式底部控制条，显示当前模型，并提供 Project / Relevant / Vault 工具开关；文件 pill 会优先读取并缓存文件内容再注入上下文；粘贴 URL、工具标记和图片会生成结构化 pill。后续仍可继续补模型池选择、真实图片内容处理和更多工具。
+  - 输入控制：Wridian 底部控制条只显示当前模型或当前项目名，不再提供 Project / Relevant / Vault 这类泛化工具按钮；文件 pill 会优先读取并缓存文件内容再注入上下文；粘贴 URL、保留的工具标记和图片会生成结构化 pill。
   - Project Mode / Relevant Notes：Wridian 已按 Copilot `Projects` 和 `findRelevantNotes` 方向接入本地项目状态。项目持久化到 `.wridian/projects/projects.json`，包含名称、描述、项目模型、系统提示、inclusions/exclusions 和 URL；右侧可切换/创建项目。Relevant Notes 使用工作区本地全文词项重合 + wikilink/backlink 加权召回，点击可把相关稿件作为 file pill 注入。
 - 记忆命中、注入和上下文选择默认在后台执行，不在右侧对话区常驻展示“本次使用的记忆”等系统说明；记忆面板只由顶部“记忆”、显式“从当前正文提取”或“记住这条”动作打开。
 - 右侧侧边面板应支持模式切换，第一版至少区分“共创”和“记忆”。

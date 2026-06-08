@@ -799,7 +799,6 @@ button {
   padding: 0 4px;
 }
 
-.prompt-controls button,
 .prompt-model {
   border: 0;
   border-radius: 4px;
@@ -808,11 +807,6 @@ button {
   font-size: 11px;
   line-height: 18px;
   padding: 0 5px;
-}
-
-.prompt-controls button:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
 }
 
 .prompt-model {

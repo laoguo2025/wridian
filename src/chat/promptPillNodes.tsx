@@ -173,7 +173,7 @@ export function $collectPromptPills(): PromptContextPill[] {
 
 export function createNodesFromPromptText(text: string): LexicalNode[] {
   const nodes: LexicalNode[] = [];
-  const pattern = /(https?:\/\/[^\s"'<>]+)|(@(?:vault|web|project|relevant|memory|draft|screenplay)\b)/gi;
+  const pattern = /(https?:\/\/[^\s"'<>]+)|(@(?:web|memory|draft|screenplay)\b)/gi;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
@@ -226,12 +226,6 @@ function compactUrl(url: string) {
 
 function toolPromptValue(tool: string) {
   switch (tool) {
-    case "@vault":
-      return "启用工作区全文检索作为上下文。";
-    case "@project":
-      return "启用 Project Mode 常驻上下文。";
-    case "@relevant":
-      return "启用 Relevant Notes 相关稿件召回。";
     case "@memory":
       return "启用写作记忆检索。";
     case "@draft":
@@ -249,6 +243,8 @@ function pillKindLabel(kind: PromptContextPillKind) {
       return "FILE";
     case "file":
       return "NOTE";
+    case "image":
+      return "IMG";
     case "memory":
       return "MEM";
     case "selection":

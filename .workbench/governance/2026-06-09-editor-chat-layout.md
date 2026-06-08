@@ -25,7 +25,7 @@
   - 消息动作改为底部紧凑行，保留用户要求的用户消息“编辑、复制、记忆”和 AI 消息“重试、复制、记忆”。
   - 输入容器继续按 `ChatInput` / `LexicalEditor` 的可见结构：边框容器、pill 区、约 60px 输入区、24px 底部动作、小发送按钮；长文本在输入区内部滚动。
   - 追加迁移：聊天输入区已从 textarea 改为 Lexical `ContentEditable`，引入 `@lexical/react` 和 `lexical`，实现受控文本同步、历史插件、Enter 发送、Shift+Enter 换行和中文输入法 composition 防误发送。
-  - 追加迁移：按 `AtMentionCommandPlugin.tsx` / `SlashCommandPlugin.tsx` 的交互形态接入 Wridian 本地第一版类型提示。输入 `@` 显示当前选区、当前文件、当前正文并转为输入框上方上下文 pill；输入 `/` 显示小说和短剧共用写作命令并插入提示文本。
+  - 追加迁移：按 `AtMentionCommandPlugin.tsx` / `SlashCommandPlugin.tsx` 的交互形态接入 Wridian 本地第一版类型提示。当前收敛为输入 `@` 只显示已确认写作记忆生成的知识卡，并转为输入框上方 memory pill；输入 `/` 显示小说和短剧共用写作命令并插入提示文本。
   - 追加迁移：按 `MessageRepository.ts` 的单一消息源思路拆出 `src/chat/messageRepository.ts`，集中管理消息类型、消息 ID、用户/助手消息创建、上下文快照保存、编辑恢复和重试定位。
   - 追加迁移：将 `CopilotPromptEditor`、键盘发送、受控值同步、`@`/`/` 类型提示从 `App.tsx` 拆到 `src/chat/CopilotPromptEditor.tsx`，为后续完整 pill node、URL/tool pill 和文件内容检索预留模块入口。
   - 追加迁移：将右侧消息流、消息动作、上下文 pill 区和输入组件组合从 `App.tsx` 拆到 `src/chat/ChatPanel.tsx`，对齐 `ChatMessages` / `ChatSingleMessage` 的组件边界。
@@ -34,8 +34,8 @@
   - 追加迁移：新增 `src/chat/chatManager.ts`，接管消息列表、pending/error、发送共创请求、追加助手回复和生成待确认正文修改；`App.tsx` 只负责当前稿件状态和把返回 edits 接入正文待确认区。
   - 追加迁移：新增 `src/chat/chatPersistence.ts` 与 `src-tauri/src/chat_persistence.rs`，聊天会话自动保存为 `.wridian/chat/<session>.md`，包含来源文件、用户/助手消息和上下文 pill。
   - 追加迁移：扩展 `src/chat/promptContext.ts` 的本地 pill 数据结构，新增 `PromptContextPillKind`，覆盖 selection、active-file、file、url、tool、memory；右侧输入区和消息上下文按类型显示 pill，为后续 Lexical DecoratorNode 留稳定数据接口。
-  - 追加迁移：按 Copilot 的 `BasePillNode`、`URLPillNode`、`ToolPillNode`、`PastePlugin` 和 `GenericPillSyncPlugin` 复刻本地 `src/chat/promptPillNodes.tsx`，pill 真实进入 Lexical 树，并支持 URL/工具/图片粘贴解析、删除同步、文件内容缓存和 Project/Relevant/Vault 工具开关。
-  - 追加迁移：将当前工作区文件树 flatten 为 prompt file candidates，`@` 菜单支持文件名/路径检索并注入 `file` pill；文件 pill 选中后会读取并缓存正文内容再参与上下文。
+  - 追加迁移：按 Copilot 的 `BasePillNode`、`URLPillNode`、`ToolPillNode`、`PastePlugin` 和 `GenericPillSyncPlugin` 复刻本地 `src/chat/promptPillNodes.tsx`，pill 真实进入 Lexical 树，并支持 URL/保留工具/图片粘贴解析、删除同步和文件内容缓存；Project/Relevant/Vault 泛化工具开关已移除。
+  - 追加迁移：`@` 菜单已从泛化上下文检索收敛为知识卡检索，只显示已确认写作记忆生成的知识卡；右键文件或点击相关稿件仍可把文件内容作为 `file` pill 注入。
   - 追加迁移：参考 `obsidian-copilot/src/editor/replaceGuard.ts` 新增 `src/editor/draftReplaceGuard.ts`。正文 inline diff 只允许唯一命中且不重叠的 target 被渲染和确认；重复、找不到或重叠的修改会提示需要重新定位，避免误改第一处同名文本。
   - 追加迁移：选区 pill 现在保存 start/end/text 快照；ChatManager 会把匹配选区原文的 edit 标记为 `sourceRange`，replace guard 优先验证该范围，降低重复文本场景下的重新定位率。
   - 追加迁移：新增 Claude-Obsidian 式 Markdown 记忆 vault `.wridian/wiki/`，确认记忆时继续写 JSON，同时按 sources/entities/concepts 模板生成 Markdown 条目、index、hot context、log、wikilink、反链和 `.cache/index.json`；记忆抽屉接入图谱重建、节点/关系统计和本地检索。
