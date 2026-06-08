@@ -1148,12 +1148,9 @@ function ChatPanel({
           placeholder="与 Wridian 对话"
           aria-label="共创输入"
         />
-        <div className="prompt-toolbar">
-          <span aria-hidden="true" />
-          <button type="submit" aria-label={pending ? "停止" : "发送"} disabled={pending || !prompt.trim()}>
-            {pending ? "..." : "↵"}
-          </button>
-        </div>
+        <button type="submit" className="prompt-send" aria-label={pending ? "停止" : "发送"} disabled={pending || !prompt.trim()}>
+          {pending ? "..." : "↵"}
+        </button>
       </form>
     </aside>
   );
