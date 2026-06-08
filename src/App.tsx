@@ -61,6 +61,7 @@ type MemoryCandidate = {
 type MemoryState = {
   memories: MemoryItem[];
   candidates: MemoryCandidate[];
+  memoryFolderPath?: string;
 };
 
 const fallbackFiles: WorkFileNode[] = [
@@ -328,6 +329,34 @@ function App() {
     }
   };
 
+  const updateMemoryCandidate = async (id: string, text: string) => {
+    try {
+      const response = await invoke<MemoryState>("wridian_update_memory_candidate", { input: { id, text } });
+      setMemoryState(response);
+      setMemoryError("");
+    } catch (error) {
+      setMemoryState((current) => ({
+        ...current,
+        candidates: current.candidates.map((candidate) => (candidate.id === id ? { ...candidate, text } : candidate)),
+      }));
+      setMemoryError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const openMemoryFolder = async () => {
+    if (!memoryState.memoryFolderPath) {
+      setMemoryError("请在 Wridian 桌面端打开记忆文件夹。");
+      return;
+    }
+    try {
+      const { openPath } = await import("@tauri-apps/plugin-opener");
+      await openPath(memoryState.memoryFolderPath);
+      setMemoryError("");
+    } catch (error) {
+      setMemoryError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -424,6 +453,8 @@ function App() {
           onAcceptCandidate={acceptMemoryCandidate}
           onClose={() => setMemoryOpen(false)}
           onIgnoreCandidate={ignoreMemoryCandidate}
+          onOpenMemoryFolder={openMemoryFolder}
+          onUpdateCandidate={updateMemoryCandidate}
           workspace={workspace}
         />
       ) : null}
@@ -477,6 +508,8 @@ function MemoryDrawer({
   onAcceptCandidate,
   onClose,
   onIgnoreCandidate,
+  onOpenMemoryFolder,
+  onUpdateCandidate,
   workspace,
 }: {
   currentTitle: string;
@@ -485,6 +518,8 @@ function MemoryDrawer({
   onAcceptCandidate: (id: string) => void;
   onClose: () => void;
   onIgnoreCandidate: (id: string) => void;
+  onOpenMemoryFolder: () => void;
+  onUpdateCandidate: (id: string, text: string) => void;
   workspace: WorkspaceInfo | null;
 }) {
   return (
@@ -495,9 +530,14 @@ function MemoryDrawer({
             <div className="drawer-title">记忆</div>
             <div className="drawer-subtitle">当前文件：{currentTitle}</div>
           </div>
-          <button type="button" className="icon-button" onClick={onClose} aria-label="关闭">
-            ×
-          </button>
+          <div className="drawer-header-actions">
+            <button type="button" className="small-action" onClick={onOpenMemoryFolder}>
+              文件夹
+            </button>
+            <button type="button" className="icon-button" onClick={onClose} aria-label="关闭">
+              ×
+            </button>
+          </div>
         </div>
 
         {memoryError ? <div className="rail-error">{memoryError}</div> : null}
@@ -523,18 +563,13 @@ function MemoryDrawer({
 
         {memoryState.candidates.length ? (
           memoryState.candidates.map((candidate) => (
-            <section className="memory-card pending" key={candidate.id}>
-              <h2>待确认</h2>
-              <p>{candidate.text}</p>
-              <div className="drawer-actions">
-                <button type="button" onClick={() => onAcceptCandidate(candidate.id)}>
-                  记住
-                </button>
-                <button type="button" className="secondary" onClick={() => onIgnoreCandidate(candidate.id)}>
-                  忽略
-                </button>
-              </div>
-            </section>
+            <MemoryCandidateCard
+              candidate={candidate}
+              key={candidate.id}
+              onAccept={onAcceptCandidate}
+              onIgnore={onIgnoreCandidate}
+              onUpdate={onUpdateCandidate}
+            />
           ))
         ) : (
           <section className="memory-card pending">
@@ -543,9 +578,72 @@ function MemoryDrawer({
           </section>
         )}
 
-        <footer className="drawer-footer">{workspace?.vaultPath ? `Vault: ${workspace.vaultPath}` : "本地 Vault 初始化中"}</footer>
+        <footer className="drawer-footer">
+          {memoryState.memoryFolderPath || (workspace?.runtimePath ? `${workspace.runtimePath}` : "本地记忆目录初始化中")}
+        </footer>
       </aside>
     </div>
+  );
+}
+
+function MemoryCandidateCard({
+  candidate,
+  onAccept,
+  onIgnore,
+  onUpdate,
+}: {
+  candidate: MemoryCandidate;
+  onAccept: (id: string) => void;
+  onIgnore: (id: string) => void;
+  onUpdate: (id: string, text: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(candidate.text);
+
+  useEffect(() => {
+    setDraft(candidate.text);
+  }, [candidate.text]);
+
+  const saveEdit = () => {
+    const text = draft.trim();
+    if (!text) return;
+    onUpdate(candidate.id, text);
+    setEditing(false);
+  };
+
+  return (
+    <section className="memory-card pending">
+      <h2>待确认</h2>
+      {editing ? (
+        <textarea className="candidate-editor" value={draft} onChange={(event) => setDraft(event.currentTarget.value)} aria-label="编辑候选记忆" />
+      ) : (
+        <p>{candidate.text}</p>
+      )}
+      <div className="drawer-actions">
+        {editing ? (
+          <>
+            <button type="button" onClick={saveEdit}>
+              保存
+            </button>
+            <button type="button" className="secondary" onClick={() => setEditing(false)}>
+              取消
+            </button>
+          </>
+        ) : (
+          <>
+            <button type="button" onClick={() => onAccept(candidate.id)}>
+              记住
+            </button>
+            <button type="button" className="secondary" onClick={() => setEditing(true)}>
+              编辑
+            </button>
+            <button type="button" className="secondary" onClick={() => onIgnore(candidate.id)}>
+              忽略
+            </button>
+          </>
+        )}
+      </div>
+    </section>
   );
 }
 

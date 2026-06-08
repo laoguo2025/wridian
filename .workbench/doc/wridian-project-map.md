@@ -24,6 +24,14 @@ Wridian 是独立桌面写作共创系统，当前优先级是本地写作文件
 - 记忆 MVP 使用 `.wridian/memory-tree.json` 和 `.wridian/candidates.json`，先做本地确认闭环，再接模型抽取。
 - 暂不接入生图、生视频和复杂模型网关。
 
+## 记忆存储
+
+- 记忆文件夹：Wridian 数据目录下的 `.wridian/`。
+- 长期记忆：`.wridian/memory-tree.json`。
+- 候选记忆：`.wridian/candidates.json`。
+- 当前分类只有“长期记忆”和“待确认候选”；后续应扩展为作品、人物、世界观、风格、禁区等写作分类。
+- 模型提取不得直接写入长期记忆，必须经过候选、编辑、确认。
+
 ## 后端约束
 
 - `src-tauri/src/lib.rs` 只负责模块声明、插件挂载和命令注册。

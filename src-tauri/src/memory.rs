@@ -1,6 +1,6 @@
 use crate::runtime::{
-    candidates_path, ensure_workspace, iso_timestamp, memory_tree_path, next_runtime_id,
-    wridian_data_dir,
+    candidates_path, ensure_workspace, iso_timestamp, memory_folder_path, memory_tree_path,
+    next_runtime_id, wridian_data_dir,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -20,6 +20,13 @@ struct CreateMemoryCandidateInput {
 #[serde(rename_all = "camelCase")]
 struct MemoryCandidateActionInput {
     id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateMemoryCandidateInput {
+    id: String,
+    text: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -47,6 +54,7 @@ struct MemoryCandidate {
 struct MemoryStateResponse {
     memories: Vec<MemoryItem>,
     candidates: Vec<MemoryCandidate>,
+    memory_folder_path: String,
 }
 
 #[tauri::command]
@@ -56,6 +64,7 @@ pub(crate) fn wridian_get_memory_state() -> Result<MemoryStateResponse, String> 
     Ok(MemoryStateResponse {
         memories: read_memory_items(&data_dir)?,
         candidates: read_memory_candidates(&data_dir)?,
+        memory_folder_path: memory_folder_path(&data_dir).to_string_lossy().into_owned(),
     })
 }
 
@@ -83,6 +92,31 @@ pub(crate) fn wridian_create_memory_candidate(
     Ok(MemoryStateResponse {
         memories: read_memory_items(&data_dir)?,
         candidates,
+        memory_folder_path: memory_folder_path(&data_dir).to_string_lossy().into_owned(),
+    })
+}
+
+#[tauri::command]
+pub(crate) fn wridian_update_memory_candidate(
+    input: UpdateMemoryCandidateInput,
+) -> Result<MemoryStateResponse, String> {
+    let data_dir = wridian_data_dir()?;
+    ensure_workspace(&data_dir)?;
+    let text = input.text.trim().to_string();
+    if text.is_empty() {
+        return Err("候选记忆不能为空。".to_string());
+    }
+    let mut candidates = read_memory_candidates(&data_dir)?;
+    let candidate = candidates
+        .iter_mut()
+        .find(|candidate| candidate.id == input.id)
+        .ok_or_else(|| "待确认记忆不存在。".to_string())?;
+    candidate.text = text;
+    write_memory_candidates(&data_dir, &candidates)?;
+    Ok(MemoryStateResponse {
+        memories: read_memory_items(&data_dir)?,
+        candidates,
+        memory_folder_path: memory_folder_path(&data_dir).to_string_lossy().into_owned(),
     })
 }
 
@@ -113,6 +147,7 @@ pub(crate) fn wridian_accept_memory_candidate(
     Ok(MemoryStateResponse {
         memories,
         candidates,
+        memory_folder_path: memory_folder_path(&data_dir).to_string_lossy().into_owned(),
     })
 }
 
@@ -128,6 +163,7 @@ pub(crate) fn wridian_ignore_memory_candidate(
     Ok(MemoryStateResponse {
         memories: read_memory_items(&data_dir)?,
         candidates,
+        memory_folder_path: memory_folder_path(&data_dir).to_string_lossy().into_owned(),
     })
 }
 

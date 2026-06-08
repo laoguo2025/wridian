@@ -36,6 +36,10 @@ pub(crate) fn candidates_path(data_dir: &Path) -> PathBuf {
     runtime_root(data_dir).join("candidates.json")
 }
 
+pub(crate) fn memory_folder_path(data_dir: &Path) -> PathBuf {
+    runtime_root(data_dir)
+}
+
 pub(crate) fn ensure_workspace(data_dir: &Path) -> Result<(), String> {
     let vault = vault_root(data_dir);
     let works = vault.join("works");
