@@ -93,7 +93,7 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 - 记忆文件夹：Wridian 数据目录下的 `.wridian/`。
 - 记忆作用域：普通聊天使用全局记忆；作品库顶层作品文件夹各自拥有独立作品记忆；知识库拥有独立知识卡记忆，可作为 `@` 知识卡来源但不默认混进作品记忆。
 - 聊天记录：`.wridian/chat/*.md`，每个运行会话保存为 Markdown，包含 frontmatter、来源文件、用户/助手消息和上下文 pill。
-- 长期记忆：兼容保留 `.wridian/memory-tree.json`，新增作用域记忆位于 `.wridian/memory/global/`、`.wridian/memory/projects/` 和 `.wridian/memory/knowledge/`。
+- 长期记忆：兼容保留 `.wridian/memory-tree.json`；作品项目记忆以用户可编辑的 `memory.md` 保存在 `.wridian/memory/projects/<作品>/`；全局和知识库作用域暂存为结构化文件，后续可继续 Markdown-first 化。
 - 候选记忆：兼容保留 `.wridian/candidates.json`，新增待确认记忆跟随对应作用域保存。
 - Markdown 记忆 vault：`.wridian/wiki/` 是 JSON 记忆树的派生图谱层，包含 `sources/`、`entities/`、`concepts/`、`index.md`、`hot.md`、`log.md` 和 `.cache/index.json`。确认记忆时继续写 `.wridian/memory-tree.json`，并按 Claude-Obsidian 式 source/entity/concept 模板生成 Markdown 条目、wikilink、反链、hot context、图谱缓存和本地检索索引；记忆抽屉可重建图谱并搜索人物、设定、伏笔。
 - 记忆条目支持写作分类：人物、世界观、剧情线、风格、禁区、其他。

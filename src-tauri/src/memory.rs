@@ -313,6 +313,9 @@ fn read_memory_items_at(path: &Path) -> Result<Vec<MemoryItem>, String> {
     if !path.exists() {
         return Ok(Vec::new());
     }
+    if path.extension().and_then(|extension| extension.to_str()) == Some("md") {
+        return read_memory_markdown_items_at(path);
+    }
     let content = fs::read_to_string(&path).map_err(|error| format!("记忆树读取失败：{error}"))?;
     let value: serde_json::Value =
         serde_json::from_str(&content).map_err(|error| format!("记忆树格式损坏：{error}"))?;
@@ -334,7 +337,9 @@ pub(crate) fn read_relevant_memory_snippets(
     memories.extend(read_memory_items_at(&MemoryScopePaths::new(data_dir, &MemoryScope::Global)?.memory_tree_path)?);
     let source_scope = memory_scope_for_source(data_dir, source_path)?;
     if !matches!(source_scope, MemoryScope::Global) {
-        memories.extend(read_memory_items_at(&MemoryScopePaths::new(data_dir, &source_scope)?.memory_tree_path)?);
+        let paths = MemoryScopePaths::new(data_dir, &source_scope)?;
+        migrate_project_memory_json_to_markdown(&paths)?;
+        memories.extend(read_memory_items_at(&paths.memory_tree_path)?);
     }
     memories.extend(read_memory_items_at(&MemoryScopePaths::new(data_dir, &MemoryScope::Knowledge)?.memory_tree_path)?);
     let mut matched = Vec::new();
@@ -355,6 +360,9 @@ pub(crate) fn read_relevant_memory_snippets(
 }
 
 fn write_memory_items_at(path: &Path, memories: &[MemoryItem]) -> Result<(), String> {
+    if path.extension().and_then(|extension| extension.to_str()) == Some("md") {
+        return write_memory_markdown_items_at(path, memories);
+    }
     let content = serde_json::to_string_pretty(&json!({
         "schemaVersion": 1,
         "memories": memories
@@ -364,6 +372,116 @@ fn write_memory_items_at(path: &Path, memories: &[MemoryItem]) -> Result<(), Str
         fs::create_dir_all(parent).map_err(|error| format!("记忆目录创建失败：{error}"))?;
     }
     fs::write(path, content).map_err(|error| format!("记忆树写入失败：{error}"))
+}
+
+fn read_memory_markdown_items_at(path: &Path) -> Result<Vec<MemoryItem>, String> {
+    let content = fs::read_to_string(path).map_err(|error| format!("作品记忆读取失败：{error}"))?;
+    let mut items = Vec::new();
+    let mut current_frontmatter = HashMap::new();
+    let mut current_body = Vec::new();
+    let mut in_item = false;
+    let mut in_frontmatter = false;
+    for line in content.lines() {
+        if line.trim() == "---" {
+            if !in_item {
+                in_item = true;
+                in_frontmatter = true;
+                current_frontmatter.clear();
+                current_body.clear();
+                continue;
+            }
+            if in_frontmatter {
+                in_frontmatter = false;
+                continue;
+            }
+        }
+        if !in_item {
+            continue;
+        }
+        if in_frontmatter {
+            if let Some((key, value)) = line.split_once(':') {
+                current_frontmatter.insert(key.trim().to_string(), unquote_yaml(value.trim()));
+            }
+            continue;
+        }
+        if line.trim() == "<!-- wridian-memory-end -->" {
+            let text = current_body.join("\n").trim().to_string();
+            if !text.is_empty() {
+                items.push(MemoryItem {
+                    id: current_frontmatter
+                        .get("id")
+                        .cloned()
+                        .unwrap_or_else(|| next_runtime_id("memory")),
+                    category: current_frontmatter
+                        .get("category")
+                        .cloned()
+                        .unwrap_or_else(default_memory_category),
+                    text,
+                    source_path: current_frontmatter.get("source_path").cloned().unwrap_or_default(),
+                    title: current_frontmatter.get("title").cloned().unwrap_or_default(),
+                    created_at: current_frontmatter
+                        .get("created_at")
+                        .cloned()
+                        .unwrap_or_else(iso_timestamp),
+                });
+            }
+            in_item = false;
+            current_frontmatter.clear();
+            current_body.clear();
+            continue;
+        }
+        current_body.push(line.to_string());
+    }
+    if in_item && !in_frontmatter {
+        let text = current_body.join("\n").trim().to_string();
+        if !text.is_empty() {
+            items.push(MemoryItem {
+                id: current_frontmatter
+                    .get("id")
+                    .cloned()
+                    .unwrap_or_else(|| next_runtime_id("memory")),
+                category: current_frontmatter
+                    .get("category")
+                    .cloned()
+                    .unwrap_or_else(default_memory_category),
+                text,
+                source_path: current_frontmatter.get("source_path").cloned().unwrap_or_default(),
+                title: current_frontmatter.get("title").cloned().unwrap_or_default(),
+                created_at: current_frontmatter
+                    .get("created_at")
+                    .cloned()
+                    .unwrap_or_else(iso_timestamp),
+            });
+        }
+    }
+    Ok(items)
+}
+
+fn write_memory_markdown_items_at(path: &Path, memories: &[MemoryItem]) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("作品记忆目录创建失败：{error}"))?;
+    }
+    let mut content = String::from("# 作品记忆\n\n这里的每一段记忆都可以直接编辑。请保留每条记忆之间的 `---` frontmatter 和结束标记。\n\n");
+    for memory in memories {
+        content.push_str("---\n");
+        content.push_str(&format!("id: {}\n", escape_yaml(&memory.id)));
+        content.push_str(&format!("category: {}\n", escape_yaml(&memory.category)));
+        content.push_str(&format!("source_path: {}\n", escape_yaml(&memory.source_path)));
+        content.push_str(&format!("title: {}\n", escape_yaml(&memory.title)));
+        content.push_str(&format!("created_at: {}\n", escape_yaml(&memory.created_at)));
+        content.push_str("---\n\n");
+        content.push_str(memory.text.trim());
+        content.push_str("\n\n<!-- wridian-memory-end -->\n\n");
+    }
+    fs::write(path, content).map_err(|error| format!("作品记忆写入失败：{error}"))
+}
+
+fn unquote_yaml(value: &str) -> String {
+    value
+        .trim()
+        .trim_matches('"')
+        .replace("\\\"", "\"")
+        .replace("\\\\", "\\")
 }
 
 fn write_memory_wiki(data_dir: &Path, memories: &[MemoryItem]) -> Result<(), String> {
@@ -447,7 +565,10 @@ impl MemoryScopePaths {
         };
         Ok(Self {
             candidates_path: folder_path.join("candidates.json"),
-            memory_tree_path: folder_path.join("memory-tree.json"),
+            memory_tree_path: match scope {
+                MemoryScope::Project { .. } => folder_path.join("memory.md"),
+                _ => folder_path.join("memory-tree.json"),
+            },
             folder_path,
         })
     }
@@ -470,11 +591,30 @@ fn memory_state_for_scope(data_dir: &Path, scope: &MemoryScope) -> Result<Memory
 }
 
 fn memory_state_for_scope_paths(paths: &MemoryScopePaths) -> Result<MemoryStateResponse, String> {
+    migrate_project_memory_json_to_markdown(paths)?;
     Ok(MemoryStateResponse {
         memories: read_memory_items_at(&paths.memory_tree_path)?,
         candidates: read_memory_candidates_at(&paths.candidates_path)?,
         memory_folder_path: paths.folder_path.to_string_lossy().into_owned(),
     })
+}
+
+fn migrate_project_memory_json_to_markdown(paths: &MemoryScopePaths) -> Result<(), String> {
+    if paths.memory_tree_path.extension().and_then(|extension| extension.to_str()) != Some("md") {
+        return Ok(());
+    }
+    if paths.memory_tree_path.exists() {
+        return Ok(());
+    }
+    let legacy_path = paths.folder_path.join("memory-tree.json");
+    if !legacy_path.exists() {
+        return Ok(());
+    }
+    let memories = read_memory_items_at(&legacy_path)?;
+    if memories.is_empty() {
+        return Ok(());
+    }
+    write_memory_markdown_items_at(&paths.memory_tree_path, &memories)
 }
 
 fn memory_scope_for_source(data_dir: &Path, source_path: &str) -> Result<MemoryScope, String> {
@@ -513,6 +653,7 @@ fn memory_scope_for_source(data_dir: &Path, source_path: &str) -> Result<MemoryS
 fn read_all_memory_items(data_dir: &Path) -> Result<Vec<MemoryItem>, String> {
     let mut items = read_memory_items(data_dir)?;
     for paths in all_scope_paths(data_dir)? {
+        migrate_project_memory_json_to_markdown(&paths)?;
         items.extend(read_memory_items_at(&paths.memory_tree_path)?);
     }
     Ok(items)
