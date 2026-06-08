@@ -20,6 +20,7 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
   - `src-tauri/src/memory.rs`：待确认记忆和写入记忆。
   - `src-tauri/src/cocreation.rs`：共创请求上下文组装和模型回复。
 - 本地运行：`npm run dev`
+- Rust 检查：普通 PowerShell 中可直接运行 `cargo check --manifest-path src-tauri\Cargo.toml`；项目通过 `.cargo/config.toml` 注入本机 MSVC Build Tools 路径，避免每次手工执行 `vcvars64.bat`。
 
 ## 当前边界
 
