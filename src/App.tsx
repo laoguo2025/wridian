@@ -194,6 +194,7 @@ function App() {
   }, [loadMemoryState]);
 
   const files = workspace?.files ?? [];
+  const promptFileCandidates = useMemo(() => flattenPromptFileCandidates(files), [files]);
   const isRealFile = Boolean(selectedPath);
   const dirty = isRealFile && editorContent !== lastSavedContent;
 
@@ -447,7 +448,8 @@ function App() {
     editorTitle,
     selectedPath,
     titleFallback: selectedPath ? baseName(selectedPath) : "",
-  }), [draftSelection.end, draftSelection.start, editorContent, editorTitle, selectedPath]);
+    workspaceFiles: promptFileCandidates,
+  }), [draftSelection.end, draftSelection.start, editorContent, editorTitle, promptFileCandidates, selectedPath]);
 
   const statusLabel = useMemo(() => {
     if (saveStatus === "idle") return "读取中";
@@ -838,6 +840,19 @@ function FileContextMenuView({
 
 function baseName(path: string) {
   return path.replace(/[\\/]+$/g, "").split(/[\\/]/).pop() || path;
+}
+
+function flattenPromptFileCandidates(nodes: WorkFileNode[]) {
+  const files: Array<{ name: string; path: string }> = [];
+  const visit = (node: WorkFileNode) => {
+    if (node.folder) {
+      node.children.forEach(visit);
+      return;
+    }
+    files.push({ name: node.name, path: node.path });
+  };
+  nodes.forEach(visit);
+  return files.sort((left, right) => left.name.localeCompare(right.name, "zh-Hans-CN"));
 }
 
 function PencilIcon() {

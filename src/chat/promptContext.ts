@@ -29,6 +29,12 @@ export type PromptSuggestionInput = {
   editorTitle: string;
   selectedPath: string;
   titleFallback: string;
+  workspaceFiles: PromptFileCandidate[];
+};
+
+export type PromptFileCandidate = {
+  name: string;
+  path: string;
 };
 
 export function serializePromptContextPills(pills: PromptContextPill[]) {
@@ -136,6 +142,18 @@ export function buildPromptSuggestions(input: PromptSuggestionInput): PromptSugg
         pillKind: "active-file",
       },
     );
+  }
+
+  for (const file of input.workspaceFiles.slice(0, 20)) {
+    if (file.path === input.selectedPath) continue;
+    suggestions.push({
+      id: `file:${file.path}`,
+      label: file.name,
+      detail: file.path,
+      insertText: `路径：${file.path}`,
+      kind: "context",
+      pillKind: "file",
+    });
   }
 
   suggestions.push(...WRITING_COMMAND_SUGGESTIONS);
