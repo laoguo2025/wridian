@@ -245,6 +245,30 @@ fn read_memory_items(data_dir: &Path) -> Result<Vec<MemoryItem>, String> {
     }
 }
 
+pub(crate) fn read_relevant_memory_snippets(
+    data_dir: &Path,
+    source_path: &str,
+    title: &str,
+    limit: usize,
+) -> Result<Vec<String>, String> {
+    let memories = read_memory_items(data_dir)?;
+    let mut matched = Vec::new();
+    let mut fallback = Vec::new();
+
+    for memory in memories {
+        let snippet = format!("【{}】{}", memory.category, memory.text);
+        if memory.source_path == source_path || memory.title == title {
+            matched.push(snippet);
+        } else {
+            fallback.push(snippet);
+        }
+    }
+
+    matched.extend(fallback);
+    matched.truncate(limit);
+    Ok(matched)
+}
+
 fn write_memory_items(data_dir: &Path, memories: &[MemoryItem]) -> Result<(), String> {
     let content = serde_json::to_string_pretty(&json!({
         "schemaVersion": 1,

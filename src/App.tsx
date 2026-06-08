@@ -43,6 +43,11 @@ type TestCustomApiResponse = {
   message: string;
 };
 
+type CoCreateResponse = {
+  reply: string;
+  memoriesUsed: string[];
+};
+
 type MemoryItem = {
   id: string;
   category?: string;
@@ -133,13 +138,22 @@ const demoMemoryState: MemoryState = {
   candidates: [],
 };
 
+const demoCocreationReply =
+  "这里可以先补一段进门前的动作，让她不是被剧情推着走，而是主动验证线索。比如先写她在门口停住，摸到口袋里父亲留下的旧钥匙，再决定推门。";
+
 function App() {
   const [theme, setTheme] = useState<Theme>("light");
   const [memoryOpen, setMemoryOpen] = useState(false);
+  const [cocreationOpen, setCocreationOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [workspace, setWorkspace] = useState<WorkspaceInfo | null>(null);
   const [workspaceError, setWorkspaceError] = useState("");
   const [prompt, setPrompt] = useState("");
+  const [cocreating, setCocreating] = useState(false);
+  const [cocreationError, setCocreationError] = useState("");
+  const [cocreationReply, setCocreationReply] = useState("");
+  const [cocreationMemories, setCocreationMemories] = useState<string[]>([]);
+  const [lastCocreationRequest, setLastCocreationRequest] = useState("");
   const [selectedPath, setSelectedPath] = useState("demo://chapters/03.md");
   const [editorTitle, setEditorTitle] = useState("03.md");
   const [editorContent, setEditorContent] = useState(demoContent["demo://chapters/03.md"]);
@@ -162,38 +176,37 @@ function App() {
   }, []);
 
   const sendPrompt = async () => {
-    const userIntent = prompt.trim();
+    const userInput = prompt.trim();
+    if (!userInput || cocreating) return;
     setPrompt("");
-    if (userIntent) {
-      try {
-        const response = await invoke<MemoryState>("wridian_create_memory_candidate", {
-          input: {
-            sourcePath: selectedPath,
-            title: editorTitle,
-            content: editorContent,
-            userIntent,
-          },
-        });
-        setMemoryState(response);
-        setMemoryError("");
-      } catch (error) {
-        setMemoryState((current) => ({
-          ...current,
-          candidates: [
-            ...current.candidates,
-            {
-              id: `local-candidate-${Date.now()}`,
-              text: `${editorTitle}：用户希望处理“${userIntent.slice(0, 120)}”。`,
-              sourcePath: selectedPath,
-              title: editorTitle,
-              createdAt: "local",
-            },
-          ],
-        }));
-        setMemoryError(error instanceof Error ? error.message : String(error));
+    setLastCocreationRequest(userInput);
+    setCocreationOpen(true);
+    setMemoryOpen(false);
+    setCocreating(true);
+    setCocreationError("");
+    try {
+      if (selectedPath.startsWith("demo://")) {
+        setCocreationReply(demoCocreationReply);
+        setCocreationMemories(memoryState.memories.slice(0, 3).map((item) => `【${item.category ?? "其他"}】${item.text}`));
+        return;
       }
+      const response = await invoke<CoCreateResponse>("wridian_cocreate", {
+        input: {
+          sourcePath: selectedPath,
+          title: editorTitle,
+          content: editorContent,
+          userInput,
+        },
+      });
+      setCocreationReply(response.reply);
+      setCocreationMemories(response.memoriesUsed);
+    } catch (error) {
+      setCocreationReply("");
+      setCocreationMemories([]);
+      setCocreationError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCocreating(false);
     }
-    setMemoryOpen(true);
   };
 
   const handlePromptKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -461,7 +474,10 @@ function App() {
           <span>Wridian</span>
         </div>
         <nav className="top-actions" aria-label="Wridian actions">
-          <button type="button" onClick={() => setMemoryOpen(true)}>
+          <button type="button" onClick={() => {
+            setMemoryOpen(true);
+            setCocreationOpen(false);
+          }}>
             记忆
           </button>
           <button type="button" onClick={() => setSettingsOpen(true)}>
@@ -545,13 +561,24 @@ function App() {
               placeholder="Enter 发送，Shift + Enter 换行"
               aria-label="共创输入"
             />
-            <button type="submit" aria-label="发送">
-              ↑
+            <button type="submit" aria-label="发送" disabled={cocreating || !prompt.trim()}>
+              {cocreating ? "…" : "↑"}
             </button>
           </form>
         </main>
       </div>
 
+      {cocreationOpen ? (
+        <CoCreationDrawer
+          currentTitle={editorTitle}
+          error={cocreationError}
+          lastRequest={lastCocreationRequest}
+          memoriesUsed={cocreationMemories}
+          onClose={() => setCocreationOpen(false)}
+          pending={cocreating}
+          reply={cocreationReply}
+        />
+      ) : null}
       {memoryOpen ? (
         <MemoryDrawer
           currentTitle={editorTitle}
@@ -708,7 +735,7 @@ function FileContextMenuView({
         创建副本
       </button>
       <button type="button" onClick={() => run(() => onAddToPrompt(menu.node))}>
-        添加到聊天框
+        添加到共创输入
       </button>
       <button type="button" onClick={() => run(() => onRename(menu.node))}>
         重命名
@@ -768,6 +795,68 @@ function SettingsIcon() {
       <path d="M18.2838 43.1713C14.9327 42.1736 11.9498 40.3213 9.58787 37.867C10.469 36.8227 11 35.4734 11 34.0001C11 30.6864 8.31371 28.0001 5 28.0001C4.79955 28.0001 4.60139 28.01 4.40599 28.0292C4.13979 26.7277 4 25.3803 4 24.0001C4 21.9095 4.32077 19.8938 4.91579 17.9995C4.94381 17.9999 4.97188 18.0001 5 18.0001C8.31371 18.0001 11 15.3138 11 12.0001C11 11.0488 10.7786 10.1493 10.3846 9.35011C12.6975 7.1995 15.5205 5.59002 18.6521 4.72314C19.6444 6.66819 21.6667 8.00013 24 8.00013C26.3333 8.00013 28.3556 6.66819 29.3479 4.72314C32.4795 5.59002 35.3025 7.1995 37.6154 9.35011C37.2214 10.1493 37 11.0488 37 12.0001C37 15.3138 39.6863 18.0001 43 18.0001C43.0281 18.0001 43.0562 17.9999 43.0842 17.9995C43.6792 19.8938 44 21.9095 44 24.0001C44 25.3803 43.8602 26.7277 43.594 28.0292C43.3986 28.01 43.2005 28.0001 43 28.0001C39.6863 28.0001 37 30.6864 37 34.0001C37 35.4734 37.531 36.8227 38.4121 37.867C36.0502 40.3213 33.0673 42.1736 29.7162 43.1713C28.9428 40.752 26.676 39.0001 24 39.0001C21.324 39.0001 19.0572 40.752 18.2838 43.1713Z" />
       <path d="M24 31C27.866 31 31 27.866 31 24C31 20.134 27.866 17 24 17C20.134 17 17 20.134 17 24C17 27.866 20.134 31 24 31Z" />
     </svg>
+  );
+}
+
+function CoCreationDrawer({
+  currentTitle,
+  error,
+  lastRequest,
+  memoriesUsed,
+  onClose,
+  pending,
+  reply,
+}: {
+  currentTitle: string;
+  error: string;
+  lastRequest: string;
+  memoriesUsed: string[];
+  onClose: () => void;
+  pending: boolean;
+  reply: string;
+}) {
+  return (
+    <div className="drawer-backdrop" onMouseDown={onClose} role="presentation">
+      <aside className="side-drawer cocreation-drawer" role="dialog" aria-modal="true" aria-label="共创" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="drawer-header">
+          <div>
+            <div className="drawer-title">共创</div>
+            <div className="drawer-subtitle">当前文件：{currentTitle}</div>
+          </div>
+          <button type="button" className="icon-button" onClick={onClose} aria-label="关闭">
+            ×
+          </button>
+        </div>
+
+        <section className="memory-card cocreation-card">
+          <h2>这次请求</h2>
+          <p>{lastRequest || "等待输入。"}</p>
+        </section>
+
+        <section className="memory-card cocreation-card primary">
+          <h2>Wridian 建议</h2>
+          {pending ? <p>正在根据当前稿件和已确认记忆生成建议。</p> : null}
+          {error ? <div className="rail-error">{error}</div> : null}
+          {!pending && !error && reply ? <p className="cocreation-reply">{reply}</p> : null}
+          {!pending && !error && !reply ? <p>发送底部共创输入后，这里会显示建议。</p> : null}
+        </section>
+
+        <section className="memory-card cocreation-card">
+          <h2>本次使用的记忆</h2>
+          {memoriesUsed.length ? (
+            <ul>
+              {memoriesUsed.map((memory, index) => (
+                <li key={`${memory}-${index}`}>{memory}</li>
+              ))}
+            </ul>
+          ) : (
+            <p>本次没有注入已确认记忆。</p>
+          )}
+        </section>
+
+        <footer className="drawer-footer">共创回复不会自动写入正文，也不会直接写入长期记忆。</footer>
+      </aside>
+    </div>
   );
 }
 
