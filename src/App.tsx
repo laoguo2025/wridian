@@ -1,12 +1,10 @@
 import { KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { requestCocreation, type CoCreateEdit } from "./chat/cocreationClient";
 import {
-  createAssistantChatMessage,
-  createUserChatMessage,
   restorePromptPillsFromMessage,
   type ChatMessage,
 } from "./chat/messageRepository";
+import { useChatManager, type ChatDraftEdit } from "./chat/chatManager";
 import { ChatPanel } from "./chat/ChatPanel";
 import {
   buildPromptSuggestions,
@@ -63,10 +61,7 @@ type TestCustomApiResponse = {
   message: string;
 };
 
-type DraftEdit = CoCreateEdit & {
-  id: string;
-  status: "pending" | "accepted" | "rejected";
-};
+type DraftEdit = ChatDraftEdit;
 
 type MemoryItem = {
   id: string;
@@ -110,9 +105,6 @@ function App() {
   const [workspace, setWorkspace] = useState<WorkspaceInfo | null>(null);
   const [workspaceError, setWorkspaceError] = useState("");
   const [prompt, setPrompt] = useState("");
-  const [cocreating, setCocreating] = useState(false);
-  const [cocreationError, setCocreationError] = useState("");
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [pendingEdits, setPendingEdits] = useState<DraftEdit[]>([]);
   const [promptPills, setPromptPills] = useState<PromptContextPill[]>([]);
   const [hasDraftSelection, setHasDraftSelection] = useState(false);
@@ -129,6 +121,10 @@ function App() {
   const [fileMenu, setFileMenu] = useState<FileContextMenu | null>(null);
   const draftEditorRef = useRef<HTMLDivElement | null>(null);
   const draftSelectionRef = useRef<TextSelection>({ start: editorContent.length, end: editorContent.length });
+  const appendDraftEdits = useCallback((edits: DraftEdit[]) => {
+    setPendingEdits((current) => [...current, ...edits]);
+  }, []);
+  const chatManager = useChatManager({ onDraftEdits: appendDraftEdits });
 
   const loadMemoryState = useCallback(async () => {
     try {
@@ -142,36 +138,19 @@ function App() {
 
   const sendPrompt = async (override?: { text: string; selectedText?: string }) => {
     const userInput = (override?.text ?? prompt).trim();
-    if (!userInput || cocreating) return;
+    if (!userInput || chatManager.pending) return;
     if (!override) setPrompt("");
     setMemoryOpen(false);
-    setCocreating(true);
-    setCocreationError("");
-    const userMessage = createUserChatMessage({
+    const sent = await chatManager.sendPrompt({
+      content: editorContent,
       contextPills: override ? [] : promptPills,
       selectedText: override?.selectedText,
+      sourcePath: selectedPath,
       text: userInput,
+      title: editorTitle,
     });
-    const selectedText = userMessage.selectedText ?? "";
-    setChatMessages((messages) => [...messages, userMessage]);
-    if (!override) setPromptPills([]);
-    try {
-      const response = await requestCocreation({
-        sourcePath: selectedPath,
-        title: editorTitle,
-        content: editorContent,
-        userInput,
-        selectedText,
-      });
-      setChatMessages((messages) => [...messages, createAssistantChatMessage(response.reply)]);
-      setPendingEdits((edits) => [
-        ...edits,
-        ...response.edits.map((edit, index) => ({ ...edit, id: `edit-${Date.now()}-${index}`, status: "pending" as const })),
-      ]);
-    } catch (error) {
-      setCocreationError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setCocreating(false);
+    if (sent && !override) {
+      setPromptPills([]);
     }
   };
 
@@ -413,10 +392,10 @@ function App() {
     const match = guardReport.matches.find((item) => item.edit.id === id);
     if (!match) {
       const skipped = guardReport.skipped.find((item) => item.edit.id === id);
-      setCocreationError(skipped ? describeDraftReplaceSkip(skipped.reason) : "这处修改无法安全定位。");
+      chatManager.setError(skipped ? describeDraftReplaceSkip(skipped.reason) : "这处修改无法安全定位。");
       return;
     }
-    setCocreationError("");
+    chatManager.setError("");
     applyTextToDraft(edit.replacement, { start: match.index, end: match.index + edit.target.length });
     setPendingEdits((edits) => edits.map((item) => (item.id === id ? { ...item, status: "accepted" } : item)));
   };
@@ -431,7 +410,7 @@ function App() {
     const matches = guardReport.matches;
 
     if (!matches.length) {
-      setCocreationError("没有可以安全确认的修改。");
+      chatManager.setError("没有可以安全确认的修改。");
       return;
     }
 
@@ -444,7 +423,7 @@ function App() {
 
     setEditorContent(nextContent);
     setPendingEdits((edits) => edits.map((edit) => (appliedIds.has(edit.id) ? { ...edit, status: "accepted" } : edit)));
-    setCocreationError(guardReport.skipped.length ? `${guardReport.skipped.length} 处修改需要重新定位。` : "");
+    chatManager.setError(guardReport.skipped.length ? `${guardReport.skipped.length} 处修改需要重新定位。` : "");
     draftSelectionRef.current = { start: 0, end: 0 };
     setDraftSelection({ start: 0, end: 0 });
     setHasDraftSelection(false);
@@ -669,13 +648,13 @@ function App() {
         </main>
 
         <ChatPanel
-          error={cocreationError}
-          messages={chatMessages}
+          error={chatManager.error}
+          messages={chatManager.messages}
           onAddToMemory={addTextToMemory}
           onCopy={copyText}
           onEditUserMessage={editUserMessage}
           onRetry={retryLastUserMessage}
-          pending={cocreating}
+          pending={chatManager.pending}
           prompt={prompt}
           promptPills={promptPills}
           promptSuggestions={promptSuggestions}
