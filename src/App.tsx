@@ -112,11 +112,9 @@ function App() {
   const [cocreating, setCocreating] = useState(false);
   const [cocreationError, setCocreationError] = useState("");
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [cocreationMemories, setCocreationMemories] = useState<string[]>([]);
   const [pendingEdits, setPendingEdits] = useState<DraftEdit[]>([]);
   const [attachedSelection, setAttachedSelection] = useState("");
   const [hasDraftSelection, setHasDraftSelection] = useState(false);
-  const [cocreationActionStatus, setCocreationActionStatus] = useState("");
   const [selectedPath, setSelectedPath] = useState("");
   const [editorTitle, setEditorTitle] = useState("");
   const [editorContent, setEditorContent] = useState("");
@@ -178,9 +176,7 @@ function App() {
         ...edits,
         ...response.edits.map((edit, index) => ({ ...edit, id: `edit-${Date.now()}-${index}`, status: "pending" as const })),
       ]);
-      setCocreationMemories(response.memoriesUsed);
     } catch (error) {
-      setCocreationMemories([]);
       setCocreationError(error instanceof Error ? error.message : String(error));
     } finally {
       setCocreating(false);
@@ -389,9 +385,7 @@ function App() {
     if (!reply) return;
     try {
       await navigator.clipboard.writeText(reply);
-      setCocreationActionStatus("已复制。");
     } catch {
-      setCocreationActionStatus("复制失败。");
     }
   };
 
@@ -408,10 +402,8 @@ function App() {
         },
       });
       setMemoryState(response);
-      setCocreationActionStatus("已加入待确认记忆。");
     } catch (error) {
       setMemoryError(error instanceof Error ? error.message : String(error));
-      setCocreationActionStatus("添加到记忆失败。");
     }
   };
 
@@ -431,7 +423,6 @@ function App() {
       (item) => item.edit.id === id,
     );
     if (!match) {
-      setCocreationActionStatus("原文片段已变化，无法应用。");
       return;
     }
     applyTextToDraft(edit.replacement, { start: match.index, end: match.index + edit.target.length });
@@ -447,7 +438,6 @@ function App() {
     const matches = matchDraftEditSuggestions(editorContent, pending);
 
     if (!matches.length) {
-      setCocreationActionStatus("原文片段已变化，无法应用。");
       return;
     }
 
@@ -463,8 +453,6 @@ function App() {
     draftSelectionRef.current = { start: 0, end: 0 };
     setHasDraftSelection(false);
 
-    const skippedCount = pending.length - matches.length;
-    setCocreationActionStatus(skippedCount > 0 ? `${matches.length} 处已确认，${skippedCount} 处原文已变化。` : "全部修改已确认。");
   };
 
   const rejectAllEdits = () => {
@@ -671,11 +659,8 @@ function App() {
         </main>
 
         <ChatPanel
-          actionStatus={cocreationActionStatus}
-          currentTitle={editorTitle || "未选择文件"}
           error={cocreationError}
           messages={chatMessages}
-          memoriesUsed={cocreationMemories}
           onAddToMemory={addTextToMemory}
           onCopy={copyText}
           onEditUserMessage={editUserMessage}
@@ -1070,12 +1055,9 @@ function buildDraftSuggestionChunks(content: string, edits: DraftEdit[]): DraftS
 }
 
 function ChatPanel({
-  actionStatus,
   attachedSelection,
-  currentTitle,
   error,
   messages,
-  memoriesUsed,
   onAddToMemory,
   onCopy,
   onEditUserMessage,
@@ -1087,12 +1069,9 @@ function ChatPanel({
   pending,
   prompt,
 }: {
-  actionStatus: string;
   attachedSelection: string;
-  currentTitle: string;
   error: string;
   messages: ChatMessage[];
-  memoriesUsed: string[];
   onAddToMemory: (text: string) => void;
   onCopy: (text: string) => void;
   onEditUserMessage: (message: ChatMessage) => void;
@@ -1108,13 +1087,6 @@ function ChatPanel({
 
   return (
     <aside className="chat-panel" aria-label="对话区">
-      <div className="chat-panel-header">
-        <div>
-          <div className="drawer-title">对话区</div>
-          <div className="drawer-subtitle">当前文件：{currentTitle}</div>
-        </div>
-      </div>
-
       <div className="chat-thread">
         {messages.length ? (
           messages.map((message) => (
@@ -1141,29 +1113,10 @@ function ChatPanel({
               </div>
             </article>
           ))
-        ) : (
-          <section className="memory-card cocreation-card">
-            <h2>共创对话</h2>
-            <p>在下方输入框发送消息后，这里会显示你和 Wridian 的讨论。</p>
-          </section>
-        )}
-        {pending ? <div className="inline-status">Wridian 正在回复。</div> : null}
-        {error ? <div className="rail-error">{error}</div> : null}
-        {actionStatus ? <div className="inline-status">{actionStatus}</div> : null}
+        ) : null}
+        {pending ? <div className="chat-status">正在回复。</div> : null}
+        {error ? <div className="chat-status error">{error}</div> : null}
       </div>
-
-      <section className="memory-card cocreation-card">
-        <h2>本次使用的记忆</h2>
-        {memoriesUsed.length ? (
-          <ul>
-            {memoriesUsed.map((memory, index) => (
-              <li key={`${memory}-${index}`}>{memory}</li>
-            ))}
-          </ul>
-        ) : (
-          <p>本次没有注入已确认记忆。</p>
-        )}
-      </section>
 
       <form
         className="prompt-bar"

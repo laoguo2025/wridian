@@ -631,17 +631,17 @@ button {
 
 .prompt-bar {
   width: 100%;
-  min-height: 112px;
+  min-height: 78px;
   margin: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 34px;
-  grid-template-rows: auto minmax(92px, auto);
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) 28px;
+  grid-template-rows: auto;
+  gap: 6px;
   align-items: end;
   border-radius: 10px;
   background: color-mix(in srgb, var(--bg-panel), transparent 8%);
   box-shadow: var(--shadow-card);
-  padding: 10px 8px 8px 14px;
+  padding: 8px;
 }
 
 .prompt-attachment {
@@ -680,7 +680,7 @@ button {
 
 .prompt-bar textarea {
   min-width: 0;
-  height: 92px;
+  height: 63px;
   max-height: 220px;
   border: 0;
   outline: none;
@@ -698,14 +698,14 @@ button {
 }
 
 .prompt-bar > button {
-  width: 34px;
-  height: 34px;
+  width: 28px;
+  height: 28px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 7px;
   background: var(--text-primary);
   color: var(--bg-page);
-  font-size: 17px;
-  line-height: 17px;
+  font-size: 14px;
+  line-height: 14px;
 }
 
 .prompt-bar > button:disabled {
@@ -757,18 +757,11 @@ button {
   background: var(--bg-sidebar);
   box-shadow: var(--shadow-card);
   backdrop-filter: blur(22px);
-  padding: 14px 12px 12px;
+  padding: 10px;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
-  gap: 10px;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 8px;
   overflow: hidden;
-}
-
-.chat-panel-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
 }
 
 .drawer-header {
@@ -825,16 +818,6 @@ button {
   padding: 12px;
 }
 
-.cocreation-card.primary {
-  background: color-mix(in srgb, var(--bg-panel), transparent 6%);
-  border: 1px solid color-mix(in srgb, var(--focus), transparent 72%);
-}
-
-.chat-panel .cocreation-card {
-  max-height: 132px;
-  overflow: auto;
-}
-
 .cocreation-reply {
   white-space: pre-wrap;
 }
@@ -875,6 +858,17 @@ button {
   max-height: 90px;
   overflow: hidden;
   padding-left: 8px;
+}
+
+.chat-status {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 17px;
+  padding: 0 2px;
+}
+
+.chat-status.error {
+  color: var(--accent);
 }
 
 .message-actions {
