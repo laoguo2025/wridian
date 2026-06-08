@@ -20,6 +20,10 @@
   - 文件顶部显示全部确认/全部取消。
   - 每处修改旁显示确认/取消。
 - 记忆提取按钮移动到文件顶部。
+- 进一步修正：
+  - 正文区继续按纯文本编辑器处理，去掉前端代码和样式中的 review 命名，避免误导为独立审阅模式。
+  - “全部确认”改为一次性匹配所有待确认修改，并按正文位置从后往前应用，避免 React 状态批处理导致只按旧正文循环替换。
+  - 相同 target 的多处修改按正文中未占用位置顺序分配，支持不带选区的批量改名等跨段落修改。
 
 ## 验证
 
@@ -27,8 +31,12 @@
 - `cargo fmt --manifest-path src-tauri/Cargo.toml --check` 通过。
 - 使用 VS Build Tools 环境运行 `cargo check` 通过。
 - 使用 VS Build Tools 环境运行 `cargo test --lib` 通过：5 passed，1 ignored。
+- 本轮追加验证：
+  - `npm run build` 通过。
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml --check` 通过。
+  - 使用 `C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat` 初始化后运行 `cargo check --manifest-path src-tauri\Cargo.toml` 通过。
 
 ## 后续
 
 - 需要真实桌面端手动验收 inline diff 的可读性、选区偏移和批量修改确认顺序。
-- 需要后续补更稳的多处相同文本匹配策略，避免模型返回重复 target 时定位不清。
+- 仍需真实桌面端手动验收带 inline diff 时的可读性，以及确认/取消后自动保存是否符合作者预期。

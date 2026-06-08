@@ -527,12 +527,14 @@ function App() {
   const acceptEdit = (id: string) => {
     const edit = pendingEdits.find((item) => item.id === id && item.status === "pending");
     if (!edit) return;
-    const index = editorContent.indexOf(edit.target);
-    if (index < 0) {
+    const match = matchDraftEditSuggestions(editorContent, pendingEdits.filter((item) => item.status === "pending")).find(
+      (item) => item.edit.id === id,
+    );
+    if (!match) {
       setCocreationActionStatus("原文片段已变化，无法应用。");
       return;
     }
-    applyTextToDraft(edit.replacement, { start: index, end: index + edit.target.length });
+    applyTextToDraft(edit.replacement, { start: match.index, end: match.index + edit.target.length });
     setPendingEdits((edits) => edits.map((item) => (item.id === id ? { ...item, status: "accepted" } : item)));
   };
 
@@ -541,7 +543,28 @@ function App() {
   };
 
   const acceptAllEdits = () => {
-    pendingEdits.filter((edit) => edit.status === "pending").forEach((edit) => acceptEdit(edit.id));
+    const pending = pendingEdits.filter((edit) => edit.status === "pending");
+    const matches = matchDraftEditSuggestions(editorContent, pending);
+
+    if (!matches.length) {
+      setCocreationActionStatus("原文片段已变化，无法应用。");
+      return;
+    }
+
+    const appliedIds = new Set(matches.map((match) => match.edit.id));
+    const nextContent = [...matches].sort((left, right) => right.index - left.index).reduce((content, match) => {
+      const start = match.index;
+      const end = start + match.edit.target.length;
+      return `${content.slice(0, start)}${match.edit.replacement}${content.slice(end)}`;
+    }, editorContent);
+
+    setEditorContent(nextContent);
+    setPendingEdits((edits) => edits.map((edit) => (appliedIds.has(edit.id) ? { ...edit, status: "accepted" } : edit)));
+    draftSelectionRef.current = { start: 0, end: 0 };
+    setHasDraftSelection(false);
+
+    const skippedCount = pending.length - matches.length;
+    setCocreationActionStatus(skippedCount > 0 ? `${matches.length} 处已确认，${skippedCount} 处原文已变化。` : "全部修改已确认。");
   };
 
   const rejectAllEdits = () => {
@@ -723,7 +746,7 @@ function App() {
               </div>
             </div>
             <h1 className="chapter-heading">{editorTitle}</h1>
-            <div className="draft-review-actions" aria-label="待确认修改操作" hidden={!pendingDraftEdits.length}>
+            <div className="draft-suggestion-actions" aria-label="待确认修改操作" hidden={!pendingDraftEdits.length}>
                 <span>{pendingDraftEdits.length} 处待确认修改</span>
                 <button type="button" onClick={acceptAllEdits}>全部确认</button>
                 <button type="button" className="secondary" onClick={rejectAllEdits}>全部取消</button>
@@ -1022,7 +1045,7 @@ function DraftEditor({
   onRejectEdit: (id: string) => void;
   onSelectionChange: () => void;
 }) {
-  const chunks = buildDraftReviewChunks(content, edits);
+  const chunks = buildDraftSuggestionChunks(content, edits);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -1112,16 +1135,40 @@ function setContentEditableCaret(root: HTMLElement | null, offset: number) {
   selection?.addRange(range);
 }
 
-type DraftReviewChunk =
+type DraftSuggestionChunk =
   | { kind: "text"; text: string }
   | { kind: "edit"; edit: DraftEdit };
 
-function buildDraftReviewChunks(content: string, edits: DraftEdit[]): DraftReviewChunk[] {
-  const matches = edits
-    .map((edit) => ({ edit, index: content.indexOf(edit.target) }))
-    .filter((match) => match.index >= 0)
-    .sort((left, right) => left.index - right.index);
-  const chunks: DraftReviewChunk[] = [];
+type DraftEditMatch = {
+  edit: DraftEdit;
+  index: number;
+};
+
+function matchDraftEditSuggestions(content: string, edits: DraftEdit[]): DraftEditMatch[] {
+  const claimed: Array<{ start: number; end: number }> = [];
+  const matches: DraftEditMatch[] = [];
+
+  for (const edit of edits) {
+    if (!edit.target) continue;
+    let index = content.indexOf(edit.target);
+    while (index >= 0) {
+      const end = index + edit.target.length;
+      const overlaps = claimed.some((range) => index < range.end && end > range.start);
+      if (!overlaps) {
+        claimed.push({ start: index, end });
+        matches.push({ edit, index });
+        break;
+      }
+      index = content.indexOf(edit.target, index + 1);
+    }
+  }
+
+  return matches.sort((left, right) => left.index - right.index);
+}
+
+function buildDraftSuggestionChunks(content: string, edits: DraftEdit[]): DraftSuggestionChunk[] {
+  const matches = matchDraftEditSuggestions(content, edits);
+  const chunks: DraftSuggestionChunk[] = [];
   let cursor = 0;
 
   for (const match of matches) {

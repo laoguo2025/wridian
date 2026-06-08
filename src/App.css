@@ -492,7 +492,7 @@ button {
   padding: 0 0 22px;
 }
 
-.draft-review-actions {
+.draft-suggestion-actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -503,15 +503,15 @@ button {
   margin-bottom: 10px;
 }
 
-.draft-review-actions[hidden] {
+.draft-suggestion-actions[hidden] {
   display: none;
 }
 
-.draft-review-actions span {
+.draft-suggestion-actions span {
   color: var(--text-muted);
 }
 
-.draft-review-actions button,
+.draft-suggestion-actions button,
 .inline-edit-actions button {
   min-height: 28px;
   border: 0;
@@ -522,7 +522,7 @@ button {
   font-size: 12px;
 }
 
-.draft-review-actions button.secondary,
+.draft-suggestion-actions button.secondary,
 .inline-edit-actions button.secondary {
   background: transparent;
   color: var(--text-muted);
