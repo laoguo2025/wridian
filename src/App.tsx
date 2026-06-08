@@ -459,6 +459,9 @@ function App() {
               <button type="button" title="新建文件夹" aria-label="新建文件夹" onClick={() => void createFolder()}>
                 <FolderPlusIcon />
               </button>
+              <button type="button" title="作品文件夹" aria-label="作品文件夹" onClick={() => void openWorkFolder()}>
+                <WorkFolderIcon />
+              </button>
             </div>
           </div>
           {workspaceError ? <div className="rail-error">{workspaceError}</div> : null}
@@ -477,9 +480,6 @@ function App() {
           </div>
 
           <div className="rail-bottom">
-            <button type="button" title="选择文件夹" aria-label="选择文件夹" onClick={() => void openWorkFolder()}>
-              <VaultIcon />
-            </button>
             <button type="button" title="系统设置" aria-label="系统设置" onClick={() => setSettingsOpen(true)}>
               <SettingsIcon />
             </button>
@@ -662,39 +662,47 @@ function baseName(path: string) {
 
 function PencilIcon() {
   return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0 0-3L17.5 5.5a2.1 2.1 0 0 0-3 0L4 16v4Z" />
-      <path d="m13.5 6.5 4 4" />
+    <svg aria-hidden="true" viewBox="0 0 48 48">
+      <path d="M10 44H38C39.1046 44 40 43.1046 40 42V14H30V4H10C8.89543 4 8 4.89543 8 6V42C8 43.1046 8.89543 44 10 44Z" />
+      <path d="M30 4L40 14" />
+      <path d="M24 21V35" />
+      <path d="M17 28H24L31 28" />
     </svg>
   );
 }
 
 function FolderPlusIcon() {
   return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H10l2 2h6.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5v-9Z" />
-      <path d="M12 11v5" />
-      <path d="M9.5 13.5h5" />
+    <svg aria-hidden="true" viewBox="0 0 48 48">
+      <path d="M5 8C5 6.89543 5.89543 6 7 6H19L24 12H41C42.1046 12 43 12.8954 43 14V40C43 41.1046 42.1046 42 41 42H7C5.89543 42 5 41.1046 5 40V8Z" />
+      <path d="M18 27H30" />
+      <path d="M24 21L24 33" />
     </svg>
   );
 }
 
-function VaultIcon() {
+function WorkFolderIcon() {
   return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17.5v-11Z" />
-      <path d="M8 8h8" />
-      <path d="M8 12h8" />
-      <path d="M8 16h5" />
+    <svg aria-hidden="true" viewBox="0 0 48 48">
+      <path d="M43 23V14C43 12.8954 42.1046 12 41 12H24L19 6H7C5.89543 6 5 6.89543 5 8V40C5 41.1046 5.89543 42 7 42H22" />
+      <circle cx="35" cy="35" r="4" />
+      <path d="M35 28V31" />
+      <path d="M35 39V42" />
+      <path d="M39.8281 30L37.7068 32.1213" />
+      <path d="M31.8281 38L29.7068 40.1213" />
+      <path d="M30 30L32.1213 32.1213" />
+      <path d="M38 38L40.1213 40.1213" />
+      <path d="M28 35H29.5H31" />
+      <path d="M39 35H40.5H42" />
     </svg>
   );
 }
 
 function SettingsIcon() {
   return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z" />
-      <path d="M18.4 13.5a6.8 6.8 0 0 0 0-3l2-1.5-2-3.4-2.4 1a7.2 7.2 0 0 0-2.6-1.5L13 2.5h-4l-.4 2.6A7.2 7.2 0 0 0 6 6.6l-2.4-1-2 3.4 2 1.5a6.8 6.8 0 0 0 0 3l-2 1.5 2 3.4 2.4-1a7.2 7.2 0 0 0 2.6 1.5L9 21.5h4l.4-2.6a7.2 7.2 0 0 0 2.6-1.5l2.4 1 2-3.4-2-1.5Z" />
+    <svg aria-hidden="true" viewBox="0 0 48 48">
+      <path d="M18.2838 43.1713C14.9327 42.1736 11.9498 40.3213 9.58787 37.867C10.469 36.8227 11 35.4734 11 34.0001C11 30.6864 8.31371 28.0001 5 28.0001C4.79955 28.0001 4.60139 28.01 4.40599 28.0292C4.13979 26.7277 4 25.3803 4 24.0001C4 21.9095 4.32077 19.8938 4.91579 17.9995C4.94381 17.9999 4.97188 18.0001 5 18.0001C8.31371 18.0001 11 15.3138 11 12.0001C11 11.0488 10.7786 10.1493 10.3846 9.35011C12.6975 7.1995 15.5205 5.59002 18.6521 4.72314C19.6444 6.66819 21.6667 8.00013 24 8.00013C26.3333 8.00013 28.3556 6.66819 29.3479 4.72314C32.4795 5.59002 35.3025 7.1995 37.6154 9.35011C37.2214 10.1493 37 11.0488 37 12.0001C37 15.3138 39.6863 18.0001 43 18.0001C43.0281 18.0001 43.0562 17.9999 43.0842 17.9995C43.6792 19.8938 44 21.9095 44 24.0001C44 25.3803 43.8602 26.7277 43.594 28.0292C43.3986 28.01 43.2005 28.0001 43 28.0001C39.6863 28.0001 37 30.6864 37 34.0001C37 35.4734 37.531 36.8227 38.4121 37.867C36.0502 40.3213 33.0673 42.1736 29.7162 43.1713C28.9428 40.752 26.676 39.0001 24 39.0001C21.324 39.0001 19.0572 40.752 18.2838 43.1713Z" />
+      <path d="M24 31C27.866 31 31 27.866 31 24C31 20.134 27.866 17 24 17C20.134 17 17 20.134 17 24C17 27.866 20.134 31 24 31Z" />
     </svg>
   );
 }
