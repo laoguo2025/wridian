@@ -14,6 +14,12 @@
 - 发送消息不再打开共创抽屉，只更新右侧对话区；记忆抽屉仍由显式记忆动作打开。
 - 按 obsidian-copilot 式侧栏聊天收敛 UI：删除空状态说明、当前文件提示、记忆注入展示卡片；右侧只保留消息流和底部输入框。
 - 输入框压缩为约三行高度，内部滚动承载更长文本，发送按钮缩小。
+- 已实际查看 `obsidian-copilot` 源码：
+  - `src/components/chat-components/ChatInput.tsx`：输入区由上下文控制、Lexical 输入、底部工具栏组成。
+  - `src/components/chat-components/LexicalEditor.tsx`：输入区 `min-height` 约 60px，内部滚动，支持 `@`、`/`、pill 和粘贴。
+  - `src/components/chat-components/ChatMessages.tsx`：空消息时辅助组件可由设置开关控制，不是固定说明面板。
+  - `src/components/chat-components/ChatSingleMessage.tsx`：用户消息和 AI 消息底部提供动作按钮。
+- Wridian 本轮只复刻轻量结构：消息流为空则空着；输入框为三行输入区加底部小工具栏；选区显示为 pill；`@`、`/`、多工具 pill、模型选择和完整 Lexical 输入后续再补。
 - 根页面和工作区固定视口高度，隐藏窗口级滚动；正文编辑器、文件树、右侧聊天消息区使用内部滚动。
 - 增加主题化滚动条样式。
 

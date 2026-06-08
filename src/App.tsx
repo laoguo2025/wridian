@@ -1127,21 +1127,23 @@ function ChatPanel({
       >
         {attachedSelection ? (
           <div className="prompt-attachment">
-            <span>已附加片段</span>
+            <span>选区</span>
             <button type="button" onClick={onRemoveSelection} aria-label="移除片段">×</button>
-            <p>{attachedSelection}</p>
           </div>
         ) : null}
         <textarea
           value={prompt}
           onChange={(event) => onPromptChange(event.currentTarget.value)}
           onKeyDown={onKeyDown}
-          placeholder="Enter 发送，Shift + Enter 换行"
+          placeholder="与 Wridian 对话"
           aria-label="共创输入"
         />
-        <button type="submit" aria-label="发送" disabled={pending || !prompt.trim()}>
-          {pending ? "…" : "↑"}
-        </button>
+        <div className="prompt-toolbar">
+          <span>Wridian</span>
+          <button type="submit" aria-label={pending ? "停止" : "发送"} disabled={pending || !prompt.trim()}>
+            {pending ? "■" : "↵"}
+          </button>
+        </div>
       </form>
     </aside>
   );
