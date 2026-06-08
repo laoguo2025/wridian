@@ -570,23 +570,48 @@ function FileNodeView({
   onOpenMenu: (node: WorkFileNode, x: number, y: number) => void;
   selectedPath: string;
 }) {
+  const [expanded, setExpanded] = useState(true);
+  const isFolder = node.folder;
+  const hasChildren = isFolder && node.children.length > 0;
+  const fileExt = isFolder ? "" : fileExtension(node.name);
+  const rowClassName = [
+    "file-row",
+    isFolder ? "folder" : "file",
+    node.path === selectedPath ? "active" : "",
+    isFolder && expanded ? "expanded" : "",
+    isFolder && !expanded ? "collapsed" : "",
+    isFolder && !hasChildren ? "empty-folder" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const handleOpen = () => {
+    if (isFolder) {
+      setExpanded((current) => !current);
+      return;
+    }
+
+    onOpenFile(node);
+  };
+
   return (
     <div className="file-node">
       <button
-        className={node.folder ? "file-row folder" : node.path === selectedPath ? "file-row active" : "file-row"}
+        className={rowClassName}
         type="button"
-        style={{ paddingLeft: `${8 + depth * 12}px` }}
+        aria-expanded={isFolder ? expanded : undefined}
         title={node.path}
-        onClick={() => onOpenFile(node)}
+        onClick={handleOpen}
         onContextMenu={(event) => {
           event.preventDefault();
           onOpenMenu(node, event.clientX, event.clientY);
         }}
       >
-        <span>{node.folder ? "▾" : ""}</span>
-        <strong>{node.name}</strong>
+        <span className="tree-toggle" aria-hidden="true" />
+        <strong>{isFolder ? node.name : fileTitle(node.name)}</strong>
+        {fileExt ? <span className="file-ext">{fileExt}</span> : null}
       </button>
-      {node.folder && node.children.length ? (
+      {hasChildren && expanded ? (
         <div className="file-children">
           {node.children.map((child) => (
             <FileNodeView
@@ -602,6 +627,18 @@ function FileNodeView({
       ) : null}
     </div>
   );
+}
+
+function fileTitle(name: string) {
+  const extensionStart = name.lastIndexOf(".");
+  if (extensionStart <= 0) return name;
+  return name.slice(0, extensionStart);
+}
+
+function fileExtension(name: string) {
+  const extensionStart = name.lastIndexOf(".");
+  if (extensionStart <= 0 || extensionStart === name.length - 1) return "";
+  return name.slice(extensionStart + 1);
 }
 
 function FileContextMenuView({

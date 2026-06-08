@@ -20,7 +20,7 @@ Wridian 是独立桌面写作共创系统，当前优先级是本地写作文件
 
 - 本地文件只支持 `md`、`markdown`、`txt`、`fountain`。
 - 文件读写只允许默认 Vault 或用户选择的工作目录内文件。
-- 文件区采用 Obsidian 式结构：顶部新建文件/文件夹/作品文件夹，树节点右键菜单，底部系统设置。
+- 文件区采用 Obsidian 式结构：顶部新建文件/文件夹/作品文件夹，树节点支持多层级展开/收回和右键菜单，底部系统设置。
 - 文件区“移到回收站”只移动到当前工作根目录 `.wridian-trash/`，不做永久删除。
 - 模型接入先支持一个 OpenAI-compatible 自定义 API。
 - 记忆 MVP 使用 `.wridian/memory-tree.json` 和 `.wridian/candidates.json`，先做本地确认闭环，再接模型抽取。
