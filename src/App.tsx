@@ -8,6 +8,7 @@ type SaveStatus = "demo" | "idle" | "dirty" | "saving" | "saved" | "error";
 type WorkspaceInfo = {
   vaultPath: string;
   runtimePath: string;
+  filesRootPath: string;
   activeWorkRoot?: string | null;
   files: WorkFileNode[];
 };
@@ -62,6 +63,12 @@ type MemoryState = {
   memories: MemoryItem[];
   candidates: MemoryCandidate[];
   memoryFolderPath?: string;
+};
+
+type FileContextMenu = {
+  node: WorkFileNode;
+  x: number;
+  y: number;
 };
 
 const fallbackFiles: WorkFileNode[] = [
@@ -139,6 +146,7 @@ function App() {
   const [saveError, setSaveError] = useState("");
   const [memoryState, setMemoryState] = useState<MemoryState>(demoMemoryState);
   const [memoryError, setMemoryError] = useState("");
+  const [fileMenu, setFileMenu] = useState<FileContextMenu | null>(null);
 
   const loadMemoryState = useCallback(async () => {
     try {
@@ -254,6 +262,69 @@ function App() {
       setWorkspaceError(message.includes("not allowed") || message.includes("Tauri") ? "请在 Wridian 桌面端选择本地文件夹。" : message);
     }
   };
+
+  const refreshWorkspace = (response: WorkspaceInfo) => {
+    setWorkspace(response);
+    setWorkspaceError("");
+  };
+
+  const workspaceRootPath = workspace?.filesRootPath || workspace?.activeWorkRoot || workspace?.vaultPath || "";
+
+  const runWorkspaceAction = async (action: () => Promise<WorkspaceInfo>) => {
+    setWorkspaceError("");
+    try {
+      refreshWorkspace(await action());
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const createFile = async (parentPath = workspaceRootPath) => {
+    if (!parentPath) return;
+    const name = window.prompt("新建文件", "未命名.md");
+    if (!name) return;
+    await runWorkspaceAction(() => invoke<WorkspaceInfo>("wridian_create_work_file", { input: { parentPath, name } }));
+  };
+
+  const createFolder = async (parentPath = workspaceRootPath) => {
+    if (!parentPath) return;
+    const name = window.prompt("新建文件夹", "新建文件夹");
+    if (!name) return;
+    await runWorkspaceAction(() => invoke<WorkspaceInfo>("wridian_create_work_folder", { input: { parentPath, name } }));
+  };
+
+  const duplicateNode = async (node: WorkFileNode) => {
+    await runWorkspaceAction(() => invoke<WorkspaceInfo>("wridian_duplicate_work_node", { input: { path: node.path } }));
+  };
+
+  const renameNode = async (node: WorkFileNode) => {
+    const name = window.prompt("重命名", node.name);
+    if (!name || name === node.name) return;
+    await runWorkspaceAction(() => invoke<WorkspaceInfo>("wridian_rename_work_node", { input: { path: node.path, newName: name } }));
+  };
+
+  const trashNode = async (node: WorkFileNode) => {
+    await runWorkspaceAction(() => invoke<WorkspaceInfo>("wridian_trash_work_node", { input: { path: node.path } }));
+  };
+
+  const addNodeToPrompt = (node: WorkFileNode) => {
+    setPrompt((current) => `${current}${current ? "\n" : ""}@${node.name} ${node.path}`);
+  };
+
+  const openFileContextMenu = (node: WorkFileNode, x: number, y: number) => {
+    setFileMenu({ node, x, y });
+  };
+
+  useEffect(() => {
+    if (!fileMenu) return;
+    const close = () => setFileMenu(null);
+    window.addEventListener("click", close);
+    window.addEventListener("keydown", close);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("keydown", close);
+    };
+  }, [fileMenu]);
 
   const openFile = async (node: WorkFileNode) => {
     if (node.folder) return;
@@ -381,9 +452,14 @@ function App() {
         <aside className="project-rail" aria-label="作品">
           <div className="rail-topline">
             <div className="rail-section-title">作品</div>
-            <button className="open-folder" type="button" onClick={() => void openWorkFolder()}>
-              打开文件夹
-            </button>
+            <div className="file-toolbar" aria-label="文件操作">
+              <button type="button" title="新建文件" aria-label="新建文件" onClick={() => void createFile()}>
+                ✎
+              </button>
+              <button type="button" title="新建文件夹" aria-label="新建文件夹" onClick={() => void createFolder()}>
+                +
+              </button>
+            </div>
           </div>
           <button className="work-title active" type="button" title={workspace?.activeWorkRoot || workspace?.vaultPath || undefined}>
             <span>{workspace?.activeWorkRoot ? baseName(workspace.activeWorkRoot) : "Wridian Vault"}</span>
@@ -394,14 +470,26 @@ function App() {
 
           <div className="file-tree">
             {files.map((node) => (
-              <FileNodeView key={node.path} node={node} depth={0} selectedPath={selectedPath} onOpenFile={openFile} />
+              <FileNodeView
+                key={node.path}
+                node={node}
+                depth={0}
+                selectedPath={selectedPath}
+                onOpenFile={openFile}
+                onOpenMenu={openFileContextMenu}
+              />
             ))}
           </div>
 
           <div className="rail-divider" />
-          <button className="new-work" type="button">
-            + 新建
-          </button>
+          <div className="rail-bottom">
+            <button type="button" title="选择文件夹" aria-label="选择文件夹" onClick={() => void openWorkFolder()}>
+              ▣
+            </button>
+            <button type="button" title="文件区设置" aria-label="文件区设置" onClick={() => setSettingsOpen(true)}>
+              ⚙
+            </button>
+          </div>
         </aside>
 
         <main className="writing-pane">
@@ -459,6 +547,18 @@ function App() {
         />
       ) : null}
       {settingsOpen ? <ModelSettingsDialog onClose={() => setSettingsOpen(false)} /> : null}
+      {fileMenu ? (
+        <FileContextMenuView
+          menu={fileMenu}
+          onAddToPrompt={addNodeToPrompt}
+          onClose={() => setFileMenu(null)}
+          onCreateFile={createFile}
+          onCreateFolder={createFolder}
+          onDuplicate={duplicateNode}
+          onRename={renameNode}
+          onTrash={trashNode}
+        />
+      ) : null}
     </div>
   );
 }
@@ -467,11 +567,13 @@ function FileNodeView({
   depth,
   node,
   onOpenFile,
+  onOpenMenu,
   selectedPath,
 }: {
   depth: number;
   node: WorkFileNode;
   onOpenFile: (node: WorkFileNode) => void;
+  onOpenMenu: (node: WorkFileNode, x: number, y: number) => void;
   selectedPath: string;
 }) {
   return (
@@ -482,6 +584,10 @@ function FileNodeView({
         style={{ paddingLeft: `${8 + depth * 12}px` }}
         title={node.path}
         onClick={() => onOpenFile(node)}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          onOpenMenu(node, event.clientX, event.clientY);
+        }}
       >
         <span>{node.folder ? "▾" : ""}</span>
         <strong>{node.name}</strong>
@@ -489,10 +595,69 @@ function FileNodeView({
       {node.folder && node.children.length ? (
         <div className="file-children">
           {node.children.map((child) => (
-            <FileNodeView key={child.path} node={child} depth={depth + 1} selectedPath={selectedPath} onOpenFile={onOpenFile} />
+            <FileNodeView
+              key={child.path}
+              node={child}
+              depth={depth + 1}
+              selectedPath={selectedPath}
+              onOpenFile={onOpenFile}
+              onOpenMenu={onOpenMenu}
+            />
           ))}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function FileContextMenuView({
+  menu,
+  onAddToPrompt,
+  onClose,
+  onCreateFile,
+  onCreateFolder,
+  onDuplicate,
+  onRename,
+  onTrash,
+}: {
+  menu: FileContextMenu;
+  onAddToPrompt: (node: WorkFileNode) => void;
+  onClose: () => void;
+  onCreateFile: (parentPath?: string) => Promise<void>;
+  onCreateFolder: (parentPath?: string) => Promise<void>;
+  onDuplicate: (node: WorkFileNode) => Promise<void>;
+  onRename: (node: WorkFileNode) => Promise<void>;
+  onTrash: (node: WorkFileNode) => Promise<void>;
+}) {
+  const run = (action: () => void | Promise<void>) => {
+    onClose();
+    void action();
+  };
+
+  return (
+    <div className="context-menu" style={{ left: menu.x, top: menu.y }} onClick={(event) => event.stopPropagation()}>
+      {menu.node.folder ? (
+        <>
+          <button type="button" onClick={() => run(() => onCreateFile(menu.node.path))}>
+            新建文件
+          </button>
+          <button type="button" onClick={() => run(() => onCreateFolder(menu.node.path))}>
+            新建文件夹
+          </button>
+        </>
+      ) : null}
+      <button type="button" onClick={() => run(() => onDuplicate(menu.node))}>
+        创建副本
+      </button>
+      <button type="button" onClick={() => run(() => onAddToPrompt(menu.node))}>
+        添加到聊天框
+      </button>
+      <button type="button" onClick={() => run(() => onRename(menu.node))}>
+        重命名
+      </button>
+      <button type="button" className="danger" onClick={() => run(() => onTrash(menu.node))}>
+        移到回收站
+      </button>
     </div>
   );
 }

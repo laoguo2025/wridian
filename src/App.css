@@ -160,17 +160,41 @@ button {
   padding: 2px 8px 4px;
 }
 
-.open-folder {
+.open-folder,
+.file-toolbar button,
+.rail-bottom button {
   border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--text-muted);
+}
+
+.open-folder {
   font-size: 11px;
   line-height: 14px;
   padding: 4px 6px;
 }
 
-.open-folder:hover {
+.file-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.file-toolbar button,
+.rail-bottom button {
+  width: 28px;
+  height: 28px;
+  display: inline-grid;
+  place-items: center;
+  font-size: 14px;
+  line-height: 14px;
+  padding: 0;
+}
+
+.open-folder:hover,
+.file-toolbar button:hover,
+.rail-bottom button:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
 }
@@ -224,9 +248,14 @@ button {
   width: 100%;
 }
 
-.new-work {
+.rail-bottom {
   margin-top: auto;
-  color: var(--text-primary);
+  border-top: 1px solid var(--divider);
+  padding-top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
 }
 
 .rail-error {
@@ -263,6 +292,39 @@ button {
   gap: 4px;
   padding-right: 8px;
   text-align: left;
+}
+
+.context-menu {
+  position: fixed;
+  z-index: 40;
+  min-width: 154px;
+  border-radius: 8px;
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-pop);
+  padding: 5px;
+}
+
+.context-menu button {
+  width: 100%;
+  min-height: 30px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-body);
+  display: block;
+  font-size: 13px;
+  line-height: 18px;
+  padding: 6px 8px;
+  text-align: left;
+}
+
+.context-menu button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.context-menu button.danger {
+  color: var(--accent);
 }
 
 .file-row strong {

@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 struct WorkspaceInfo {
     vault_path: String,
     runtime_path: String,
+    files_root_path: String,
     active_work_root: Option<String>,
     files: Vec<WorkFileNode>,
 }
@@ -32,6 +33,20 @@ struct FilePathInput {
 struct SaveFileInput {
     path: String,
     content: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateNodeInput {
+    parent_path: String,
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RenameNodeInput {
+    path: String,
+    new_name: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -62,14 +77,7 @@ struct WorkFileNode {
 pub(crate) fn wridian_init_workspace() -> Result<WorkspaceInfo, String> {
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
-    Ok(WorkspaceInfo {
-        vault_path: vault_root(&data_dir).to_string_lossy().into_owned(),
-        runtime_path: crate::runtime::runtime_root(&data_dir)
-            .to_string_lossy()
-            .into_owned(),
-        active_work_root: read_active_work_root(&data_dir)?,
-        files: read_workspace_files(&data_dir)?,
-    })
+    workspace_info(&data_dir)
 }
 
 #[tauri::command]
@@ -81,14 +89,7 @@ pub(crate) fn wridian_set_work_root(input: SetWorkRootInput) -> Result<Workspace
         return Err("请选择一个存在的本地文件夹。".to_string());
     }
     write_workspace_config(&data_dir, &root)?;
-    Ok(WorkspaceInfo {
-        vault_path: vault_root(&data_dir).to_string_lossy().into_owned(),
-        runtime_path: crate::runtime::runtime_root(&data_dir)
-            .to_string_lossy()
-            .into_owned(),
-        active_work_root: Some(root.to_string_lossy().into_owned()),
-        files: read_work_tree(&root)?,
-    })
+    workspace_info(&data_dir)
 }
 
 #[tauri::command]
@@ -116,6 +117,104 @@ pub(crate) fn wridian_save_file(input: SaveFileInput) -> Result<SaveFileResponse
     Ok(SaveFileResponse {
         ok: true,
         saved_at: iso_timestamp(),
+    })
+}
+
+#[tauri::command]
+pub(crate) fn wridian_create_work_file(input: CreateNodeInput) -> Result<WorkspaceInfo, String> {
+    let data_dir = wridian_data_dir()?;
+    ensure_workspace(&data_dir)?;
+    let parent = resolve_allowed_folder(&data_dir, &input.parent_path)?;
+    let file_name = normalize_file_name(&input.name)?;
+    let path = unique_child_path(&parent, &file_name);
+    fs::write(&path, "").map_err(|error| format!("文件创建失败：{error}"))?;
+    workspace_info(&data_dir)
+}
+
+#[tauri::command]
+pub(crate) fn wridian_create_work_folder(input: CreateNodeInput) -> Result<WorkspaceInfo, String> {
+    let data_dir = wridian_data_dir()?;
+    ensure_workspace(&data_dir)?;
+    let parent = resolve_allowed_folder(&data_dir, &input.parent_path)?;
+    let folder_name = normalize_node_name(&input.name)?;
+    let path = unique_child_path(&parent, &folder_name);
+    fs::create_dir_all(&path).map_err(|error| format!("文件夹创建失败：{error}"))?;
+    workspace_info(&data_dir)
+}
+
+#[tauri::command]
+pub(crate) fn wridian_duplicate_work_node(input: FilePathInput) -> Result<WorkspaceInfo, String> {
+    let data_dir = wridian_data_dir()?;
+    ensure_workspace(&data_dir)?;
+    let source = resolve_allowed_existing_node(&data_dir, &input.path)?;
+    let parent = source
+        .parent()
+        .ok_or_else(|| "无法复制工作区根目录。".to_string())?;
+    let source_name = source
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .ok_or_else(|| "无法复制工作区根目录。".to_string())?;
+    let target = unique_child_path(parent, &format!("{source_name} 副本"));
+    if source.is_dir() {
+        copy_dir_recursive(&source, &target)?;
+    } else {
+        fs::copy(&source, &target).map_err(|error| format!("文件副本创建失败：{error}"))?;
+    }
+    workspace_info(&data_dir)
+}
+
+#[tauri::command]
+pub(crate) fn wridian_rename_work_node(input: RenameNodeInput) -> Result<WorkspaceInfo, String> {
+    let data_dir = wridian_data_dir()?;
+    ensure_workspace(&data_dir)?;
+    let source = resolve_allowed_existing_node(&data_dir, &input.path)?;
+    let parent = source
+        .parent()
+        .ok_or_else(|| "无法重命名工作区根目录。".to_string())?;
+    let name = if source.is_file() {
+        normalize_file_name(&input.new_name)?
+    } else {
+        normalize_node_name(&input.new_name)?
+    };
+    let target = parent.join(name);
+    if target.exists() {
+        return Err("同名文件或文件夹已存在。".to_string());
+    }
+    fs::rename(&source, &target).map_err(|error| format!("重命名失败：{error}"))?;
+    workspace_info(&data_dir)
+}
+
+#[tauri::command]
+pub(crate) fn wridian_trash_work_node(input: FilePathInput) -> Result<WorkspaceInfo, String> {
+    let data_dir = wridian_data_dir()?;
+    ensure_workspace(&data_dir)?;
+    let source = resolve_allowed_existing_node(&data_dir, &input.path)?;
+    let root = containing_work_root(&data_dir, &source)?
+        .ok_or_else(|| "文件不在当前 Wridian 工作目录内。".to_string())?;
+    if source == root {
+        return Err("不能移动工作区根目录。".to_string());
+    }
+    let trash = root.join(".wridian-trash");
+    fs::create_dir_all(&trash).map_err(|error| format!("回收站创建失败：{error}"))?;
+    let name = source
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .ok_or_else(|| "不能移动工作区根目录。".to_string())?;
+    let target = unique_child_path(&trash, &format!("{}-{name}", iso_timestamp()));
+    fs::rename(&source, &target).map_err(|error| format!("移到回收站失败：{error}"))?;
+    workspace_info(&data_dir)
+}
+
+fn workspace_info(data_dir: &Path) -> Result<WorkspaceInfo, String> {
+    let files_root = files_root(data_dir)?;
+    Ok(WorkspaceInfo {
+        vault_path: vault_root(data_dir).to_string_lossy().into_owned(),
+        runtime_path: crate::runtime::runtime_root(data_dir)
+            .to_string_lossy()
+            .into_owned(),
+        files_root_path: files_root.to_string_lossy().into_owned(),
+        active_work_root: read_active_work_root(data_dir)?,
+        files: read_work_tree(&files_root)?,
     })
 }
 
@@ -147,13 +246,17 @@ fn read_active_work_root(data_dir: &Path) -> Result<Option<String>, String> {
 }
 
 fn read_workspace_files(data_dir: &Path) -> Result<Vec<WorkFileNode>, String> {
+    read_work_tree(&files_root(data_dir)?)
+}
+
+fn files_root(data_dir: &Path) -> Result<PathBuf, String> {
     if let Some(root) = read_active_work_root(data_dir)? {
         let path = PathBuf::from(root);
         if path.is_dir() {
-            return read_work_tree(&path);
+            return Ok(path);
         }
     }
-    read_work_tree(&vault_root(data_dir).join("works"))
+    Ok(vault_root(data_dir).join("works"))
 }
 
 fn read_work_tree(root: &Path) -> Result<Vec<WorkFileNode>, String> {
@@ -197,7 +300,10 @@ fn read_work_tree(root: &Path) -> Result<Vec<WorkFileNode>, String> {
 }
 
 fn should_skip_entry(name: &str) -> bool {
-    matches!(name, ".git" | "node_modules" | ".wridian") || name.starts_with('.')
+    matches!(
+        name,
+        ".git" | "node_modules" | ".wridian" | ".wridian-trash"
+    ) || name.starts_with('.')
 }
 
 fn is_supported_writing_file(path: &Path) -> bool {
@@ -228,6 +334,39 @@ fn resolve_allowed_writing_file(data_dir: &Path, raw_path: &str) -> Result<PathB
     }
 }
 
+fn resolve_allowed_folder(data_dir: &Path, raw_path: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(raw_path.trim());
+    if !path.is_dir() {
+        return Err("请选择一个存在的文件夹。".to_string());
+    }
+    let canonical_path = path
+        .canonicalize()
+        .map_err(|error| format!("文件夹路径解析失败：{error}"))?;
+    if containing_work_root(data_dir, &canonical_path)?.is_some() {
+        Ok(canonical_path)
+    } else {
+        Err("文件夹不在当前 Wridian 工作目录内。".to_string())
+    }
+}
+
+fn resolve_allowed_existing_node(data_dir: &Path, raw_path: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(raw_path.trim());
+    if !(path.is_file() || path.is_dir()) {
+        return Err("文件或文件夹不存在。".to_string());
+    }
+    if path.is_file() && !is_supported_writing_file(&path) {
+        return Err("只能操作 md、txt 或 fountain 写作文件。".to_string());
+    }
+    let canonical_path = path
+        .canonicalize()
+        .map_err(|error| format!("路径解析失败：{error}"))?;
+    if containing_work_root(data_dir, &canonical_path)?.is_some() {
+        Ok(canonical_path)
+    } else {
+        Err("文件不在当前 Wridian 工作目录内。".to_string())
+    }
+}
+
 fn allowed_work_roots(data_dir: &Path) -> Result<Vec<PathBuf>, String> {
     let mut roots = vec![vault_root(data_dir)
         .canonicalize()
@@ -242,4 +381,74 @@ fn allowed_work_roots(data_dir: &Path) -> Result<Vec<PathBuf>, String> {
         }
     }
     Ok(roots)
+}
+
+fn containing_work_root(data_dir: &Path, path: &Path) -> Result<Option<PathBuf>, String> {
+    Ok(allowed_work_roots(data_dir)?
+        .into_iter()
+        .find(|root| path.starts_with(root)))
+}
+
+fn normalize_file_name(name: &str) -> Result<String, String> {
+    let mut normalized = normalize_node_name(name)?;
+    let path = Path::new(&normalized);
+    if path.extension().is_none() {
+        normalized.push_str(".md");
+    }
+    if !is_supported_writing_file(Path::new(&normalized)) {
+        return Err("文件名只支持 md、markdown、txt 或 fountain 后缀。".to_string());
+    }
+    Ok(normalized)
+}
+
+fn normalize_node_name(name: &str) -> Result<String, String> {
+    let normalized = name.trim();
+    if normalized.is_empty() || normalized == "." || normalized == ".." {
+        return Err("名称不能为空。".to_string());
+    }
+    if normalized.contains('/') || normalized.contains('\\') {
+        return Err("名称不能包含路径分隔符。".to_string());
+    }
+    Ok(normalized.to_string())
+}
+
+fn unique_child_path(parent: &Path, desired_name: &str) -> PathBuf {
+    let mut candidate = parent.join(desired_name);
+    if !candidate.exists() {
+        return candidate;
+    }
+
+    let desired_path = Path::new(desired_name);
+    let stem = desired_path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| desired_name.to_string());
+    let extension = desired_path
+        .extension()
+        .map(|extension| format!(".{}", extension.to_string_lossy()))
+        .unwrap_or_default();
+
+    for index in 2..1000 {
+        candidate = parent.join(format!("{stem} {index}{extension}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    parent.join(format!("{stem} {}{extension}", iso_timestamp()))
+}
+
+fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), String> {
+    fs::create_dir_all(target).map_err(|error| format!("文件夹副本创建失败：{error}"))?;
+    for entry in fs::read_dir(source).map_err(|error| format!("文件夹读取失败：{error}"))? {
+        let entry = entry.map_err(|error| format!("文件夹读取失败：{error}"))?;
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        if source_path.is_dir() {
+            copy_dir_recursive(&source_path, &target_path)?;
+        } else {
+            fs::copy(&source_path, &target_path)
+                .map_err(|error| format!("文件副本创建失败：{error}"))?;
+        }
+    }
+    Ok(())
 }
