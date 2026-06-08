@@ -1,4 +1,4 @@
-import { KeyboardEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 
@@ -78,6 +78,11 @@ type FileContextMenu = {
   y: number;
 };
 
+type TextSelection = {
+  start: number;
+  end: number;
+};
+
 const fallbackFiles: WorkFileNode[] = [
   {
     name: "雾城手记",
@@ -154,6 +159,8 @@ function App() {
   const [cocreationReply, setCocreationReply] = useState("");
   const [cocreationMemories, setCocreationMemories] = useState<string[]>([]);
   const [lastCocreationRequest, setLastCocreationRequest] = useState("");
+  const [hasDraftSelection, setHasDraftSelection] = useState(false);
+  const [cocreationActionStatus, setCocreationActionStatus] = useState("");
   const [selectedPath, setSelectedPath] = useState("demo://chapters/03.md");
   const [editorTitle, setEditorTitle] = useState("03.md");
   const [editorContent, setEditorContent] = useState(demoContent["demo://chapters/03.md"]);
@@ -164,6 +171,8 @@ function App() {
   const [memoryError, setMemoryError] = useState("");
   const [extractingMemory, setExtractingMemory] = useState(false);
   const [fileMenu, setFileMenu] = useState<FileContextMenu | null>(null);
+  const draftEditorRef = useRef<HTMLTextAreaElement | null>(null);
+  const draftSelectionRef = useRef<TextSelection>({ start: editorContent.length, end: editorContent.length });
 
   const loadMemoryState = useCallback(async () => {
     try {
@@ -184,6 +193,7 @@ function App() {
     setMemoryOpen(false);
     setCocreating(true);
     setCocreationError("");
+    setCocreationActionStatus("");
     try {
       if (selectedPath.startsWith("demo://")) {
         setCocreationReply(demoCocreationReply);
@@ -214,6 +224,15 @@ function App() {
     event.preventDefault();
     sendPrompt();
   };
+
+  const updateDraftSelection = useCallback(() => {
+    const editor = draftEditorRef.current;
+    if (!editor) return;
+    const start = editor.selectionStart;
+    const end = editor.selectionEnd;
+    draftSelectionRef.current = { start, end };
+    setHasDraftSelection(end > start);
+  }, []);
 
   useEffect(() => {
     document.documentElement.classList.toggle("darkTheme", theme === "dark");
@@ -351,6 +370,8 @@ function App() {
       const content = demoContent[node.path] ?? "";
       setEditorContent(content);
       setLastSavedContent(content);
+      draftSelectionRef.current = { start: content.length, end: content.length };
+      setHasDraftSelection(false);
       setSaveStatus("demo");
       return;
     }
@@ -361,6 +382,8 @@ function App() {
       setEditorTitle(response.name);
       setEditorContent(response.content);
       setLastSavedContent(response.content);
+      draftSelectionRef.current = { start: response.content.length, end: response.content.length };
+      setHasDraftSelection(false);
       setSaveStatus("saved");
     } catch (error) {
       setSaveStatus("error");
@@ -372,6 +395,49 @@ function App() {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
       event.preventDefault();
       void saveCurrentFile();
+    }
+  };
+
+  const applyTextToDraft = useCallback((text: string, selection: TextSelection) => {
+    const start = Math.max(0, Math.min(selection.start, editorContent.length));
+    const end = Math.max(start, Math.min(selection.end, editorContent.length));
+    const nextContent = `${editorContent.slice(0, start)}${text}${editorContent.slice(end)}`;
+    const nextCursor = start + text.length;
+    setEditorContent(nextContent);
+    draftSelectionRef.current = { start: nextCursor, end: nextCursor };
+    setHasDraftSelection(false);
+    window.requestAnimationFrame(() => {
+      const editor = draftEditorRef.current;
+      if (!editor) return;
+      editor.focus();
+      editor.setSelectionRange(nextCursor, nextCursor);
+    });
+  }, [editorContent]);
+
+  const insertCocreationReply = () => {
+    const reply = cocreationReply.trim();
+    if (!reply) return;
+    const current = draftSelectionRef.current;
+    applyTextToDraft(reply, { start: current.start, end: current.start });
+    setCocreationActionStatus("已插入到光标处。");
+  };
+
+  const replaceSelectionWithCocreationReply = () => {
+    const reply = cocreationReply.trim();
+    const current = draftSelectionRef.current;
+    if (!reply || current.end <= current.start) return;
+    applyTextToDraft(reply, current);
+    setCocreationActionStatus("已替换选区。");
+  };
+
+  const copyCocreationReply = async () => {
+    const reply = cocreationReply.trim();
+    if (!reply) return;
+    try {
+      await navigator.clipboard.writeText(reply);
+      setCocreationActionStatus("已复制。");
+    } catch {
+      setCocreationActionStatus("复制失败。");
     }
   };
 
@@ -537,10 +603,14 @@ function App() {
             </div>
             <h1 className="chapter-heading">{editorTitle}</h1>
             <textarea
+              ref={draftEditorRef}
               className="draft-editor"
               value={editorContent}
               onChange={(event) => setEditorContent(event.currentTarget.value)}
               onKeyDown={handleDraftKeyDown}
+              onKeyUp={updateDraftSelection}
+              onMouseUp={updateDraftSelection}
+              onSelect={updateDraftSelection}
               aria-label="正文"
               spellCheck={false}
             />
@@ -572,9 +642,14 @@ function App() {
         <CoCreationDrawer
           currentTitle={editorTitle}
           error={cocreationError}
+          actionStatus={cocreationActionStatus}
+          canReplaceSelection={hasDraftSelection}
           lastRequest={lastCocreationRequest}
           memoriesUsed={cocreationMemories}
           onClose={() => setCocreationOpen(false)}
+          onCopy={copyCocreationReply}
+          onInsert={insertCocreationReply}
+          onReplaceSelection={replaceSelectionWithCocreationReply}
           pending={cocreating}
           reply={cocreationReply}
         />
@@ -799,22 +874,34 @@ function SettingsIcon() {
 }
 
 function CoCreationDrawer({
+  actionStatus,
+  canReplaceSelection,
   currentTitle,
   error,
   lastRequest,
   memoriesUsed,
   onClose,
+  onCopy,
+  onInsert,
+  onReplaceSelection,
   pending,
   reply,
 }: {
+  actionStatus: string;
+  canReplaceSelection: boolean;
   currentTitle: string;
   error: string;
   lastRequest: string;
   memoriesUsed: string[];
   onClose: () => void;
+  onCopy: () => void;
+  onInsert: () => void;
+  onReplaceSelection: () => void;
   pending: boolean;
   reply: string;
 }) {
+  const hasReply = Boolean(reply.trim()) && !pending && !error;
+
   return (
     <div className="drawer-backdrop" onMouseDown={onClose} role="presentation">
       <aside className="side-drawer cocreation-drawer" role="dialog" aria-modal="true" aria-label="共创" onMouseDown={(event) => event.stopPropagation()}>
@@ -839,6 +926,18 @@ function CoCreationDrawer({
           {error ? <div className="rail-error">{error}</div> : null}
           {!pending && !error && reply ? <p className="cocreation-reply">{reply}</p> : null}
           {!pending && !error && !reply ? <p>发送底部共创输入后，这里会显示建议。</p> : null}
+          <div className="drawer-actions cocreation-actions">
+            <button type="button" onClick={onInsert} disabled={!hasReply}>
+              插入到光标处
+            </button>
+            <button type="button" className="secondary" onClick={onReplaceSelection} disabled={!hasReply || !canReplaceSelection}>
+              替换选区
+            </button>
+            <button type="button" className="secondary" onClick={onCopy} disabled={!hasReply}>
+              复制
+            </button>
+          </div>
+          {actionStatus ? <div className="inline-status">{actionStatus}</div> : null}
         </section>
 
         <section className="memory-card cocreation-card">

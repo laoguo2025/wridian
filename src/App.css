@@ -758,6 +758,23 @@ button {
   color: var(--text-muted);
 }
 
+.drawer-actions button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.cocreation-actions {
+  flex-wrap: wrap;
+  padding-top: 10px;
+}
+
+.inline-status {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 17px;
+  padding-top: 6px;
+}
+
 .drawer-footer {
   margin-top: auto;
   overflow: hidden;
