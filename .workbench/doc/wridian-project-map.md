@@ -42,9 +42,10 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 - 共创对话区常驻在工作界面右侧，按 `obsidian-copilot` 的简洁侧栏聊天形态复刻可见交互：消息流为空时不显示说明卡片，输入框位于对话区底部，发送后只更新右侧消息流，不弹出共创抽屉。
 - 当前对齐的 `obsidian-copilot` 源码基线：
   - `ChatInput.tsx`：带边框的底部输入容器、上下文 pill 区、中间约 60px 起步输入区、24px 底部工具栏、小发送/停止动作。
-  - `LexicalEditor.tsx`：输入区内部滚动，长文本不撑高右栏；Wridian 目前用 textarea 复刻可见结构，暂不引入 Lexical。
+  - `LexicalEditor.tsx`：输入区内部滚动，长文本不撑高右栏；Wridian 聊天输入区已从 textarea 切换为 Lexical `ContentEditable`，使用受控文本同步、历史插件和 Enter 发送。
   - `ChatMessages.tsx`：空消息流保持空白，Relevant Notes / Suggested Prompts 这类辅助块不固定展示。
   - `ChatSingleMessage.tsx` / `ChatButtons.tsx`：用户消息使用浅边框背景，AI 消息不做重卡片；消息动作放在底部紧凑行。
+  - 后续仍需补齐 Copilot 的完整 `@` / `/` 类型提示、文件/URL/工具 pill 节点和模型/工具选择器；当前已完成输入框底层从 textarea 到 Lexical 的迁移。
 - 记忆命中、注入和上下文选择默认在后台执行，不在右侧对话区常驻展示“本次使用的记忆”等系统说明；记忆面板只由顶部“记忆”、显式“从当前正文提取”或“记住这条”动作打开。
 - 右侧侧边面板应支持模式切换，第一版至少区分“共创”和“记忆”。
 - 记忆提取是显式动作；模型不得在普通共创发送时直接写长期记忆。

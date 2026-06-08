@@ -1,5 +1,20 @@
-import { KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { LexicalComposer } from "@lexical/react/LexicalComposer";
+import { PlainTextPlugin } from "@lexical/react/LexicalPlainTextPlugin";
+import { ContentEditable } from "@lexical/react/LexicalContentEditable";
+import { HistoryPlugin } from "@lexical/react/LexicalHistoryPlugin";
+import { OnChangePlugin } from "@lexical/react/LexicalOnChangePlugin";
+import { LexicalErrorBoundary } from "@lexical/react/LexicalErrorBoundary";
+import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
+import {
+  $createParagraphNode,
+  $createTextNode,
+  $getRoot,
+  COMMAND_PRIORITY_LOW,
+  EditorState,
+  KEY_ENTER_COMMAND,
+} from "lexical";
 import "./App.css";
 
 type Theme = "light" | "dark";
@@ -183,12 +198,6 @@ function App() {
     }
   };
 
-  const handlePromptKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key !== "Enter" || event.shiftKey) return;
-    event.preventDefault();
-    sendPrompt();
-  };
-
   const updateDraftSelection = useCallback(() => {
     const editor = draftEditorRef.current;
     if (!editor) return;
@@ -360,7 +369,7 @@ function App() {
     }
   };
 
-  const handleDraftKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+  const handleDraftKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
       event.preventDefault();
       void saveCurrentFile();
@@ -671,7 +680,6 @@ function App() {
           onPromptChange={setPrompt}
           onRemoveSelection={() => setAttachedSelection("")}
           onSubmit={() => void sendPrompt()}
-          onKeyDown={handlePromptKeyDown}
         />
       </div>
 
@@ -909,7 +917,7 @@ function DraftEditor({
   edits: DraftEdit[];
   onAcceptEdit: (id: string) => void;
   onChange: (content: string) => void;
-  onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
+  onKeyDown: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
   onRejectEdit: (id: string) => void;
   onSelectionChange: () => void;
 }) {
@@ -1061,7 +1069,6 @@ function ChatPanel({
   onAddToMemory,
   onCopy,
   onEditUserMessage,
-  onKeyDown,
   onPromptChange,
   onRemoveSelection,
   onRetry,
@@ -1075,7 +1082,6 @@ function ChatPanel({
   onAddToMemory: (text: string) => void;
   onCopy: (text: string) => void;
   onEditUserMessage: (message: ChatMessage) => void;
-  onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   onPromptChange: (value: string) => void;
   onRemoveSelection: () => void;
   onRetry: (message: ChatMessage) => void;
@@ -1141,12 +1147,11 @@ function ChatPanel({
             <button type="button" onClick={onRemoveSelection} aria-label="移除片段">×</button>
           </div>
         ) : null}
-        <textarea
+        <CopilotPromptEditor
           value={prompt}
-          onChange={(event) => onPromptChange(event.currentTarget.value)}
-          onKeyDown={onKeyDown}
+          onChange={onPromptChange}
+          onSubmit={onSubmit}
           placeholder="与 Wridian 对话"
-          aria-label="共创输入"
         />
         <button type="submit" className="prompt-send" aria-label={pending ? "停止" : "发送"} disabled={pending || !prompt.trim()}>
           {pending ? "..." : "↵"}
@@ -1154,6 +1159,99 @@ function ChatPanel({
       </form>
     </aside>
   );
+}
+
+function CopilotPromptEditor({
+  onChange,
+  onSubmit,
+  placeholder,
+  value,
+}: {
+  onChange: (value: string) => void;
+  onSubmit: () => void;
+  placeholder: string;
+  value: string;
+}) {
+  const initialConfig = useMemo(
+    () => ({
+      namespace: "WridianChatInput",
+      theme: {
+        paragraph: "prompt-editor-paragraph",
+        root: "prompt-editor-root",
+      },
+      onError(error: Error) {
+        console.error("Wridian chat input error", error);
+      },
+    }),
+    [],
+  );
+
+  return (
+    <LexicalComposer initialConfig={initialConfig}>
+      <div className="prompt-editor-shell">
+        <PlainTextPlugin
+          contentEditable={<ContentEditable className="prompt-editor" aria-label="共创输入" />}
+          placeholder={<div className="prompt-placeholder">{placeholder}</div>}
+          ErrorBoundary={LexicalErrorBoundary}
+        />
+        <OnChangePlugin
+          onChange={(editorState: EditorState) => {
+            editorState.read(() => {
+              onChange($getRoot().getTextContent());
+            });
+          }}
+        />
+        <HistoryPlugin />
+        <PromptKeyboardPlugin onSubmit={onSubmit} />
+        <PromptValueSyncPlugin value={value} />
+      </div>
+    </LexicalComposer>
+  );
+}
+
+function PromptKeyboardPlugin({ onSubmit }: { onSubmit: () => void }) {
+  const [editor] = useLexicalComposerContext();
+
+  useEffect(() => {
+    return editor.registerCommand(
+      KEY_ENTER_COMMAND,
+      (event: KeyboardEvent | null) => {
+        if (!event) return false;
+        if (event.isComposing || event.key === "Process") {
+          event.preventDefault();
+          return true;
+        }
+        if (!event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey) {
+          event.preventDefault();
+          onSubmit();
+          return true;
+        }
+        return false;
+      },
+      COMMAND_PRIORITY_LOW,
+    );
+  }, [editor, onSubmit]);
+
+  return null;
+}
+
+function PromptValueSyncPlugin({ value }: { value: string }) {
+  const [editor] = useLexicalComposerContext();
+
+  useEffect(() => {
+    editor.update(() => {
+      const root = $getRoot();
+      if (root.getTextContent() === value) return;
+      root.clear();
+      const paragraph = $createParagraphNode();
+      if (value) {
+        paragraph.append($createTextNode(value));
+      }
+      root.append(paragraph);
+    });
+  }, [editor, value]);
+
+  return null;
 }
 
 function MemoryDrawer({

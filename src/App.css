@@ -631,16 +631,15 @@ button {
 
 .prompt-bar {
   width: 100%;
-  min-height: 78px;
+  min-height: 96px;
   margin: 0;
-  display: grid;
-  grid-template-rows: auto minmax(60px, auto);
+  display: flex;
+  flex-direction: column;
   gap: 2px;
-  align-items: stretch;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: transparent;
-  padding: 8px 30px 7px 5px;
+  padding: 8px 4px 4px;
   position: relative;
 }
 
@@ -682,38 +681,53 @@ button {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus), transparent 78%);
 }
 
-.prompt-bar textarea {
-  min-width: 0;
-  height: 60px;
+.prompt-editor-shell {
+  position: relative;
+  width: 100%;
+}
+
+.prompt-editor {
+  min-height: 60px;
   max-height: 160px;
+  width: 100%;
   border: 0;
   outline: none;
-  resize: none;
   background: transparent;
   color: var(--text-primary);
   font-size: 14px;
-  line-height: 21px;
-  padding: 0 7px;
-  overflow: auto;
+  line-height: 20px;
+  overflow-y: auto;
+  padding: 0 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
-.prompt-bar textarea::placeholder {
+.prompt-editor-paragraph {
+  margin: 0;
+}
+
+.prompt-placeholder {
+  pointer-events: none;
+  position: absolute;
+  left: 8px;
+  top: 0;
   color: var(--text-muted);
+  font-size: 14px;
+  line-height: 20px;
+  user-select: none;
 }
 
 .prompt-send {
-  position: absolute;
-  right: 5px;
-  bottom: 5px;
-  min-width: 26px;
-  height: 22px;
+  align-self: flex-end;
+  min-width: 22px;
+  height: 24px;
   border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--text-muted);
   font-size: 14px;
   line-height: 14px;
-  padding: 0 6px;
+  padding: 0 4px;
 }
 
 .prompt-send:hover {
