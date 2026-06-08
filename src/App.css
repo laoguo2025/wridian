@@ -685,6 +685,11 @@ button {
   background: color-mix(in srgb, var(--accent), transparent 86%);
 }
 
+.prompt-attachment.pill-image,
+.message-context-pill.pill-image {
+  background: color-mix(in srgb, #6f8f45, transparent 84%);
+}
+
 .prompt-attachment.pill-memory,
 .message-context-pill.pill-memory {
   background: color-mix(in srgb, var(--text-primary), transparent 90%);
@@ -751,6 +756,71 @@ button {
 
 .prompt-editor-paragraph {
   margin: 0;
+}
+
+.prompt-editor-pill {
+  display: inline-flex;
+  margin: 0 2px;
+  vertical-align: baseline;
+}
+
+.prompt-editor-pill-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 180px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-selected);
+  color: var(--text-primary);
+  padding: 0 7px;
+  font-size: 11px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.prompt-editor-pill-inner span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.prompt-editor-pill-kind {
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.prompt-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 22px;
+  padding: 0 4px;
+}
+
+.prompt-controls button,
+.prompt-model {
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 18px;
+  padding: 0 5px;
+}
+
+.prompt-controls button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.prompt-model {
+  max-width: 112px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-right: auto;
 }
 
 .prompt-placeholder {

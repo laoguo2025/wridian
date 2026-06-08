@@ -8,7 +8,9 @@ import { useChatManager, type ChatDraftEdit } from "./chat/chatManager";
 import { ChatPanel } from "./chat/ChatPanel";
 import {
   buildPromptSuggestions,
+  createFileContentPromptPill,
   createFilePromptPill,
+  createImagePromptPill,
   createPromptPillFromSuggestion,
   createSelectionPromptPill,
   upsertPromptContextPill,
@@ -108,6 +110,8 @@ function App() {
   const [prompt, setPrompt] = useState("");
   const [pendingEdits, setPendingEdits] = useState<DraftEdit[]>([]);
   const [promptPills, setPromptPills] = useState<PromptContextPill[]>([]);
+  const [promptFileContentCache, setPromptFileContentCache] = useState<Record<string, string>>({});
+  const [activeModelLabel, setActiveModelLabel] = useState("");
   const [hasDraftSelection, setHasDraftSelection] = useState(false);
   const [draftSelection, setDraftSelection] = useState<TextSelection>({ start: 0, end: 0 });
   const [selectedPath, setSelectedPath] = useState("");
@@ -196,8 +200,18 @@ function App() {
     void loadMemoryState();
   }, [loadMemoryState]);
 
+  useEffect(() => {
+    void invoke<CustomApiSettingsStatus>("wridian_get_custom_api_settings")
+      .then((status) => setActiveModelLabel(status.model ?? "未配置模型"))
+      .catch(() => setActiveModelLabel("未配置模型"));
+  }, []);
+
   const files = workspace?.files ?? [];
   const promptFileCandidates = useMemo(() => flattenPromptFileCandidates(files), [files]);
+  const enrichedPromptFileCandidates = useMemo(
+    () => promptFileCandidates.map((file) => ({ ...file, content: promptFileContentCache[file.path] })),
+    [promptFileCandidates, promptFileContentCache],
+  );
   const isRealFile = Boolean(selectedPath);
   const dirty = isRealFile && editorContent !== lastSavedContent;
 
@@ -290,7 +304,18 @@ function App() {
 
   const addNodeToPrompt = (node: WorkFileNode) => {
     if (node.folder) return;
-    setPromptPills((current) => upsertPromptContextPill(current, createFilePromptPill(node.name, node.path)));
+    void addFileToPrompt(node.name, node.path);
+  };
+
+  const addFileToPrompt = async (name: string, path: string) => {
+    try {
+      const cached = promptFileContentCache[path];
+      const content = cached ?? (await invoke<OpenFileResponse>("wridian_open_file", { input: { path } })).content;
+      setPromptFileContentCache((current) => ({ ...current, [path]: content }));
+      setPromptPills((current) => upsertPromptContextPill(current, createFileContentPromptPill(name, path, content)));
+    } catch {
+      setPromptPills((current) => upsertPromptContextPill(current, createFilePromptPill(name, path)));
+    }
   };
 
   const openFileContextMenu = (node: WorkFileNode, x: number, y: number) => {
@@ -452,8 +477,8 @@ function App() {
     editorTitle,
     selectedPath,
     titleFallback: selectedPath ? baseName(selectedPath) : "",
-    workspaceFiles: promptFileCandidates,
-  }), [draftKind, draftSelection.end, draftSelection.start, editorContent, editorTitle, promptFileCandidates, selectedPath]);
+    workspaceFiles: enrichedPromptFileCandidates,
+  }), [draftKind, draftSelection.end, draftSelection.start, editorContent, editorTitle, enrichedPromptFileCandidates, selectedPath]);
 
   const statusLabel = useMemo(() => {
     if (saveStatus === "idle") return "读取中";
@@ -664,10 +689,25 @@ function App() {
           prompt={prompt}
           promptPills={promptPills}
           promptSuggestions={promptSuggestions}
+          activeModelLabel={activeModelLabel}
           onPromptChange={setPrompt}
+          onPromptPillsChange={setPromptPills}
+          onImagePaste={(files) => {
+            setPromptPills((current) => files.reduce(
+              (next, file) => upsertPromptContextPill(next, createImagePromptPill(file.name || "pasted-image", file.size)),
+              current,
+            ));
+          }}
           onRemovePill={(id) => setPromptPills((current) => current.filter((pill) => pill.id !== id))}
           onSelectSuggestion={(suggestion) => {
             if (suggestion.kind !== "context") return;
+            if (suggestion.pillKind === "file") {
+              const file = enrichedPromptFileCandidates.find((item) => item.path === suggestion.detail);
+              if (file) {
+                void addFileToPrompt(file.name, file.path);
+                return;
+              }
+            }
             setPromptPills((current) => upsertPromptContextPill(current, createPromptPillFromSuggestion(suggestion)));
           }}
           onSubmit={() => void sendPrompt()}

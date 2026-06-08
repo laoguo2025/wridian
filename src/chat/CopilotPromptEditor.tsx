@@ -13,14 +13,21 @@ import {
   $getRoot,
   $isRangeSelection,
   COMMAND_PRIORITY_LOW,
+  COMMAND_PRIORITY_CRITICAL,
+  DELETE_CHARACTER_COMMAND,
   EditorState,
   KEY_ENTER_COMMAND,
+  PASTE_COMMAND,
   TextNode,
+  type LexicalNode,
 } from "lexical";
-import type { PromptSuggestion } from "./promptContext";
+import { createPromptPillFromSuggestion, type PromptContextPill, type PromptSuggestion } from "./promptContext";
+import { $collectPromptPills, $createPromptPillNode, $isPromptPillNode, createNodesFromPromptText, PromptPillNode } from "./promptPillNodes";
 
 export function CopilotPromptEditor({
   onChange,
+  onImagePaste,
+  onPillsChange,
   onSelectSuggestion,
   onSubmit,
   placeholder,
@@ -28,6 +35,8 @@ export function CopilotPromptEditor({
   value,
 }: {
   onChange: (value: string) => void;
+  onImagePaste?: (files: File[]) => void;
+  onPillsChange: (pills: PromptContextPill[]) => void;
   onSelectSuggestion: (suggestion: PromptSuggestion) => void;
   onSubmit: () => void;
   placeholder: string;
@@ -37,6 +46,7 @@ export function CopilotPromptEditor({
   const initialConfig = useMemo(
     () => ({
       namespace: "WridianChatInput",
+      nodes: [PromptPillNode],
       theme: {
         paragraph: "prompt-editor-paragraph",
         root: "prompt-editor-root",
@@ -65,6 +75,9 @@ export function CopilotPromptEditor({
         />
         <HistoryPlugin />
         <PromptKeyboardPlugin onSubmit={onSubmit} />
+        <PromptPillSyncPlugin onPillsChange={onPillsChange} />
+        <PromptPillDeletionPlugin />
+        <PromptPastePlugin onImagePaste={onImagePaste} />
         <PromptTypeaheadPlugin onSelectSuggestion={onSelectSuggestion} suggestions={suggestions} />
         <PromptValueSyncPlugin value={value} />
       </div>
@@ -159,7 +172,7 @@ function PromptTypeaheadPlugin({
     const currentTrigger = triggerStateRef.current;
     if (!currentTrigger) return;
     editor.update(() => {
-      replacePromptTrigger(currentTrigger, suggestion.kind === "command" ? suggestion.insertText : "");
+      replacePromptTrigger(currentTrigger, suggestion);
     });
     if (suggestion.kind === "context") {
       onSelectSuggestion(suggestion);
@@ -264,18 +277,25 @@ function readPromptTrigger(text: string, offset: number): PromptTriggerState | n
   };
 }
 
-function replacePromptTrigger(trigger: PromptTriggerState, replacement: string) {
+function replacePromptTrigger(trigger: PromptTriggerState, suggestion: PromptSuggestion) {
   const selection = $getSelection();
   if (!$isRangeSelection(selection)) return;
   const anchor = selection.anchor;
   const anchorNode = anchor.getNode();
   if (!(anchorNode instanceof TextNode)) return;
   const text = anchorNode.getTextContent();
-  const normalizedReplacement = replacement ? `${replacement}${replacement.endsWith(" ") ? "" : " "}` : "";
-  const nextText = `${text.slice(0, trigger.start)}${normalizedReplacement}${text.slice(trigger.end)}`;
-  const cursor = trigger.start + normalizedReplacement.length;
-  anchorNode.setTextContent(nextText);
-  anchorNode.select(cursor, cursor);
+  const beforeText = text.slice(0, trigger.start);
+  const afterText = text.slice(trigger.end);
+  const nodes: LexicalNode[] = [];
+  if (beforeText) nodes.push($createTextNode(beforeText));
+  if (suggestion.kind === "context") {
+    nodes.push($createPromptPillNode(createPromptPillFromSuggestion(suggestion)));
+    nodes.push($createTextNode(afterText ? ` ${afterText}` : " "));
+  } else {
+    nodes.push(...createNodesFromPromptText(`${suggestion.insertText}${suggestion.insertText.endsWith(" ") ? "" : " "}`));
+    if (afterText) nodes.push($createTextNode(afterText));
+  }
+  replaceTextNodeWithNodes(anchorNode, nodes);
 }
 
 function PromptValueSyncPlugin({ value }: { value: string }) {
@@ -288,11 +308,120 @@ function PromptValueSyncPlugin({ value }: { value: string }) {
       root.clear();
       const paragraph = $createParagraphNode();
       if (value) {
-        paragraph.append($createTextNode(value));
+        paragraph.append(...createNodesFromPromptText(value));
       }
       root.append(paragraph);
     });
   }, [editor, value]);
 
   return null;
+}
+
+function PromptPillSyncPlugin({ onPillsChange }: { onPillsChange: (pills: PromptContextPill[]) => void }) {
+  const [editor] = useLexicalComposerContext();
+  const previousRef = useRef("");
+
+  useEffect(() => {
+    return editor.registerUpdateListener(({ editorState }) => {
+      editorState.read(() => {
+        const pills = $collectPromptPills();
+        const serialized = JSON.stringify(pills);
+        if (serialized === previousRef.current) return;
+        previousRef.current = serialized;
+        onPillsChange(pills);
+      });
+    });
+  }, [editor, onPillsChange]);
+
+  return null;
+}
+
+function PromptPillDeletionPlugin() {
+  const [editor] = useLexicalComposerContext();
+
+  useEffect(() => {
+    return editor.registerCommand(
+      DELETE_CHARACTER_COMMAND,
+      (isBackward: boolean) => {
+        let handled = false;
+        editor.update(() => {
+          const selection = $getSelection();
+          if (!$isRangeSelection(selection) || !selection.isCollapsed()) return;
+          const anchorNode = selection.anchor.getNode();
+          if ($isPromptPillNode(anchorNode)) {
+            anchorNode.remove();
+            handled = true;
+            return;
+          }
+          if (!isBackward || selection.anchor.offset !== 0) return;
+          const previous = anchorNode.getPreviousSibling();
+          if ($isPromptPillNode(previous)) {
+            previous.remove();
+            handled = true;
+          }
+        });
+        return handled;
+      },
+      COMMAND_PRIORITY_CRITICAL,
+    );
+  }, [editor]);
+
+  return null;
+}
+
+function PromptPastePlugin({ onImagePaste }: { onImagePaste?: (files: File[]) => void }) {
+  const [editor] = useLexicalComposerContext();
+
+  useEffect(() => {
+    return editor.registerCommand(
+      PASTE_COMMAND,
+      (event: ClipboardEvent) => {
+        const data = event.clipboardData;
+        if (!data) return false;
+        const imageFiles = Array.from(data.items ?? [])
+          .filter((item) => item.type.startsWith("image/"))
+          .map((item) => item.getAsFile())
+          .filter((file): file is File => Boolean(file));
+        if (imageFiles.length && onImagePaste) {
+          event.preventDefault();
+          onImagePaste(imageFiles);
+          return true;
+        }
+
+        const text = data.getData("text/plain");
+        if (!text || (!text.includes("http") && !/@(?:vault|web|project|relevant|memory|draft|screenplay)\b/i.test(text))) {
+          return false;
+        }
+        event.preventDefault();
+        editor.update(() => {
+          const selection = $getSelection();
+          if (!$isRangeSelection(selection)) return;
+          selection.insertNodes(createNodesFromPromptText(text));
+        });
+        return true;
+      },
+      COMMAND_PRIORITY_CRITICAL,
+    );
+  }, [editor, onImagePaste]);
+
+  return null;
+}
+
+function replaceTextNodeWithNodes(textNode: TextNode, nodes: LexicalNode[]) {
+  nodes.forEach((node, index) => {
+    if (index === 0) {
+      textNode.replace(node);
+    } else {
+      nodes[index - 1].insertAfter(node);
+    }
+  });
+  const lastNode = nodes[nodes.length - 1];
+  if (lastNode) {
+    if (lastNode instanceof TextNode) {
+      const length = lastNode.getTextContent().length;
+      lastNode.select(length, length);
+    } else {
+      lastNode.selectNext();
+    }
+  }
 }

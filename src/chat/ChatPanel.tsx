@@ -8,12 +8,15 @@ import {
 import type { PromptContextPill, PromptSuggestion } from "./promptContext";
 
 export function ChatPanel({
+  activeModelLabel,
   error,
   messages,
   onAddToMemory,
   onCopy,
   onEditUserMessage,
   onPromptChange,
+  onPromptPillsChange,
+  onImagePaste,
   onRemovePill,
   onRetry,
   onSelectSuggestion,
@@ -23,12 +26,15 @@ export function ChatPanel({
   promptPills,
   promptSuggestions,
 }: {
+  activeModelLabel: string;
   error: string;
   messages: ChatMessage[];
   onAddToMemory: (text: string) => void;
   onCopy: (text: string) => void;
   onEditUserMessage: (message: ChatMessage) => void;
   onPromptChange: (value: string) => void;
+  onPromptPillsChange: (pills: PromptContextPill[]) => void;
+  onImagePaste: (files: File[]) => void;
   onRemovePill: (id: string) => void;
   onRetry: (message: ChatMessage) => void;
   onSelectSuggestion: (suggestion: PromptSuggestion) => void;
@@ -89,6 +95,8 @@ export function ChatPanel({
         <CopilotPromptEditor
           value={prompt}
           onChange={onPromptChange}
+          onImagePaste={onImagePaste}
+          onPillsChange={onPromptPillsChange}
           onSelectSuggestion={onSelectSuggestion}
           onSubmit={onSubmit}
           placeholder="与 Wridian 对话"
@@ -97,6 +105,18 @@ export function ChatPanel({
         <button type="submit" className="prompt-send" aria-label={pending ? "停止" : "发送"} disabled={pending || !prompt.trim()}>
           {pending ? "..." : "↵"}
         </button>
+        <div className="prompt-controls" aria-label="输入控制">
+          <span className="prompt-model" title="当前模型">{activeModelLabel || "未配置模型"}</span>
+          <button type="button" onClick={() => onPromptChange(appendPromptTool(prompt, "@project"))}>
+            Project
+          </button>
+          <button type="button" onClick={() => onPromptChange(appendPromptTool(prompt, "@relevant"))}>
+            Relevant
+          </button>
+          <button type="button" onClick={() => onPromptChange(appendPromptTool(prompt, "@vault"))}>
+            Vault
+          </button>
+        </div>
       </form>
     </aside>
   );
@@ -172,6 +192,8 @@ function pillKindLabel(pill: PromptContextPill) {
       return "FILE";
     case "file":
       return "NOTE";
+    case "image":
+      return "IMG";
     case "memory":
       return "MEM";
     case "tool":
@@ -181,4 +203,10 @@ function pillKindLabel(pill: PromptContextPill) {
     case "selection":
       return "SEL";
   }
+}
+
+function appendPromptTool(prompt: string, tool: string) {
+  if (prompt.includes(tool)) return prompt;
+  const trimmed = prompt.trimEnd();
+  return `${trimmed}${trimmed ? " " : ""}${tool} `;
 }

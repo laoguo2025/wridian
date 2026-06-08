@@ -2,6 +2,7 @@ export type PromptContextPillKind =
   | "selection"
   | "active-file"
   | "file"
+  | "image"
   | "url"
   | "tool"
   | "memory";
@@ -43,6 +44,7 @@ export type PromptSuggestionInput = {
 };
 
 export type PromptFileCandidate = {
+  content?: string;
   name: string;
   path: string;
 };
@@ -74,6 +76,15 @@ export function createFilePromptPill(name: string, path: string): PromptContextP
   };
 }
 
+export function createFileContentPromptPill(name: string, path: string, content: string): PromptContextPill {
+  return {
+    id: `file:${path}`,
+    kind: "file",
+    label: name,
+    value: `路径：${path}\n\n${content}`,
+  };
+}
+
 export function createActiveFilePromptPill(label: string, value: string): PromptContextPill {
   return {
     id: "current-file",
@@ -89,6 +100,15 @@ export function createUrlPromptPill(url: string): PromptContextPill {
     kind: "url",
     label: "URL",
     value: url,
+  };
+}
+
+export function createImagePromptPill(name: string, size: number): PromptContextPill {
+  return {
+    id: `image:${name}:${size}`,
+    kind: "image",
+    label: name,
+    value: `粘贴图片：${name}，大小 ${size} bytes。当前版本先作为视觉参考元数据进入上下文。`,
   };
 }
 
@@ -166,7 +186,7 @@ export function buildPromptSuggestions(input: PromptSuggestionInput): PromptSugg
       id: `file:${file.path}`,
       label: file.name,
       detail: file.path,
-      insertText: `路径：${file.path}`,
+      insertText: file.content ? `路径：${file.path}\n\n${file.content}` : `路径：${file.path}`,
       kind: "context",
       pillKind: "file",
     });
