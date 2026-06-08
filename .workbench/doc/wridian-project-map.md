@@ -53,7 +53,7 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
   - `LexicalEditor.tsx`：输入区内部滚动，长文本不撑高右栏；Wridian 聊天输入区已从 textarea 切换为 Lexical `ContentEditable`，使用受控文本同步、历史插件和 Enter 发送；实现入口为 `src/chat/CopilotPromptEditor.tsx`。
   - `AtMentionCommandPlugin.tsx` / `SlashCommandPlugin.tsx`：Wridian 已接入本地第一版 `@` 上下文选择和 `/` 写作命令提示，实现在 `src/chat/CopilotPromptEditor.tsx` 内。`@` 可把当前选区、当前文件、当前正文放入输入框上方上下文 pill；`/` 可插入改对白、增强冲突、加结尾钩子、检查角色口吻、批量改角色名、提取记忆等小说和短剧共用命令。
     - 剧本模式：前端按 `.fountain` 扩展名、内景/外景/集/场信号和角色对白行识别短剧/剧本稿件；识别后 `/` 命令额外显示拆分分集节奏、强化场景钩子、对白口语化和场景成本检查，共创请求会把稿件类型传给后端 prompt。
-  - 文件/上下文检索：Wridian 已把当前工作区文件树 flatten 为 prompt file candidates，`@` 菜单会展示匹配文件项，选择后以 `file` pill 注入上下文；当前检索基于文件名/路径，暂未建立全文内容缓存。
+  - 文件/上下文检索：Wridian 已把当前工作区文件树 flatten 为 prompt file candidates，`@` 菜单会展示匹配文件项，选择后以 `file` pill 注入上下文并读取文件内容缓存；当前候选召回仍以文件名/路径为主。
   - `ContextManager.ts` / `PromptContextTypes.ts`：Wridian 已开始拆出聊天上下文边界，`src/chat/promptContext.ts` 负责 prompt pill 类型、序列化、上下文建议构造和写作命令建议；消息仓库只保存消息和已绑定的上下文快照。
   - `MessageRepository.ts`：Wridian 已开始拆出前端消息仓库边界，`src/chat/messageRepository.ts` 负责消息类型、ID、用户/助手消息创建、编辑恢复和重试定位；`App.tsx` 仍负责调用 Tauri 共创命令。
   - `ChatManager.ts` / `ChatPersistenceManager.ts`：Wridian 已引入本地前端版 `src/chat/chatManager.ts`，负责消息列表、pending/error、发送共创请求、追加助手回复和生成待确认正文修改；聊天记录通过 `src/chat/chatPersistence.ts` 调用后端 `src-tauri/src/chat_persistence.rs` 保存为 `.wridian/chat/<session>.md`。
@@ -93,7 +93,7 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 - 聊天记录：`.wridian/chat/*.md`，每个运行会话保存为 Markdown，包含 frontmatter、来源文件、用户/助手消息和上下文 pill。
 - 长期记忆：`.wridian/memory-tree.json`。
 - 候选记忆：`.wridian/candidates.json`。
-- Markdown 记忆 vault：`.wridian/wiki/`，包含 `sources/`、`entities/`、`concepts/`、`index.md`、`hot.md`、`log.md`。确认记忆时会继续写 JSON，同时镜像为 Markdown 条目。
+- Markdown 记忆 vault：`.wridian/wiki/` 是 JSON 记忆树的派生图谱层，包含 `sources/`、`entities/`、`concepts/`、`index.md`、`hot.md`、`log.md` 和 `.cache/index.json`。确认记忆时继续写 `.wridian/memory-tree.json`，并按 Claude-Obsidian 式 source/entity/concept 模板生成 Markdown 条目、wikilink、反链、hot context、图谱缓存和本地检索索引；记忆抽屉可重建图谱并搜索人物、设定、伏笔。
 - 记忆条目支持写作分类：人物、世界观、剧情线、风格、禁区、其他。
 - 模型提取不得直接写入长期记忆，必须经过候选、编辑、确认。
 

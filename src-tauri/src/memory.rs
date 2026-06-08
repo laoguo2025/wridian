@@ -5,6 +5,7 @@ use crate::runtime::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
@@ -73,6 +74,47 @@ pub(crate) struct MemoryStateResponse {
     memory_folder_path: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SearchMemoryWikiInput {
+    query: String,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MemoryWikiSearchResult {
+    kind: String,
+    path: String,
+    score: f64,
+    snippet: String,
+    title: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MemoryGraphResponse {
+    nodes: Vec<MemoryGraphNode>,
+    edges: Vec<MemoryGraphEdge>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MemoryGraphNode {
+    id: String,
+    kind: String,
+    path: String,
+    title: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MemoryGraphEdge {
+    from: String,
+    to: String,
+    label: String,
+}
+
 #[tauri::command]
 pub(crate) fn wridian_get_memory_state() -> Result<MemoryStateResponse, String> {
     let data_dir = wridian_data_dir()?;
@@ -82,6 +124,34 @@ pub(crate) fn wridian_get_memory_state() -> Result<MemoryStateResponse, String> 
         candidates: read_memory_candidates(&data_dir)?,
         memory_folder_path: memory_folder_path(&data_dir).to_string_lossy().into_owned(),
     })
+}
+
+#[tauri::command]
+pub(crate) fn wridian_ingest_memory_wiki() -> Result<MemoryGraphResponse, String> {
+    let data_dir = wridian_data_dir()?;
+    ensure_workspace(&data_dir)?;
+    let memories = read_memory_items(&data_dir)?;
+    write_memory_wiki(&data_dir, &memories)?;
+    read_memory_graph(&data_dir)
+}
+
+#[tauri::command]
+pub(crate) fn wridian_rebuild_memory_wiki_index() -> Result<MemoryGraphResponse, String> {
+    wridian_ingest_memory_wiki()
+}
+
+#[tauri::command]
+pub(crate) fn wridian_search_memory_wiki(input: SearchMemoryWikiInput) -> Result<Vec<MemoryWikiSearchResult>, String> {
+    let data_dir = wridian_data_dir()?;
+    ensure_workspace(&data_dir)?;
+    search_memory_wiki(&data_dir, &input.query, input.limit.unwrap_or(8).min(30))
+}
+
+#[tauri::command]
+pub(crate) fn wridian_get_memory_graph() -> Result<MemoryGraphResponse, String> {
+    let data_dir = wridian_data_dir()?;
+    ensure_workspace(&data_dir)?;
+    read_memory_graph(&data_dir)
 }
 
 #[tauri::command]
@@ -285,63 +355,206 @@ fn write_memory_wiki(data_dir: &Path, memories: &[MemoryItem]) -> Result<(), Str
     let sources = wiki.join("sources");
     let entities = wiki.join("entities");
     let concepts = wiki.join("concepts");
-    for dir in [&wiki, &sources, &entities, &concepts] {
+    let cache = wiki.join(".cache");
+    for dir in [&wiki, &sources, &entities, &concepts, &cache] {
         fs::create_dir_all(dir).map_err(|error| format!("记忆 wiki 目录创建失败：{error}"))?;
     }
 
+    let pages = build_wiki_pages(memories);
+    let graph = build_wiki_graph(&pages);
     let mut index = String::from("# Wridian 记忆索引\n\n");
     let mut hot = String::from("# Hot Context\n\n");
     for memory in memories {
-        let folder = match memory.category.as_str() {
-            "人物" => &entities,
-            "其他" => &sources,
-            _ => &concepts,
+        let page = pages
+            .iter()
+            .find(|page| page.memory_id == memory.id)
+            .ok_or_else(|| "记忆 wiki 页面生成失败。".to_string())?;
+        let folder = match page.kind.as_str() {
+            "entity" => &entities,
+            "concept" => &concepts,
+            _ => &sources,
         };
-        let file_name = format!("{}.md", sanitize_markdown_file_name(&format!("{}-{}", memory.category, memory.id)));
-        let path = folder.join(&file_name);
-        let relative_path = format!(
-            "{}/{}",
-            folder
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("sources"),
-            file_name
-        );
-        fs::write(&path, render_memory_markdown(memory))
+        let path = folder.join(&page.file_name);
+        fs::write(&path, render_wiki_page(page, &graph))
             .map_err(|error| format!("记忆 wiki 写入失败：{error}"))?;
         index.push_str(&format!(
-            "- [{}]({})：{}\n",
-            memory.category,
-            relative_path,
-            compact_text(&memory.text, 80)
+            "- [[{}]] `{}：{}`\n",
+            page.title,
+            page.kind,
+            compact_text(&page.summary, 90)
         ));
     }
 
-    for memory in memories.iter().rev().take(12) {
-        hot.push_str(&format!("- 【{}】{}\n", memory.category, memory.text.trim()));
+    for page in pages.iter().rev().take(12) {
+        hot.push_str(&format!("- [[{}]]：{}\n", page.title, page.summary.trim()));
     }
 
     fs::write(wiki.join("index.md"), index).map_err(|error| format!("记忆索引写入失败：{error}"))?;
     fs::write(wiki.join("hot.md"), hot).map_err(|error| format!("Hot Context 写入失败：{error}"))?;
     fs::write(
         wiki.join("log.md"),
-        format!("# 记忆同步日志\n\n- {} 同步 {} 条记忆。\n", iso_timestamp(), memories.len()),
+        format!(
+            "# 记忆同步日志\n\n## {} ingest | confirmed memories\n- Pages: {}\n- Edges: {}\n- Strategy: sources/entities/concepts + wikilink graph + local BM25 cache.\n",
+            iso_timestamp(),
+            pages.len(),
+            graph.edges.len()
+        ),
     )
     .map_err(|error| format!("记忆日志写入失败：{error}"))?;
+    fs::write(cache.join("index.json"), render_wiki_cache(&pages, &graph)?)
+        .map_err(|error| format!("记忆检索缓存写入失败：{error}"))?;
     Ok(())
 }
 
-fn render_memory_markdown(memory: &MemoryItem) -> String {
+#[derive(Debug, Clone)]
+struct WikiPage {
+    category: String,
+    file_name: String,
+    kind: String,
+    memory_id: String,
+    path: String,
+    source_path: String,
+    summary: String,
+    title: String,
+    wikilinks: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct WikiGraph {
+    edges: Vec<(String, String, String)>,
+    links_in: HashMap<String, Vec<String>>,
+    links_out: HashMap<String, Vec<String>>,
+}
+
+fn build_wiki_pages(memories: &[MemoryItem]) -> Vec<WikiPage> {
+    let title_by_id: HashMap<String, String> = memories
+        .iter()
+        .map(|memory| (memory.id.clone(), wiki_title(memory)))
+        .collect();
+    memories
+        .iter()
+        .map(|memory| {
+            let kind = match memory.category.as_str() {
+                "人物" => "entity",
+                "其他" => "source",
+                _ => "concept",
+            }
+            .to_string();
+            let title = wiki_title(memory);
+            let folder = match kind.as_str() {
+                "entity" => "entities",
+                "concept" => "concepts",
+                _ => "sources",
+            };
+            let wikilinks = memories
+                .iter()
+                .filter(|other| other.id != memory.id)
+                .filter(|other| memory.text.contains(&other.title) || other.text.contains(&memory.title))
+                .filter_map(|other| title_by_id.get(&other.id).cloned())
+                .take(8)
+                .collect::<Vec<_>>();
+            let file_name = format!("{}.md", sanitize_markdown_file_name(&title));
+            WikiPage {
+                category: memory.category.clone(),
+                file_name: file_name.clone(),
+                kind,
+                memory_id: memory.id.clone(),
+                path: format!("{folder}/{file_name}"),
+                source_path: memory.source_path.clone(),
+                summary: memory.text.trim().to_string(),
+                title,
+                wikilinks,
+            }
+        })
+        .collect()
+}
+
+fn build_wiki_graph(pages: &[WikiPage]) -> WikiGraph {
+    let titles: HashSet<String> = pages.iter().map(|page| page.title.clone()).collect();
+    let mut edges = Vec::new();
+    let mut links_in: HashMap<String, Vec<String>> = HashMap::new();
+    let mut links_out: HashMap<String, Vec<String>> = HashMap::new();
+    for page in pages {
+        for target in &page.wikilinks {
+            if !titles.contains(target) {
+                continue;
+            }
+            edges.push((page.title.clone(), target.clone(), "related".to_string()));
+            links_out.entry(page.title.clone()).or_default().push(target.clone());
+            links_in.entry(target.clone()).or_default().push(page.title.clone());
+        }
+    }
+    WikiGraph {
+        edges,
+        links_in,
+        links_out,
+    }
+}
+
+fn render_wiki_page(page: &WikiPage, graph: &WikiGraph) -> String {
+    let related = page
+        .wikilinks
+        .iter()
+        .map(|title| format!("  - \"[[{}]]\"", title))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let backlinks = graph
+        .links_in
+        .get(&page.title)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|title| format!("- [[{}]]", title))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let outgoing = graph
+        .links_out
+        .get(&page.title)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|title| format!("- [[{}]]", title))
+        .collect::<Vec<_>>()
+        .join("\n");
     format!(
-        "---\nid: {}\ncategory: {}\nsource: {}\ntitle: {}\ncreated: {}\n---\n\n# {}\n\n{}\n",
-        escape_yaml(&memory.id),
-        escape_yaml(&memory.category),
-        escape_yaml(&memory.source_path),
-        escape_yaml(&memory.title),
-        escape_yaml(&memory.created_at),
-        memory.category,
-        memory.text.trim()
+        "---\ntype: {}\nid: {}\ntitle: {}\ncategory: {}\nsource_path: {}\nstatus: seed\ncreated: {}\nupdated: {}\nrelated:\n{}\nsources:\n  - {}\n---\n\n# {}\n\n## Summary\n\n{}\n\n## Connections\n\n{}\n\n## Backlinks\n\n{}\n\n## Source\n\n- `{}`\n",
+        page.kind,
+        escape_yaml(&page.memory_id),
+        escape_yaml(&page.title),
+        escape_yaml(&page.category),
+        escape_yaml(&page.source_path),
+        iso_timestamp(),
+        iso_timestamp(),
+        if related.is_empty() { "  []".to_string() } else { related },
+        escape_yaml(&page.source_path),
+        page.title,
+        page.summary,
+        if outgoing.is_empty() { "- 暂无。".to_string() } else { outgoing },
+        if backlinks.is_empty() { "- 暂无。".to_string() } else { backlinks },
+        page.source_path
     )
+}
+
+fn render_wiki_cache(pages: &[WikiPage], graph: &WikiGraph) -> Result<String, String> {
+    serde_json::to_string_pretty(&json!({
+        "schemaVersion": 1,
+        "updatedAt": iso_timestamp(),
+        "pages": pages.iter().map(|page| json!({
+            "id": page.memory_id,
+            "kind": page.kind,
+            "title": page.title,
+            "path": page.path,
+            "summary": page.summary,
+            "sourcePath": page.source_path,
+            "tokens": tokenize_for_search(&format!("{} {} {}", page.title, page.category, page.summary)),
+        })).collect::<Vec<_>>(),
+        "edges": graph.edges.iter().map(|(from, to, label)| json!({
+            "from": from,
+            "to": to,
+            "label": label,
+        })).collect::<Vec<_>>()
+    }))
+    .map_err(|error| error.to_string())
 }
 
 fn sanitize_markdown_file_name(value: &str) -> String {
@@ -358,6 +571,107 @@ fn sanitize_markdown_file_name(value: &str) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+fn wiki_title(memory: &MemoryItem) -> String {
+    let signal = compact_text(&memory.text, 34);
+    sanitize_markdown_file_name(&format!("{}-{}-{}", memory.category, memory.title, signal))
+}
+
+fn search_memory_wiki(
+    data_dir: &Path,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<MemoryWikiSearchResult>, String> {
+    let cache_path = memory_wiki_root(data_dir).join(".cache").join("index.json");
+    if !cache_path.exists() {
+        write_memory_wiki(data_dir, &read_memory_items(data_dir)?)?;
+    }
+    let content = fs::read_to_string(&cache_path).map_err(|error| format!("记忆检索缓存读取失败：{error}"))?;
+    let value: serde_json::Value =
+        serde_json::from_str(&content).map_err(|error| format!("记忆检索缓存格式损坏：{error}"))?;
+    let query_tokens = tokenize_for_search(query);
+    if query_tokens.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut results = Vec::new();
+    if let Some(pages) = value.get("pages").and_then(serde_json::Value::as_array) {
+        for page in pages {
+            let tokens = page
+                .get("tokens")
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .map(ToOwned::to_owned)
+                        .collect::<HashSet<_>>()
+                })
+                .unwrap_or_default();
+            let overlap = query_tokens.iter().filter(|token| tokens.contains(*token)).count();
+            if overlap == 0 {
+                continue;
+            }
+            let score = (overlap as f64) / (query_tokens.len() as f64).sqrt().max(1.0);
+            results.push(MemoryWikiSearchResult {
+                kind: page.get("kind").and_then(serde_json::Value::as_str).unwrap_or("source").to_string(),
+                path: page.get("path").and_then(serde_json::Value::as_str).unwrap_or_default().to_string(),
+                score,
+                snippet: page.get("summary").and_then(serde_json::Value::as_str).unwrap_or_default().chars().take(180).collect(),
+                title: page.get("title").and_then(serde_json::Value::as_str).unwrap_or_default().to_string(),
+            });
+        }
+    }
+    results.sort_by(|left, right| right.score.partial_cmp(&left.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.truncate(limit);
+    Ok(results)
+}
+
+fn read_memory_graph(data_dir: &Path) -> Result<MemoryGraphResponse, String> {
+    let cache_path = memory_wiki_root(data_dir).join(".cache").join("index.json");
+    if !cache_path.exists() {
+        write_memory_wiki(data_dir, &read_memory_items(data_dir)?)?;
+    }
+    let content = fs::read_to_string(&cache_path).map_err(|error| format!("记忆图谱缓存读取失败：{error}"))?;
+    let value: serde_json::Value =
+        serde_json::from_str(&content).map_err(|error| format!("记忆图谱缓存格式损坏：{error}"))?;
+    let mut nodes = Vec::new();
+    if let Some(pages) = value.get("pages").and_then(serde_json::Value::as_array) {
+        for page in pages {
+            nodes.push(MemoryGraphNode {
+                id: page.get("title").and_then(serde_json::Value::as_str).unwrap_or_default().to_string(),
+                kind: page.get("kind").and_then(serde_json::Value::as_str).unwrap_or("source").to_string(),
+                path: page.get("path").and_then(serde_json::Value::as_str).unwrap_or_default().to_string(),
+                title: page.get("title").and_then(serde_json::Value::as_str).unwrap_or_default().to_string(),
+            });
+        }
+    }
+    let mut edges = Vec::new();
+    if let Some(cached_edges) = value.get("edges").and_then(serde_json::Value::as_array) {
+        for edge in cached_edges {
+            edges.push(MemoryGraphEdge {
+                from: edge.get("from").and_then(serde_json::Value::as_str).unwrap_or_default().to_string(),
+                to: edge.get("to").and_then(serde_json::Value::as_str).unwrap_or_default().to_string(),
+                label: edge.get("label").and_then(serde_json::Value::as_str).unwrap_or("related").to_string(),
+            });
+        }
+    }
+    Ok(MemoryGraphResponse { nodes, edges })
+}
+
+fn tokenize_for_search(text: &str) -> HashSet<String> {
+    let lower = text.to_lowercase();
+    let mut tokens = HashSet::new();
+    for token in lower.split(|ch: char| !ch.is_alphanumeric() && ch != '_') {
+        if token.chars().count() > 1 {
+            tokens.insert(token.to_string());
+        }
+    }
+    let cjk: Vec<char> = text.chars().filter(|ch| ('\u{4e00}'..='\u{9fff}').contains(ch)).collect();
+    for window in cjk.windows(2) {
+        tokens.insert(window.iter().collect());
+    }
+    tokens
 }
 
 fn escape_yaml(value: &str) -> String {

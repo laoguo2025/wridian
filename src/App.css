@@ -1041,6 +1041,22 @@ button {
   padding: 12px;
 }
 
+.memory-search {
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  padding: 0 8px;
+  font-size: 13px;
+  outline: none;
+}
+
+.memory-search:focus {
+  border-color: color-mix(in srgb, var(--accent), transparent 35%);
+}
+
 .chat-thread {
   display: flex;
   flex-direction: column;

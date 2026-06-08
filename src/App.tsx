@@ -98,6 +98,19 @@ type MemoryState = {
   memoryFolderPath?: string;
 };
 
+type MemoryWikiSearchResult = {
+  kind: string;
+  path: string;
+  score: number;
+  snippet: string;
+  title: string;
+};
+
+type MemoryGraphState = {
+  nodes: { id: string; kind: string; path: string; title: string }[];
+  edges: { from: string; to: string; label: string }[];
+};
+
 type FileContextMenu = {
   node: WorkFileNode;
   x: number;
@@ -133,6 +146,9 @@ function App() {
   const [saveError, setSaveError] = useState("");
   const [memoryState, setMemoryState] = useState<MemoryState>({ memories: [], candidates: [] });
   const [memoryError, setMemoryError] = useState("");
+  const [memoryWikiSearch, setMemoryWikiSearch] = useState("");
+  const [memoryWikiResults, setMemoryWikiResults] = useState<MemoryWikiSearchResult[]>([]);
+  const [memoryGraphState, setMemoryGraphState] = useState<MemoryGraphState>({ nodes: [], edges: [] });
   const [extractingMemory, setExtractingMemory] = useState(false);
   const [fileMenu, setFileMenu] = useState<FileContextMenu | null>(null);
   const draftEditorRef = useRef<HTMLDivElement | null>(null);
@@ -147,6 +163,16 @@ function App() {
     try {
       const response = await invoke<MemoryState>("wridian_get_memory_state");
       setMemoryState(response.memories.length || response.candidates.length ? response : { memories: [], candidates: [] });
+      setMemoryError("");
+    } catch (error) {
+      setMemoryError(error instanceof Error ? error.message : String(error));
+    }
+  }, []);
+
+  const loadMemoryGraph = useCallback(async () => {
+    try {
+      const response = await invoke<MemoryGraphState>("wridian_get_memory_graph");
+      setMemoryGraphState(response);
       setMemoryError("");
     } catch (error) {
       setMemoryError(error instanceof Error ? error.message : String(error));
@@ -210,6 +236,11 @@ function App() {
   useEffect(() => {
     void loadMemoryState();
   }, [loadMemoryState]);
+
+  useEffect(() => {
+    if (!memoryOpen) return;
+    void loadMemoryGraph();
+  }, [loadMemoryGraph, memoryOpen]);
 
   useEffect(() => {
     void invoke<CustomApiSettingsStatus>("wridian_get_custom_api_settings")
@@ -557,6 +588,7 @@ function App() {
       const response = await invoke<MemoryState>("wridian_accept_memory_candidate", { input: { id } });
       setMemoryState(response);
       setMemoryError("");
+      void loadMemoryGraph();
     } catch (error) {
       setMemoryState((current) => {
         const candidate = current.candidates.find((item) => item.id === id);
@@ -628,6 +660,33 @@ function App() {
     try {
       const { openPath } = await import("@tauri-apps/plugin-opener");
       await openPath(memoryState.memoryFolderPath);
+      setMemoryError("");
+    } catch (error) {
+      setMemoryError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const rebuildMemoryWiki = async () => {
+    try {
+      const response = await invoke<MemoryGraphState>("wridian_rebuild_memory_wiki_index");
+      setMemoryGraphState(response);
+      setMemoryError("");
+    } catch (error) {
+      setMemoryError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const searchMemoryWiki = async (query: string) => {
+    setMemoryWikiSearch(query);
+    if (!query.trim()) {
+      setMemoryWikiResults([]);
+      return;
+    }
+    try {
+      const response = await invoke<MemoryWikiSearchResult[]>("wridian_search_memory_wiki", {
+        input: { query, limit: 6 },
+      });
+      setMemoryWikiResults(response);
       setMemoryError("");
     } catch (error) {
       setMemoryError(error instanceof Error ? error.message : String(error));
@@ -791,12 +850,17 @@ function App() {
           currentTitle={editorTitle}
           memoryError={memoryError}
           memoryState={memoryState}
+          graphState={memoryGraphState}
           onAcceptCandidate={acceptMemoryCandidate}
           onClose={() => setMemoryOpen(false)}
           onExtractCandidates={extractMemoryCandidates}
           onIgnoreCandidate={ignoreMemoryCandidate}
           onOpenMemoryFolder={openMemoryFolder}
+          onRebuildWiki={rebuildMemoryWiki}
+          onSearchWiki={searchMemoryWiki}
           onUpdateCandidate={updateMemoryCandidate}
+          searchQuery={memoryWikiSearch}
+          searchResults={memoryWikiResults}
           extracting={extractingMemory}
           workspace={workspace}
         />
@@ -1163,6 +1227,7 @@ function buildDraftSuggestionChunks(content: string, edits: DraftEdit[]): DraftS
 function MemoryDrawer({
   currentTitle,
   extracting,
+  graphState,
   memoryError,
   memoryState,
   onAcceptCandidate,
@@ -1170,11 +1235,16 @@ function MemoryDrawer({
   onExtractCandidates,
   onIgnoreCandidate,
   onOpenMemoryFolder,
+  onRebuildWiki,
+  onSearchWiki,
   onUpdateCandidate,
+  searchQuery,
+  searchResults,
   workspace,
 }: {
   currentTitle: string;
   extracting: boolean;
+  graphState: MemoryGraphState;
   memoryError: string;
   memoryState: MemoryState;
   onAcceptCandidate: (id: string) => void;
@@ -1182,7 +1252,11 @@ function MemoryDrawer({
   onExtractCandidates: () => void;
   onIgnoreCandidate: (id: string) => void;
   onOpenMemoryFolder: () => void;
+  onRebuildWiki: () => void;
+  onSearchWiki: (query: string) => void;
   onUpdateCandidate: (id: string, text: string) => void;
+  searchQuery: string;
+  searchResults: MemoryWikiSearchResult[];
   workspace: WorkspaceInfo | null;
 }) {
   return (
@@ -1197,6 +1271,9 @@ function MemoryDrawer({
             <button type="button" className="small-action" onClick={onOpenMemoryFolder}>
               文件夹
             </button>
+            <button type="button" className="small-action" onClick={onRebuildWiki}>
+              重建图谱
+            </button>
             <button type="button" className="icon-button" onClick={onClose} aria-label="关闭">
               ×
             </button>
@@ -1208,10 +1285,34 @@ function MemoryDrawer({
         <section className="memory-card">
           <h2>当前现场</h2>
           <p>{currentTitle}</p>
+          <p>图谱：{graphState.nodes.length} 节点 / {graphState.edges.length} 关系</p>
           <p>正文提取只会生成待确认记忆，由你决定是否写入。</p>
           <button type="button" className="extract-action" onClick={onExtractCandidates} disabled={extracting}>
             {extracting ? "提取中" : "从当前正文提取"}
           </button>
+        </section>
+
+        <section className="memory-card">
+          <h2>图谱检索</h2>
+          <input
+            className="memory-search"
+            value={searchQuery}
+            onChange={(event) => onSearchWiki(event.currentTarget.value)}
+            placeholder="搜索人物、设定、伏笔"
+            aria-label="搜索 Markdown 记忆图谱"
+          />
+          {searchResults.length ? (
+            <ul>
+              {searchResults.map((result) => (
+                <li key={result.path}>
+                  <span className="memory-category">{result.kind}</span>
+                  {result.title}：{result.snippet}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p>输入关键词检索 Markdown 图谱。</p>
+          )}
         </section>
 
         <section className="memory-card">

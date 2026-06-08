@@ -35,13 +35,13 @@
   - 追加迁移：新增 `src/chat/chatPersistence.ts` 与 `src-tauri/src/chat_persistence.rs`，聊天会话自动保存为 `.wridian/chat/<session>.md`，包含来源文件、用户/助手消息和上下文 pill。
   - 追加迁移：扩展 `src/chat/promptContext.ts` 的本地 pill 数据结构，新增 `PromptContextPillKind`，覆盖 selection、active-file、file、url、tool、memory；右侧输入区和消息上下文按类型显示 pill，为后续 Lexical DecoratorNode 留稳定数据接口。
   - 追加迁移：按 Copilot 的 `BasePillNode`、`URLPillNode`、`ToolPillNode`、`PastePlugin` 和 `GenericPillSyncPlugin` 复刻本地 `src/chat/promptPillNodes.tsx`，pill 真实进入 Lexical 树，并支持 URL/工具/图片粘贴解析、删除同步、文件内容缓存和 Project/Relevant/Vault 工具开关。
-  - 追加迁移：将当前工作区文件树 flatten 为 prompt file candidates，`@` 菜单支持文件名/路径检索并注入 `file` pill；暂未建立全文内容缓存。
+  - 追加迁移：将当前工作区文件树 flatten 为 prompt file candidates，`@` 菜单支持文件名/路径检索并注入 `file` pill；文件 pill 选中后会读取并缓存正文内容再参与上下文。
   - 追加迁移：参考 `obsidian-copilot/src/editor/replaceGuard.ts` 新增 `src/editor/draftReplaceGuard.ts`。正文 inline diff 只允许唯一命中且不重叠的 target 被渲染和确认；重复、找不到或重叠的修改会提示需要重新定位，避免误改第一处同名文本。
   - 追加迁移：选区 pill 现在保存 start/end/text 快照；ChatManager 会把匹配选区原文的 edit 标记为 `sourceRange`，replace guard 优先验证该范围，降低重复文本场景下的重新定位率。
-  - 追加迁移：新增 Claude-Obsidian 式 Markdown 记忆 vault 骨架 `.wridian/wiki/`，包含 sources、entities、concepts、index、hot、log；确认记忆时继续写 JSON，同时镜像为 Markdown 条目。
+  - 追加迁移：新增 Claude-Obsidian 式 Markdown 记忆 vault `.wridian/wiki/`，确认记忆时继续写 JSON，同时按 sources/entities/concepts 模板生成 Markdown 条目、index、hot context、log、wikilink、反链和 `.cache/index.json`；记忆抽屉接入图谱重建、节点/关系统计和本地检索。
   - 追加迁移：补短剧/剧本稿件模式。前端识别 `.fountain`、内景/外景/集/场和角色对白行；剧本模式下 `/` 增加分集节奏、场景钩子、对白口语化和场景成本检查命令；共创请求把稿件类型传到后端 prompt。
   - 追加迁移：按 Copilot Projects / Relevant Notes 复刻本地 Project Mode。新增 `src-tauri/src/projects.rs` 与 `src/chat/projectContext.ts`，项目状态保存到 `.wridian/projects/projects.json`；项目可提供模型覆盖、系统提示、inclusions/exclusions 和 URL。Relevant Notes 用本地全文词项重合加 wikilink/backlink 权重召回，右侧点击后注入 file pill。
-  - 暂未引入 Copilot 的完整自定义 pill node、图片 pill、URL pill、工具开关、模型选择、文件内容异步检索、ChatManager 和持久化；这些属于后续上下文系统，不再标记为已复刻。
+  - 当前剩余增强主要是完整模型池选择器、真实图片二进制内容处理、项目编辑/删除 UI 和语义向量召回；已接入 Lexical 自定义 pill node、URL/tool/image 元数据 pill、文件内容缓存、ChatManager、聊天持久化、Project Mode、Relevant Notes 和 Markdown 图谱。
 - 根页面和工作区固定视口高度，隐藏窗口级滚动；正文编辑器、文件树、右侧聊天消息区使用内部滚动。
 - 增加主题化滚动条样式。
 
