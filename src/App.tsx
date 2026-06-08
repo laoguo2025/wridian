@@ -18,6 +18,15 @@ import {
   KEY_ENTER_COMMAND,
   TextNode,
 } from "lexical";
+import {
+  createAssistantChatMessage,
+  createUserChatMessage,
+  findPreviousUserMessage,
+  restorePromptPillsFromMessage,
+  type ChatMessage,
+  type PromptContextPill,
+  type PromptSuggestion,
+} from "./chat/messageRepository";
 import "./App.css";
 
 type Theme = "light" | "dark";
@@ -76,27 +85,6 @@ type CoCreateEdit = {
 type DraftEdit = CoCreateEdit & {
   id: string;
   status: "pending" | "accepted" | "rejected";
-};
-
-type ChatMessage = {
-  id: string;
-  role: "user" | "assistant";
-  text: string;
-  selectedText?: string;
-};
-
-type PromptContextPill = {
-  id: string;
-  label: string;
-  value: string;
-};
-
-type PromptSuggestion = {
-  id: string;
-  label: string;
-  detail: string;
-  insertText: string;
-  kind: "context" | "command";
 };
 
 type MemoryItem = {
@@ -178,14 +166,12 @@ function App() {
     setMemoryOpen(false);
     setCocreating(true);
     setCocreationError("");
-    const promptContextText = promptPills.map((pill) => `【${pill.label}】\n${pill.value}`).join("\n\n");
-    const selectedText = (override?.selectedText ?? promptContextText).trim();
-    const userMessage: ChatMessage = {
-      id: `user-${Date.now()}`,
-      role: "user",
+    const userMessage = createUserChatMessage({
+      contextPills: override ? [] : promptPills,
+      selectedText: override?.selectedText,
       text: userInput,
-      selectedText: selectedText || undefined,
-    };
+    });
+    const selectedText = userMessage.selectedText ?? "";
     setChatMessages((messages) => [...messages, userMessage]);
     if (!override) setPromptPills([]);
     try {
@@ -198,14 +184,7 @@ function App() {
           selectedText: selectedText || null,
         },
       });
-      setChatMessages((messages) => [
-        ...messages,
-        {
-          id: `assistant-${Date.now()}`,
-          role: "assistant",
-          text: response.reply,
-        },
-      ]);
+      setChatMessages((messages) => [...messages, createAssistantChatMessage(response.reply)]);
       setPendingEdits((edits) => [
         ...edits,
         ...response.edits.map((edit, index) => ({ ...edit, id: `edit-${Date.now()}-${index}`, status: "pending" as const })),
@@ -447,9 +426,7 @@ function App() {
 
   const editUserMessage = (message: ChatMessage) => {
     setPrompt(message.text);
-    if (message.selectedText) {
-      setPromptPills([{ id: "selection", label: "选区", value: message.selectedText }]);
-    }
+    setPromptPills(restorePromptPillsFromMessage(message));
   };
 
   const retryLastUserMessage = (message: ChatMessage) => {
@@ -1226,12 +1203,15 @@ function ChatPanel({
       <div className="chat-thread" ref={threadRef}>
         {messages.length ? (
           messages.map((message, index) => {
-            const userForRetry = [...messages.slice(0, index)].reverse().find((item) => item.role === "user");
+            const userForRetry = findPreviousUserMessage(messages, index);
+            const contextPills = restorePromptPillsFromMessage(message);
             return (
               <article className={`chat-message ${message.role}`} key={message.id}>
               {message.selectedText ? (
                 <div className="message-context-row">
-                  <span className="message-context-pill">上下文</span>
+                  {contextPills.map((pill) => (
+                    <span className="message-context-pill" key={pill.id}>{pill.label}</span>
+                  ))}
                 </div>
               ) : null}
               <div className="chat-message-body">{message.text}</div>
