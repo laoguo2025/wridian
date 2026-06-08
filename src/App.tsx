@@ -454,10 +454,10 @@ function App() {
             <div className="rail-section-title">作品</div>
             <div className="file-toolbar" aria-label="文件操作">
               <button type="button" title="新建文件" aria-label="新建文件" onClick={() => void createFile()}>
-                ✎
+                <PencilIcon />
               </button>
               <button type="button" title="新建文件夹" aria-label="新建文件夹" onClick={() => void createFolder()}>
-                +
+                <FolderPlusIcon />
               </button>
             </div>
           </div>
@@ -476,13 +476,12 @@ function App() {
             ))}
           </div>
 
-          <div className="rail-divider" />
           <div className="rail-bottom">
             <button type="button" title="选择文件夹" aria-label="选择文件夹" onClick={() => void openWorkFolder()}>
-              ▣
+              <VaultIcon />
             </button>
-            <button type="button" title="文件区设置" aria-label="文件区设置" onClick={() => setSettingsOpen(true)}>
-              ⚙
+            <button type="button" title="系统设置" aria-label="系统设置" onClick={() => setSettingsOpen(true)}>
+              <SettingsIcon />
             </button>
           </div>
         </aside>
@@ -659,6 +658,45 @@ function FileContextMenuView({
 
 function baseName(path: string) {
   return path.replace(/[\\/]+$/g, "").split(/[\\/]/).pop() || path;
+}
+
+function PencilIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0 0-3L17.5 5.5a2.1 2.1 0 0 0-3 0L4 16v4Z" />
+      <path d="m13.5 6.5 4 4" />
+    </svg>
+  );
+}
+
+function FolderPlusIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H10l2 2h6.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5v-9Z" />
+      <path d="M12 11v5" />
+      <path d="M9.5 13.5h5" />
+    </svg>
+  );
+}
+
+function VaultIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17.5v-11Z" />
+      <path d="M8 8h8" />
+      <path d="M8 12h8" />
+      <path d="M8 16h5" />
+    </svg>
+  );
+}
+
+function SettingsIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z" />
+      <path d="M18.4 13.5a6.8 6.8 0 0 0 0-3l2-1.5-2-3.4-2.4 1a7.2 7.2 0 0 0-2.6-1.5L13 2.5h-4l-.4 2.6A7.2 7.2 0 0 0 6 6.6l-2.4-1-2 3.4 2 1.5a6.8 6.8 0 0 0 0 3l-2 1.5 2 3.4 2.4-1a7.2 7.2 0 0 0 2.6 1.5L9 21.5h4l.4-2.6a7.2 7.2 0 0 0 2.6-1.5l2.4 1 2-3.4-2-1.5Z" />
+    </svg>
+  );
 }
 
 function MemoryDrawer({
