@@ -35,6 +35,7 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 - 本地文件只支持 `md`、`markdown`、`txt`、`fountain`。
 - 文件读写只允许默认 Vault 或用户选择的工作目录内文件。
 - 文件区采用 Obsidian 式结构：顶部新建文件/文件夹/作品文件夹，树节点支持多层级展开/收回和右键菜单，底部系统设置。
+- 左侧文件区分为“作品库 / 知识库”标签页：作品库放作品项目、章节、剧本、分集、场景稿；知识库放人物、地点、设定、世界观、风格、禁区和资料摘录等知识卡。
 - 文件区“移到回收站”只移动到当前工作根目录 `.wridian-trash/`，不做永久删除。
 - 模型接入先支持一个 OpenAI-compatible 自定义 API。
 - 记忆 MVP 使用 `.wridian/memory-tree.json` 和 `.wridian/candidates.json`；模型只提取待确认候选，用户编辑确认后才写入长期记忆。
@@ -61,7 +62,7 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
   - `ChatSingleMessage.tsx` / `ChatButtons.tsx`：用户消息使用浅边框背景，AI 消息不做重卡片；消息动作放在底部紧凑行。
   - pill 节点：Wridian 已按 Copilot 的 `BasePillNode` / `URLPillNode` / `ToolPillNode` / `PastePlugin` / `GenericPillSyncPlugin` 形态引入本地 `PromptPillNode`，真实注册到 Lexical 编辑树；URL、工具、文件、图片、记忆等上下文会从 Lexical 树同步回 prompt pill 状态。
   - 输入控制：Wridian 底部控制条只显示当前模型或当前项目名，不再提供 Project / Relevant / Vault 这类泛化工具按钮；文件 pill 会优先读取并缓存文件内容再注入上下文；粘贴 URL、保留的工具标记和图片会生成结构化 pill。
-  - Project Mode / Relevant Notes：Wridian 已按 Copilot `Projects` 和 `findRelevantNotes` 方向接入本地项目状态。项目持久化到 `.wridian/projects/projects.json`，包含名称、描述、项目模型、系统提示、inclusions/exclusions 和 URL；右侧可切换/创建项目。Relevant Notes 使用工作区本地全文词项重合 + wikilink/backlink 加权召回，点击可把相关稿件作为 file pill 注入。
+  - Project Mode / Relevant Notes：Wridian 的 Project Mode 已对齐作品项目，右侧下拉来自作品库顶层作品文件夹，不再提供手动“新建 Project”；打开作品文件时自动切换到所属作品项目。Relevant Notes 使用工作区本地全文词项重合 + wikilink/backlink 加权召回，点击可把相关稿件作为 file pill 注入。
 - 记忆命中、注入和上下文选择默认在后台执行，不在右侧对话区常驻展示“本次使用的记忆”等系统说明；记忆面板只由顶部“记忆”、显式“从当前正文提取”或“记住这条”动作打开。
 - 右侧侧边面板应支持模式切换，第一版至少区分“共创”和“记忆”。
 - 记忆提取是显式动作；模型不得在普通共创发送时直接写长期记忆。
@@ -90,9 +91,10 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 ## 记忆存储
 
 - 记忆文件夹：Wridian 数据目录下的 `.wridian/`。
+- 记忆作用域：普通聊天使用全局记忆；作品库顶层作品文件夹各自拥有独立作品记忆；知识库拥有独立知识卡记忆，可作为 `@` 知识卡来源但不默认混进作品记忆。
 - 聊天记录：`.wridian/chat/*.md`，每个运行会话保存为 Markdown，包含 frontmatter、来源文件、用户/助手消息和上下文 pill。
-- 长期记忆：`.wridian/memory-tree.json`。
-- 候选记忆：`.wridian/candidates.json`。
+- 长期记忆：兼容保留 `.wridian/memory-tree.json`，新增作用域记忆位于 `.wridian/memory/global/`、`.wridian/memory/projects/` 和 `.wridian/memory/knowledge/`。
+- 候选记忆：兼容保留 `.wridian/candidates.json`，新增待确认记忆跟随对应作用域保存。
 - Markdown 记忆 vault：`.wridian/wiki/` 是 JSON 记忆树的派生图谱层，包含 `sources/`、`entities/`、`concepts/`、`index.md`、`hot.md`、`log.md` 和 `.cache/index.json`。确认记忆时继续写 `.wridian/memory-tree.json`，并按 Claude-Obsidian 式 source/entity/concept 模板生成 Markdown 条目、wikilink、反链、hot context、图谱缓存和本地检索索引；记忆抽屉可重建图谱并搜索人物、设定、伏笔。
 - 记忆条目支持写作分类：人物、世界观、剧情线、风格、禁区、其他。
 - 模型提取不得直接写入长期记忆，必须经过候选、编辑、确认。

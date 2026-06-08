@@ -1,8 +1,9 @@
 use crate::model_accounts::{read_custom_api_settings, StoredCustomApiSettings};
 use crate::runtime::{
-    candidates_path, ensure_workspace, iso_timestamp, memory_folder_path, memory_tree_path,
-    memory_wiki_root, next_runtime_id, wridian_data_dir,
+    candidates_path, ensure_workspace, iso_timestamp, knowledge_root, memory_folder_path, memory_tree_path,
+    memory_wiki_root, next_runtime_id, vault_root, wridian_data_dir,
 };
+use crate::workspace::works_root;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
@@ -40,6 +41,12 @@ pub(crate) struct ExtractMemoryCandidatesInput {
     source_path: String,
     title: String,
     content: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MemoryScopeInput {
+    source_path: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -119,18 +126,25 @@ pub(crate) struct MemoryGraphEdge {
 pub(crate) fn wridian_get_memory_state() -> Result<MemoryStateResponse, String> {
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
-    Ok(MemoryStateResponse {
-        memories: read_memory_items(&data_dir)?,
-        candidates: read_memory_candidates(&data_dir)?,
-        memory_folder_path: memory_folder_path(&data_dir).to_string_lossy().into_owned(),
-    })
+    memory_state_for_scope(&data_dir, &MemoryScope::Global)
+}
+
+#[tauri::command]
+pub(crate) fn wridian_get_memory_state_for_source(
+    input: MemoryScopeInput,
+) -> Result<MemoryStateResponse, String> {
+    let data_dir = wridian_data_dir()?;
+    ensure_workspace(&data_dir)?;
+    let source_path = input.source_path.unwrap_or_default();
+    let scope = memory_scope_for_source(&data_dir, &source_path)?;
+    memory_state_for_scope(&data_dir, &scope)
 }
 
 #[tauri::command]
 pub(crate) fn wridian_ingest_memory_wiki() -> Result<MemoryGraphResponse, String> {
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
-    let memories = read_memory_items(&data_dir)?;
+    let memories = read_all_memory_items(&data_dir)?;
     write_memory_wiki(&data_dir, &memories)?;
     read_memory_graph(&data_dir)
 }
@@ -160,7 +174,9 @@ pub(crate) fn wridian_create_memory_candidate(
 ) -> Result<MemoryStateResponse, String> {
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
-    let mut candidates = read_memory_candidates(&data_dir)?;
+    let scope = memory_scope_for_source(&data_dir, &input.source_path)?;
+    let scope_paths = MemoryScopePaths::new(&data_dir, &scope)?;
+    let mut candidates = read_memory_candidates_at(&scope_paths.candidates_path)?;
     let created_at = iso_timestamp();
     for text in propose_memory_texts(&input) {
         if candidates.iter().any(|candidate| candidate.text == text) {
@@ -175,12 +191,8 @@ pub(crate) fn wridian_create_memory_candidate(
             created_at: created_at.clone(),
         });
     }
-    write_memory_candidates(&data_dir, &candidates)?;
-    Ok(MemoryStateResponse {
-        memories: read_memory_items(&data_dir)?,
-        candidates,
-        memory_folder_path: memory_folder_path(&data_dir).to_string_lossy().into_owned(),
-    })
+    write_memory_candidates_at(&scope_paths.candidates_path, &candidates)?;
+    memory_state_for_scope_paths(&scope_paths)
 }
 
 #[tauri::command]
@@ -189,6 +201,8 @@ pub(crate) async fn wridian_extract_memory_candidates(
 ) -> Result<MemoryStateResponse, String> {
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
+    let scope = memory_scope_for_source(&data_dir, &input.source_path)?;
+    let scope_paths = MemoryScopePaths::new(&data_dir, &scope)?;
     let content = input.content.trim();
     if content.is_empty() {
         return Err("当前正文为空，无法提取记忆。".to_string());
@@ -200,7 +214,7 @@ pub(crate) async fn wridian_extract_memory_candidates(
         return Err("模型没有提取到可用的候选记忆。".to_string());
     }
 
-    let mut candidates = read_memory_candidates(&data_dir)?;
+    let mut candidates = read_memory_candidates_at(&scope_paths.candidates_path)?;
     let created_at = iso_timestamp();
     for extracted_candidate in extracted {
         if candidates
@@ -219,12 +233,8 @@ pub(crate) async fn wridian_extract_memory_candidates(
         });
     }
 
-    write_memory_candidates(&data_dir, &candidates)?;
-    Ok(MemoryStateResponse {
-        memories: read_memory_items(&data_dir)?,
-        candidates,
-        memory_folder_path: memory_folder_path(&data_dir).to_string_lossy().into_owned(),
-    })
+    write_memory_candidates_at(&scope_paths.candidates_path, &candidates)?;
+    memory_state_for_scope_paths(&scope_paths)
 }
 
 #[tauri::command]
@@ -237,18 +247,20 @@ pub(crate) fn wridian_update_memory_candidate(
     if text.is_empty() {
         return Err("候选记忆不能为空。".to_string());
     }
-    let mut candidates = read_memory_candidates(&data_dir)?;
+    let mut candidates = read_all_memory_candidates(&data_dir)?;
     let candidate = candidates
         .iter_mut()
         .find(|candidate| candidate.id == input.id)
         .ok_or_else(|| "待确认记忆不存在。".to_string())?;
     candidate.text = text;
-    write_memory_candidates(&data_dir, &candidates)?;
-    Ok(MemoryStateResponse {
-        memories: read_memory_items(&data_dir)?,
-        candidates,
-        memory_folder_path: memory_folder_path(&data_dir).to_string_lossy().into_owned(),
-    })
+    write_candidate_back_to_scope(&data_dir, &input.id, &candidates)?;
+    let scope = candidates
+        .iter()
+        .find(|candidate| candidate.id == input.id)
+        .map(|candidate| memory_scope_for_source(&data_dir, &candidate.source_path))
+        .transpose()?
+        .unwrap_or(MemoryScope::Global);
+    memory_state_for_scope(&data_dir, &scope)
 }
 
 #[tauri::command]
@@ -257,13 +269,15 @@ pub(crate) fn wridian_accept_memory_candidate(
 ) -> Result<MemoryStateResponse, String> {
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
-    let mut candidates = read_memory_candidates(&data_dir)?;
+    let mut candidates = read_all_memory_candidates(&data_dir)?;
     let index = candidates
         .iter()
         .position(|candidate| candidate.id == input.id)
         .ok_or_else(|| "待确认记忆不存在。".to_string())?;
     let candidate = candidates.remove(index);
-    let mut memories = read_memory_items(&data_dir)?;
+    let scope = memory_scope_for_source(&data_dir, &candidate.source_path)?;
+    let scope_paths = MemoryScopePaths::new(&data_dir, &scope)?;
+    let mut memories = read_memory_items_at(&scope_paths.memory_tree_path)?;
     if !memories.iter().any(|memory| memory.text == candidate.text) {
         memories.push(MemoryItem {
             id: next_runtime_id("memory"),
@@ -274,13 +288,10 @@ pub(crate) fn wridian_accept_memory_candidate(
             created_at: candidate.created_at,
         });
     }
-    write_memory_items(&data_dir, &memories)?;
-    write_memory_candidates(&data_dir, &candidates)?;
-    Ok(MemoryStateResponse {
-        memories,
-        candidates,
-        memory_folder_path: memory_folder_path(&data_dir).to_string_lossy().into_owned(),
-    })
+    write_memory_items_at(&scope_paths.memory_tree_path, &memories)?;
+    write_memory_wiki(&data_dir, &read_all_memory_items(&data_dir)?)?;
+    remove_candidate_from_all_scopes(&data_dir, &input.id)?;
+    memory_state_for_scope_paths(&scope_paths)
 }
 
 #[tauri::command]
@@ -289,18 +300,16 @@ pub(crate) fn wridian_ignore_memory_candidate(
 ) -> Result<MemoryStateResponse, String> {
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
-    let mut candidates = read_memory_candidates(&data_dir)?;
-    candidates.retain(|candidate| candidate.id != input.id);
-    write_memory_candidates(&data_dir, &candidates)?;
-    Ok(MemoryStateResponse {
-        memories: read_memory_items(&data_dir)?,
-        candidates,
-        memory_folder_path: memory_folder_path(&data_dir).to_string_lossy().into_owned(),
-    })
+    let scope = find_candidate_scope(&data_dir, &input.id)?.unwrap_or(MemoryScope::Global);
+    remove_candidate_from_all_scopes(&data_dir, &input.id)?;
+    memory_state_for_scope(&data_dir, &scope)
 }
 
 fn read_memory_items(data_dir: &Path) -> Result<Vec<MemoryItem>, String> {
-    let path = memory_tree_path(data_dir);
+    read_memory_items_at(&memory_tree_path(data_dir))
+}
+
+fn read_memory_items_at(path: &Path) -> Result<Vec<MemoryItem>, String> {
     if !path.exists() {
         return Ok(Vec::new());
     }
@@ -321,7 +330,13 @@ pub(crate) fn read_relevant_memory_snippets(
     title: &str,
     limit: usize,
 ) -> Result<Vec<String>, String> {
-    let memories = read_memory_items(data_dir)?;
+    let mut memories = read_memory_items(data_dir)?;
+    memories.extend(read_memory_items_at(&MemoryScopePaths::new(data_dir, &MemoryScope::Global)?.memory_tree_path)?);
+    let source_scope = memory_scope_for_source(data_dir, source_path)?;
+    if !matches!(source_scope, MemoryScope::Global) {
+        memories.extend(read_memory_items_at(&MemoryScopePaths::new(data_dir, &source_scope)?.memory_tree_path)?);
+    }
+    memories.extend(read_memory_items_at(&MemoryScopePaths::new(data_dir, &MemoryScope::Knowledge)?.memory_tree_path)?);
     let mut matched = Vec::new();
     let mut fallback = Vec::new();
 
@@ -339,15 +354,16 @@ pub(crate) fn read_relevant_memory_snippets(
     Ok(matched)
 }
 
-fn write_memory_items(data_dir: &Path, memories: &[MemoryItem]) -> Result<(), String> {
+fn write_memory_items_at(path: &Path, memories: &[MemoryItem]) -> Result<(), String> {
     let content = serde_json::to_string_pretty(&json!({
         "schemaVersion": 1,
         "memories": memories
     }))
     .map_err(|error| error.to_string())?;
-    fs::write(memory_tree_path(data_dir), content)
-        .map_err(|error| format!("记忆树写入失败：{error}"))?;
-    write_memory_wiki(data_dir, memories)
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("记忆目录创建失败：{error}"))?;
+    }
+    fs::write(path, content).map_err(|error| format!("记忆树写入失败：{error}"))
 }
 
 fn write_memory_wiki(data_dir: &Path, memories: &[MemoryItem]) -> Result<(), String> {
@@ -404,6 +420,191 @@ fn write_memory_wiki(data_dir: &Path, memories: &[MemoryItem]) -> Result<(), Str
     fs::write(cache.join("index.json"), render_wiki_cache(&pages, &graph)?)
         .map_err(|error| format!("记忆检索缓存写入失败：{error}"))?;
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MemoryScope {
+    Global,
+    Knowledge,
+    Project { id: String, name: String },
+}
+
+struct MemoryScopePaths {
+    candidates_path: std::path::PathBuf,
+    folder_path: std::path::PathBuf,
+    memory_tree_path: std::path::PathBuf,
+}
+
+impl MemoryScopePaths {
+    fn new(data_dir: &Path, scope: &MemoryScope) -> Result<Self, String> {
+        let folder_path = match scope {
+            MemoryScope::Global => memory_folder_path(data_dir).join("memory").join("global"),
+            MemoryScope::Knowledge => memory_folder_path(data_dir).join("memory").join("knowledge"),
+            MemoryScope::Project { id, name } => memory_folder_path(data_dir)
+                .join("memory")
+                .join("projects")
+                .join(format!("{}-{}", sanitize_markdown_file_name(name), stable_scope_id(id))),
+        };
+        Ok(Self {
+            candidates_path: folder_path.join("candidates.json"),
+            memory_tree_path: folder_path.join("memory-tree.json"),
+            folder_path,
+        })
+    }
+}
+
+fn memory_state_for_scope(data_dir: &Path, scope: &MemoryScope) -> Result<MemoryStateResponse, String> {
+    let paths = MemoryScopePaths::new(data_dir, scope)?;
+    if matches!(scope, MemoryScope::Global) {
+        let mut memories = read_memory_items(data_dir)?;
+        memories.extend(read_memory_items_at(&paths.memory_tree_path)?);
+        let mut candidates = read_memory_candidates(data_dir)?;
+        candidates.extend(read_memory_candidates_at(&paths.candidates_path)?);
+        return Ok(MemoryStateResponse {
+            memories,
+            candidates,
+            memory_folder_path: paths.folder_path.to_string_lossy().into_owned(),
+        });
+    }
+    memory_state_for_scope_paths(&paths)
+}
+
+fn memory_state_for_scope_paths(paths: &MemoryScopePaths) -> Result<MemoryStateResponse, String> {
+    Ok(MemoryStateResponse {
+        memories: read_memory_items_at(&paths.memory_tree_path)?,
+        candidates: read_memory_candidates_at(&paths.candidates_path)?,
+        memory_folder_path: paths.folder_path.to_string_lossy().into_owned(),
+    })
+}
+
+fn memory_scope_for_source(data_dir: &Path, source_path: &str) -> Result<MemoryScope, String> {
+    let trimmed = source_path.trim();
+    if trimmed.is_empty() {
+        return Ok(MemoryScope::Global);
+    }
+    let path = std::path::PathBuf::from(trimmed);
+    let canonical = path.canonicalize().unwrap_or(path);
+    let knowledge = knowledge_root(data_dir).canonicalize().unwrap_or_else(|_| knowledge_root(data_dir));
+    if canonical.starts_with(&knowledge) {
+        return Ok(MemoryScope::Knowledge);
+    }
+    let works = works_root(data_dir)?.canonicalize().unwrap_or(works_root(data_dir)?);
+    if canonical.starts_with(&works) {
+        if let Ok(relative) = canonical.strip_prefix(&works) {
+            if let Some(first) = relative.components().next() {
+                let name = first.as_os_str().to_string_lossy().into_owned();
+                let project_path = works.join(&name);
+                if project_path.is_dir() {
+                    return Ok(MemoryScope::Project {
+                        id: project_path.to_string_lossy().into_owned(),
+                        name,
+                    });
+                }
+            }
+        }
+    }
+    let vault = vault_root(data_dir).canonicalize().unwrap_or_else(|_| vault_root(data_dir));
+    if canonical.starts_with(&vault) {
+        return Ok(MemoryScope::Knowledge);
+    }
+    Ok(MemoryScope::Global)
+}
+
+fn read_all_memory_items(data_dir: &Path) -> Result<Vec<MemoryItem>, String> {
+    let mut items = read_memory_items(data_dir)?;
+    for paths in all_scope_paths(data_dir)? {
+        items.extend(read_memory_items_at(&paths.memory_tree_path)?);
+    }
+    Ok(items)
+}
+
+fn read_all_memory_candidates(data_dir: &Path) -> Result<Vec<MemoryCandidate>, String> {
+    let mut items = read_memory_candidates(data_dir)?;
+    for paths in all_scope_paths(data_dir)? {
+        items.extend(read_memory_candidates_at(&paths.candidates_path)?);
+    }
+    Ok(items)
+}
+
+fn all_scope_paths(data_dir: &Path) -> Result<Vec<MemoryScopePaths>, String> {
+    let mut paths = vec![
+        MemoryScopePaths::new(data_dir, &MemoryScope::Global)?,
+        MemoryScopePaths::new(data_dir, &MemoryScope::Knowledge)?,
+    ];
+    let works = works_root(data_dir)?;
+    if works.is_dir() {
+        for entry in fs::read_dir(works).map_err(|error| format!("作品记忆目录读取失败：{error}"))? {
+            let entry = entry.map_err(|error| format!("作品记忆目录读取失败：{error}"))?;
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            paths.push(MemoryScopePaths::new(data_dir, &MemoryScope::Project {
+                id: path.to_string_lossy().into_owned(),
+                name,
+            })?);
+        }
+    }
+    Ok(paths)
+}
+
+fn find_candidate_scope(data_dir: &Path, candidate_id: &str) -> Result<Option<MemoryScope>, String> {
+    for candidate in read_all_memory_candidates(data_dir)? {
+        if candidate.id == candidate_id {
+            return memory_scope_for_source(data_dir, &candidate.source_path).map(Some);
+        }
+    }
+    Ok(None)
+}
+
+fn remove_candidate_from_all_scopes(data_dir: &Path, candidate_id: &str) -> Result<(), String> {
+    for paths in all_scope_paths(data_dir)? {
+        let mut candidates = read_memory_candidates_at(&paths.candidates_path)?;
+        let original_len = candidates.len();
+        candidates.retain(|candidate| candidate.id != candidate_id);
+        if candidates.len() != original_len {
+            write_memory_candidates_at(&paths.candidates_path, &candidates)?;
+        }
+    }
+    let mut legacy = read_memory_candidates(data_dir)?;
+    let original_len = legacy.len();
+    legacy.retain(|candidate| candidate.id != candidate_id);
+    if legacy.len() != original_len {
+        write_memory_candidates(data_dir, &legacy)?;
+    }
+    Ok(())
+}
+
+fn write_candidate_back_to_scope(
+    data_dir: &Path,
+    candidate_id: &str,
+    all_candidates: &[MemoryCandidate],
+) -> Result<(), String> {
+    let Some(candidate) = all_candidates.iter().find(|candidate| candidate.id == candidate_id) else {
+        return Ok(());
+    };
+    let scope = memory_scope_for_source(data_dir, &candidate.source_path)?;
+    let paths = MemoryScopePaths::new(data_dir, &scope)?;
+    let mut scoped = read_memory_candidates_at(&paths.candidates_path)?;
+    for item in &mut scoped {
+        if item.id == candidate_id {
+            *item = candidate.clone();
+        }
+    }
+    write_memory_candidates_at(&paths.candidates_path, &scoped)
+}
+
+fn stable_scope_id(value: &str) -> String {
+    let mut hash: u64 = 1469598103934665603;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(1099511628211);
+    }
+    format!("{hash:x}")
 }
 
 #[derive(Debug, Clone)]
@@ -585,7 +786,7 @@ fn search_memory_wiki(
 ) -> Result<Vec<MemoryWikiSearchResult>, String> {
     let cache_path = memory_wiki_root(data_dir).join(".cache").join("index.json");
     if !cache_path.exists() {
-        write_memory_wiki(data_dir, &read_memory_items(data_dir)?)?;
+        write_memory_wiki(data_dir, &read_all_memory_items(data_dir)?)?;
     }
     let content = fs::read_to_string(&cache_path).map_err(|error| format!("记忆检索缓存读取失败：{error}"))?;
     let value: serde_json::Value =
@@ -630,7 +831,7 @@ fn search_memory_wiki(
 fn read_memory_graph(data_dir: &Path) -> Result<MemoryGraphResponse, String> {
     let cache_path = memory_wiki_root(data_dir).join(".cache").join("index.json");
     if !cache_path.exists() {
-        write_memory_wiki(data_dir, &read_memory_items(data_dir)?)?;
+        write_memory_wiki(data_dir, &read_all_memory_items(data_dir)?)?;
     }
     let content = fs::read_to_string(&cache_path).map_err(|error| format!("记忆图谱缓存读取失败：{error}"))?;
     let value: serde_json::Value =
@@ -679,7 +880,10 @@ fn escape_yaml(value: &str) -> String {
 }
 
 fn read_memory_candidates(data_dir: &Path) -> Result<Vec<MemoryCandidate>, String> {
-    let path = candidates_path(data_dir);
+    read_memory_candidates_at(&candidates_path(data_dir))
+}
+
+fn read_memory_candidates_at(path: &Path) -> Result<Vec<MemoryCandidate>, String> {
     if !path.exists() {
         return Ok(Vec::new());
     }
@@ -696,13 +900,19 @@ fn read_memory_candidates(data_dir: &Path) -> Result<Vec<MemoryCandidate>, Strin
 }
 
 fn write_memory_candidates(data_dir: &Path, candidates: &[MemoryCandidate]) -> Result<(), String> {
+    write_memory_candidates_at(&candidates_path(data_dir), candidates)
+}
+
+fn write_memory_candidates_at(path: &Path, candidates: &[MemoryCandidate]) -> Result<(), String> {
     let content = serde_json::to_string_pretty(&json!({
         "schemaVersion": 1,
         "items": candidates
     }))
     .map_err(|error| error.to_string())?;
-    fs::write(candidates_path(data_dir), content)
-        .map_err(|error| format!("待确认记忆写入失败：{error}"))
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("待确认记忆目录创建失败：{error}"))?;
+    }
+    fs::write(path, content).map_err(|error| format!("待确认记忆写入失败：{error}"))
 }
 
 fn propose_memory_texts(input: &CreateMemoryCandidateInput) -> Vec<String> {

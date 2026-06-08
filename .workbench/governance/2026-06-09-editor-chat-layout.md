@@ -42,6 +42,9 @@
   - 追加迁移：补短剧/剧本稿件模式。前端识别 `.fountain`、内景/外景/集/场和角色对白行；剧本模式下 `/` 增加分集节奏、场景钩子、对白口语化和场景成本检查命令；共创请求把稿件类型传到后端 prompt。
   - 追加迁移：按 Copilot Projects / Relevant Notes 复刻本地 Project Mode。新增 `src-tauri/src/projects.rs` 与 `src/chat/projectContext.ts`，项目状态保存到 `.wridian/projects/projects.json`；项目可提供模型覆盖、系统提示、inclusions/exclusions 和 URL。Relevant Notes 用本地全文词项重合加 wikilink/backlink 权重召回，右侧点击后注入 file pill。
   - 当前剩余增强主要是完整模型池选择器、真实图片二进制内容处理、项目编辑/删除 UI 和语义向量召回；已接入 Lexical 自定义 pill node、URL/tool/image 元数据 pill、文件内容缓存、ChatManager、聊天持久化、Project Mode、Relevant Notes 和 Markdown 图谱。
+  - 追加收敛：Project Mode 改为从作品库顶层作品文件夹派生，右侧下拉不再提供“新建”；打开作品文件会自动切换到所属作品项目。
+  - 追加收敛：左侧文件区增加“作品库 / 知识库”标签。作品库管理作品文件夹和稿件；知识库管理知识卡文件。
+  - 追加收敛：记忆按作用域保存。普通聊天使用全局记忆；作品文件夹拥有独立作品记忆；知识库拥有独立知识卡记忆，`@` 菜单只显示当前加载作用域的知识卡。
 - 根页面和工作区固定视口高度，隐藏窗口级滚动；正文编辑器、文件树、右侧聊天消息区使用内部滚动。
 - 增加主题化滚动条样式。
 

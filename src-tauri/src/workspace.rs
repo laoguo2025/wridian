@@ -1,5 +1,5 @@
 use crate::runtime::{
-    ensure_workspace, iso_timestamp, vault_root, workspace_config_path, wridian_data_dir,
+    ensure_workspace, iso_timestamp, knowledge_root, vault_root, workspace_config_path, wridian_data_dir,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -14,6 +14,8 @@ pub(crate) struct WorkspaceInfo {
     files_root_path: String,
     active_work_root: Option<String>,
     files: Vec<WorkFileNode>,
+    knowledge_root_path: String,
+    knowledge_files: Vec<WorkFileNode>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -215,6 +217,8 @@ fn workspace_info(data_dir: &Path) -> Result<WorkspaceInfo, String> {
         files_root_path: files_root.to_string_lossy().into_owned(),
         active_work_root: read_active_work_root(data_dir)?,
         files: read_work_tree(&files_root)?,
+        knowledge_root_path: knowledge_root(data_dir).to_string_lossy().into_owned(),
+        knowledge_files: read_work_tree(&knowledge_root(data_dir))?,
     })
 }
 
@@ -270,14 +274,12 @@ fn read_work_tree(root: &Path) -> Result<Vec<WorkFileNode>, String> {
         }
         if path.is_dir() {
             let children = read_work_tree(&path)?;
-            if !children.is_empty() {
-                nodes.push(WorkFileNode {
-                    name,
-                    path: path.to_string_lossy().into_owned(),
-                    folder: true,
-                    children,
-                });
-            }
+            nodes.push(WorkFileNode {
+                name,
+                path: path.to_string_lossy().into_owned(),
+                folder: true,
+                children,
+            });
         } else if is_supported_writing_file(&path) {
             nodes.push(WorkFileNode {
                 name,
@@ -367,6 +369,14 @@ pub(crate) fn allowed_work_roots(data_dir: &Path) -> Result<Vec<PathBuf>, String
     let mut roots = vec![vault_root(data_dir)
         .canonicalize()
         .map_err(|error| format!("默认写作目录解析失败：{error}"))?];
+    let knowledge = knowledge_root(data_dir);
+    if knowledge.is_dir() {
+        roots.push(
+            knowledge
+                .canonicalize()
+                .map_err(|error| format!("知识库目录解析失败：{error}"))?,
+        );
+    }
     if let Some(root) = read_active_work_root(data_dir)? {
         let path = PathBuf::from(root);
         if path.is_dir() {
@@ -377,6 +387,10 @@ pub(crate) fn allowed_work_roots(data_dir: &Path) -> Result<Vec<PathBuf>, String
         }
     }
     Ok(roots)
+}
+
+pub(crate) fn works_root(data_dir: &Path) -> Result<PathBuf, String> {
+    files_root(data_dir)
 }
 
 fn containing_work_root(data_dir: &Path, path: &Path) -> Result<Option<PathBuf>, String> {

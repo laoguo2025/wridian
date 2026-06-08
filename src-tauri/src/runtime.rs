@@ -16,6 +16,10 @@ pub(crate) fn vault_root(data_dir: &Path) -> PathBuf {
     data_dir.join(WRIDIAN_VAULT_DIR_NAME)
 }
 
+pub(crate) fn knowledge_root(data_dir: &Path) -> PathBuf {
+    vault_root(data_dir).join("knowledge")
+}
+
 pub(crate) fn runtime_root(data_dir: &Path) -> PathBuf {
     data_dir.join(WRIDIAN_RUNTIME_DIR_NAME)
 }
@@ -47,6 +51,7 @@ pub(crate) fn memory_wiki_root(data_dir: &Path) -> PathBuf {
 pub(crate) fn ensure_workspace(data_dir: &Path) -> Result<(), String> {
     let vault = vault_root(data_dir);
     let works = vault.join("works");
+    let knowledge = knowledge_root(data_dir);
     let runtime = runtime_root(data_dir);
     let sessions = runtime.join("sessions");
     let episodes = runtime.join("episodes");
@@ -59,6 +64,7 @@ pub(crate) fn ensure_workspace(data_dir: &Path) -> Result<(), String> {
     for dir in [
         &vault,
         &works,
+        &knowledge,
         &runtime,
         &sessions,
         &episodes,
@@ -80,8 +86,12 @@ pub(crate) fn ensure_workspace(data_dir: &Path) -> Result<(), String> {
         "# 创作记忆\n\n## 方法\n\n## 审美\n\n## 禁区\n",
     )?;
     write_if_missing(
-        &works.join("雾城手记.md"),
+        &works.join("雾城手记").join("正文.md"),
         "# 雾城手记\n\n## 作品状态\n\n- 当前示例章节：第三章：雨夜。\n\n## 人物\n\n## 设定\n\n## 伏笔\n\n## 开放问题\n",
+    )?;
+    write_if_missing(
+        &knowledge.join("知识卡示例.md"),
+        "# 知识卡示例\n\n分类：设定\n\n这里可以放人物、地点、设定、世界观、风格、禁区或资料摘录。\n",
     )?;
     write_if_missing(
         &runtime.join("active-context.json"),

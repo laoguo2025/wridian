@@ -9,7 +9,6 @@ import { ChatPanel } from "./chat/ChatPanel";
 import {
   findRelevantNotes,
   getProjectState,
-  saveProject,
   selectProject,
   type ProjectState,
   type RelevantNote,
@@ -40,6 +39,8 @@ type WorkspaceInfo = {
   filesRootPath: string;
   activeWorkRoot?: string | null;
   files: WorkFileNode[];
+  knowledgeRootPath: string;
+  knowledgeFiles: WorkFileNode[];
 };
 
 type WorkFileNode = {
@@ -150,6 +151,7 @@ function App() {
   const [memoryGraphState, setMemoryGraphState] = useState<MemoryGraphState>({ nodes: [], edges: [] });
   const [extractingMemory, setExtractingMemory] = useState(false);
   const [fileMenu, setFileMenu] = useState<FileContextMenu | null>(null);
+  const [libraryTab, setLibraryTab] = useState<"works" | "knowledge">("works");
   const draftEditorRef = useRef<HTMLDivElement | null>(null);
   const draftSelectionRef = useRef<TextSelection>({ start: editorContent.length, end: editorContent.length });
   const appendDraftEdits = useCallback((edits: DraftEdit[]) => {
@@ -161,6 +163,18 @@ function App() {
   const loadMemoryState = useCallback(async () => {
     try {
       const response = await invoke<MemoryState>("wridian_get_memory_state");
+      setMemoryState(response.memories.length || response.candidates.length ? response : { memories: [], candidates: [] });
+      setMemoryError("");
+    } catch (error) {
+      setMemoryError(error instanceof Error ? error.message : String(error));
+    }
+  }, []);
+
+  const loadMemoryStateForSource = useCallback(async (sourcePath: string) => {
+    try {
+      const response = await invoke<MemoryState>("wridian_get_memory_state_for_source", {
+        input: { sourcePath },
+      });
       setMemoryState(response.memories.length || response.candidates.length ? response : { memories: [], candidates: [] });
       setMemoryError("");
     } catch (error) {
@@ -236,6 +250,16 @@ function App() {
   }, [loadMemoryState]);
 
   useEffect(() => {
+    if (selectedPath) {
+      void loadMemoryStateForSource(selectedPath);
+    } else if (libraryTab === "knowledge" && workspace?.knowledgeRootPath) {
+      void loadMemoryStateForSource(workspace.knowledgeRootPath);
+    } else {
+      void loadMemoryState();
+    }
+  }, [libraryTab, loadMemoryState, loadMemoryStateForSource, selectedPath, workspace?.knowledgeRootPath]);
+
+  useEffect(() => {
     if (!memoryOpen) return;
     void loadMemoryGraph();
   }, [loadMemoryGraph, memoryOpen]);
@@ -250,9 +274,11 @@ function App() {
     void getProjectState()
       .then(setProjectState)
       .catch((error) => setProjectError(error instanceof Error ? error.message : String(error)));
-  }, []);
+  }, [workspace?.files.length, workspace?.filesRootPath]);
 
   const files = workspace?.files ?? [];
+  const knowledgeFiles = workspace?.knowledgeFiles ?? [];
+  const visibleFiles = libraryTab === "works" ? files : knowledgeFiles;
   const isRealFile = Boolean(selectedPath);
   const dirty = isRealFile && editorContent !== lastSavedContent;
   const activeProject = projectState.projects.find((project) => project.id === projectState.activeProjectId);
@@ -303,26 +329,6 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [editorContent, selectedPath, projectState.activeProjectId]);
 
-  const createProjectFromCurrentContext = async () => {
-    const name = window.prompt("新建 Project", editorTitle || "新项目");
-    if (!name) return;
-    try {
-      const response = await saveProject({
-        name,
-        description: selectedPath ? `围绕 ${baseName(selectedPath)} 的写作项目。` : "",
-        model: activeModelLabel && activeModelLabel !== "未配置模型" ? activeModelLabel : undefined,
-        systemPrompt: draftKind === "screenplay"
-          ? "你在这个项目中优先按短剧/剧本工作流协作，关注分集节奏、场次、对白可表演性、钩子和低成本拍摄约束。"
-          : "你在这个项目中优先按小说/长文写作工作流协作，关注人物动机、叙述节奏、伏笔和设定一致性。",
-        inclusions: selectedPath ? [baseName(selectedPath)] : [],
-      });
-      setProjectState(response);
-      setProjectError("");
-    } catch (error) {
-      setProjectError(error instanceof Error ? error.message : String(error));
-    }
-  };
-
   const switchProject = async (id: string) => {
     try {
       setProjectState(await selectProject(id || null));
@@ -351,7 +357,9 @@ function App() {
     setWorkspaceError("");
   };
 
-  const workspaceRootPath = workspace?.filesRootPath || workspace?.activeWorkRoot || workspace?.vaultPath || "";
+  const workspaceRootPath = libraryTab === "knowledge"
+    ? workspace?.knowledgeRootPath || ""
+    : workspace?.filesRootPath || workspace?.activeWorkRoot || workspace?.vaultPath || "";
 
   const runWorkspaceAction = async (action: () => Promise<WorkspaceInfo>) => {
     setWorkspaceError("");
@@ -438,6 +446,12 @@ function App() {
       setPromptPills([]);
       setPendingEdits([]);
       setSaveStatus("saved");
+      const project = projectState.projects.find((item) => response.path.startsWith(item.id));
+      if (project && project.id !== projectState.activeProjectId) {
+        void switchProject(project.id);
+      } else if (!project && projectState.activeProjectId) {
+        void switchProject("");
+      }
     } catch (error) {
       setSaveStatus("error");
       setSaveError(error instanceof Error ? error.message : String(error));
@@ -702,7 +716,14 @@ function App() {
       <div className="workspace">
         <aside className="project-rail" aria-label="作品">
           <div className="rail-topline">
-            <div className="rail-section-title">作品</div>
+            <div className="library-tabs" role="tablist" aria-label="资料库">
+              <button type="button" className={libraryTab === "works" ? "active" : ""} onClick={() => setLibraryTab("works")}>
+                作品库
+              </button>
+              <button type="button" className={libraryTab === "knowledge" ? "active" : ""} onClick={() => setLibraryTab("knowledge")}>
+                知识库
+              </button>
+            </div>
             <div className="file-toolbar" aria-label="文件操作">
               <button type="button" title="新建文件" aria-label="新建文件" onClick={() => void createFile()}>
                 <PencilIcon />
@@ -710,7 +731,7 @@ function App() {
               <button type="button" title="新建文件夹" aria-label="新建文件夹" onClick={() => void createFolder()}>
                 <FolderPlusIcon />
               </button>
-              <button type="button" title="作品文件夹" aria-label="作品文件夹" onClick={() => void openWorkFolder()}>
+              <button type="button" title="作品文件夹" aria-label="作品文件夹" onClick={() => void openWorkFolder()} disabled={libraryTab === "knowledge"}>
                 <WorkFolderIcon />
               </button>
             </div>
@@ -718,7 +739,7 @@ function App() {
           {workspaceError ? <div className="rail-error">{workspaceError}</div> : null}
 
           <div className="file-tree">
-            {files.map((node) => (
+            {visibleFiles.map((node) => (
               <FileNodeView
                 key={node.path}
                 node={node}
@@ -802,7 +823,6 @@ function App() {
           projects={projectState.projects}
           relevantNotes={relevantNotes}
           selectedProjectId={projectState.activeProjectId ?? ""}
-          onCreateProject={createProjectFromCurrentContext}
           onSelectProject={(id) => void switchProject(id)}
           onAddRelevantNote={(note) => void addFileToPrompt(note.title, note.path)}
           onPromptChange={setPrompt}

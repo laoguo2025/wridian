@@ -1,5 +1,5 @@
 use crate::runtime::{ensure_workspace, runtime_root, wridian_data_dir};
-use crate::workspace::{allowed_work_roots, is_supported_writing_file};
+use crate::workspace::{allowed_work_roots, is_supported_writing_file, works_root};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashSet;
@@ -171,14 +171,16 @@ pub(crate) fn active_project_model(data_dir: &Path) -> Result<Option<String>, St
 
 fn read_project_state(data_dir: &Path) -> Result<ProjectState, String> {
     let path = project_state_path(data_dir);
-    if !path.exists() {
-        return Ok(ProjectState {
+    let persisted = if !path.exists() {
+        ProjectState {
             active_project_id: None,
             projects: Vec::new(),
-        });
-    }
-    let content = fs::read_to_string(path).map_err(|error| format!("项目配置读取失败：{error}"))?;
-    serde_json::from_str(&content).map_err(|error| format!("项目配置格式损坏：{error}"))
+        }
+    } else {
+        let content = fs::read_to_string(path).map_err(|error| format!("项目配置读取失败：{error}"))?;
+        serde_json::from_str(&content).map_err(|error| format!("项目配置格式损坏：{error}"))?
+    };
+    derive_project_state_from_work_folders(data_dir, persisted)
 }
 
 fn write_project_state(data_dir: &Path, state: &ProjectState) -> Result<(), String> {
@@ -192,6 +194,57 @@ fn write_project_state(data_dir: &Path, state: &ProjectState) -> Result<(), Stri
 
 fn project_state_path(data_dir: &Path) -> PathBuf {
     runtime_root(data_dir).join("projects").join("projects.json")
+}
+
+fn derive_project_state_from_work_folders(
+    data_dir: &Path,
+    persisted: ProjectState,
+) -> Result<ProjectState, String> {
+    let root = works_root(data_dir)?;
+    let mut projects = Vec::new();
+    if root.is_dir() {
+        for entry in fs::read_dir(&root).map_err(|error| format!("作品项目目录读取失败：{error}"))? {
+            let entry = entry.map_err(|error| format!("作品项目目录读取失败：{error}"))?;
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') || matches!(name.as_str(), ".wridian" | ".wridian-trash" | "node_modules") {
+                continue;
+            }
+            let id = path
+                .canonicalize()
+                .unwrap_or(path.clone())
+                .to_string_lossy()
+                .into_owned();
+            let existing = persisted.projects.iter().find(|project| project.id == id);
+            projects.push(ProjectConfig {
+                id: id.clone(),
+                name,
+                description: existing.map(|project| project.description.clone()).unwrap_or_default(),
+                model: existing.and_then(|project| project.model.clone()),
+                system_prompt: existing
+                    .map(|project| project.system_prompt.clone())
+                    .filter(|prompt| !prompt.trim().is_empty())
+                    .unwrap_or_else(|| "当前作品项目的常驻上下文来自作品文件夹和该作品独立记忆。".to_string()),
+                inclusions: vec![id],
+                exclusions: existing.map(|project| project.exclusions.clone()).unwrap_or_default(),
+                web_urls: existing.map(|project| project.web_urls.clone()).unwrap_or_default(),
+                updated_at: existing
+                    .map(|project| project.updated_at.clone())
+                    .unwrap_or_else(crate::runtime::iso_timestamp),
+            });
+        }
+    }
+    projects.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    let active_project_id = persisted
+        .active_project_id
+        .filter(|id| projects.iter().any(|project| project.id == *id));
+    Ok(ProjectState {
+        active_project_id,
+        projects,
+    })
 }
 
 fn find_relevant_notes(

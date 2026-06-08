@@ -15,7 +15,6 @@ export function ChatPanel({
   messages,
   onAddToMemory,
   onAddRelevantNote,
-  onCreateProject,
   onCopy,
   onEditUserMessage,
   onPromptChange,
@@ -41,7 +40,6 @@ export function ChatPanel({
   messages: ChatMessage[];
   onAddToMemory: (text: string) => void;
   onAddRelevantNote: (note: RelevantNote) => void;
-  onCreateProject: () => void;
   onCopy: (text: string) => void;
   onEditUserMessage: (message: ChatMessage) => void;
   onPromptChange: (value: string) => void;
@@ -73,12 +71,11 @@ export function ChatPanel({
     <aside className="chat-panel" aria-label="对话区">
       <div className="chat-modebar">
         <select value={selectedProjectId} onChange={(event) => onSelectProject(event.currentTarget.value)} aria-label="Project Mode">
-          <option value="">Chat</option>
+          <option value="">普通聊天</option>
           {projects.map((project) => (
             <option value={project.id} key={project.id}>{project.name}</option>
           ))}
         </select>
-        <button type="button" onClick={onCreateProject}>新建</button>
       </div>
       {projectError ? <div className="chat-status error">{projectError}</div> : null}
       <div className="chat-thread" ref={threadRef}>

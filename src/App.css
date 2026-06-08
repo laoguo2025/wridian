@@ -188,6 +188,30 @@ button {
   padding: 2px 8px 4px;
 }
 
+.library-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 2px;
+}
+
+.library-tabs button {
+  min-height: 22px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 0 7px;
+  font-size: 11px;
+}
+
+.library-tabs button.active {
+  background: var(--bg-selected);
+  color: var(--text-primary);
+}
+
 .open-folder,
 .file-toolbar button,
 .rail-bottom button {
@@ -195,6 +219,11 @@ button {
   border-radius: 6px;
   background: transparent;
   color: var(--text-muted);
+}
+
+.file-toolbar button:disabled {
+  opacity: 0.35;
+  pointer-events: none;
 }
 
 .open-folder {
@@ -969,16 +998,6 @@ button {
   color: var(--text-primary);
   font-size: 12px;
   padding: 0 6px;
-}
-
-.chat-modebar button {
-  height: 26px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 12px;
-  padding: 0 7px;
 }
 
 .drawer-header {

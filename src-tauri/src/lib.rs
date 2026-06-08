@@ -31,6 +31,7 @@ pub fn run() {
             cocreation::wridian_cocreate,
             chat_persistence::wridian_save_chat_transcript,
             memory::wridian_get_memory_state,
+            memory::wridian_get_memory_state_for_source,
             memory::wridian_ingest_memory_wiki,
             memory::wridian_rebuild_memory_wiki_index,
             memory::wridian_search_memory_wiki,
