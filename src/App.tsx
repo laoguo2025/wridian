@@ -42,6 +42,27 @@ type TestCustomApiResponse = {
   message: string;
 };
 
+type MemoryItem = {
+  id: string;
+  text: string;
+  sourcePath: string;
+  title: string;
+  createdAt: string;
+};
+
+type MemoryCandidate = {
+  id: string;
+  text: string;
+  sourcePath: string;
+  title: string;
+  createdAt: string;
+};
+
+type MemoryState = {
+  memories: MemoryItem[];
+  candidates: MemoryCandidate[];
+};
+
 const fallbackFiles: WorkFileNode[] = [
   {
     name: "雾城手记",
@@ -91,6 +112,17 @@ const memoryItems = [
   "第三章要强化她进门前的主动选择。",
 ];
 
+const demoMemoryState: MemoryState = {
+  memories: memoryItems.map((text, index) => ({
+    id: `demo-memory-${index}`,
+    text,
+    sourcePath: "demo://chapters/03.md",
+    title: "03.md",
+    createdAt: "demo",
+  })),
+  candidates: [],
+};
+
 function App() {
   const [theme, setTheme] = useState<Theme>("light");
   const [memoryOpen, setMemoryOpen] = useState(false);
@@ -104,9 +136,51 @@ function App() {
   const [lastSavedContent, setLastSavedContent] = useState(demoContent["demo://chapters/03.md"]);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("demo");
   const [saveError, setSaveError] = useState("");
+  const [memoryState, setMemoryState] = useState<MemoryState>(demoMemoryState);
+  const [memoryError, setMemoryError] = useState("");
 
-  const sendPrompt = () => {
+  const loadMemoryState = useCallback(async () => {
+    try {
+      const response = await invoke<MemoryState>("wridian_get_memory_state");
+      setMemoryState(response.memories.length || response.candidates.length ? response : { memories: [], candidates: [] });
+      setMemoryError("");
+    } catch (error) {
+      setMemoryError(error instanceof Error ? error.message : String(error));
+    }
+  }, []);
+
+  const sendPrompt = async () => {
+    const userIntent = prompt.trim();
     setPrompt("");
+    if (userIntent) {
+      try {
+        const response = await invoke<MemoryState>("wridian_create_memory_candidate", {
+          input: {
+            sourcePath: selectedPath,
+            title: editorTitle,
+            content: editorContent,
+            userIntent,
+          },
+        });
+        setMemoryState(response);
+        setMemoryError("");
+      } catch (error) {
+        setMemoryState((current) => ({
+          ...current,
+          candidates: [
+            ...current.candidates,
+            {
+              id: `local-candidate-${Date.now()}`,
+              text: `${editorTitle}：用户希望处理“${userIntent.slice(0, 120)}”。`,
+              sourcePath: selectedPath,
+              title: editorTitle,
+              createdAt: "local",
+            },
+          ],
+        }));
+        setMemoryError(error instanceof Error ? error.message : String(error));
+      }
+    }
     setMemoryOpen(true);
   };
 
@@ -128,6 +202,10 @@ function App() {
       })
       .catch(() => setWorkspace(null));
   }, []);
+
+  useEffect(() => {
+    void loadMemoryState();
+  }, [loadMemoryState]);
 
   const files = workspace?.files?.length ? workspace.files : fallbackFiles;
   const isRealFile = selectedPath && !selectedPath.startsWith("demo://");
@@ -218,6 +296,38 @@ function App() {
     return "已保存";
   }, [saveStatus]);
 
+  const acceptMemoryCandidate = async (id: string) => {
+    try {
+      const response = await invoke<MemoryState>("wridian_accept_memory_candidate", { input: { id } });
+      setMemoryState(response);
+      setMemoryError("");
+    } catch (error) {
+      setMemoryState((current) => {
+        const candidate = current.candidates.find((item) => item.id === id);
+        if (!candidate) return current;
+        return {
+          memories: [...current.memories, { ...candidate, id: `local-memory-${Date.now()}` }],
+          candidates: current.candidates.filter((item) => item.id !== id),
+        };
+      });
+      setMemoryError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const ignoreMemoryCandidate = async (id: string) => {
+    try {
+      const response = await invoke<MemoryState>("wridian_ignore_memory_candidate", { input: { id } });
+      setMemoryState(response);
+      setMemoryError("");
+    } catch (error) {
+      setMemoryState((current) => ({
+        ...current,
+        candidates: current.candidates.filter((item) => item.id !== id),
+      }));
+      setMemoryError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -289,7 +399,7 @@ function App() {
             className="prompt-bar"
             onSubmit={(event) => {
               event.preventDefault();
-              sendPrompt();
+              void sendPrompt();
             }}
           >
             <textarea
@@ -306,7 +416,17 @@ function App() {
         </main>
       </div>
 
-      {memoryOpen ? <MemoryDrawer onClose={() => setMemoryOpen(false)} workspace={workspace} /> : null}
+      {memoryOpen ? (
+        <MemoryDrawer
+          currentTitle={editorTitle}
+          memoryError={memoryError}
+          memoryState={memoryState}
+          onAcceptCandidate={acceptMemoryCandidate}
+          onClose={() => setMemoryOpen(false)}
+          onIgnoreCandidate={ignoreMemoryCandidate}
+          workspace={workspace}
+        />
+      ) : null}
       {settingsOpen ? <ModelSettingsDialog onClose={() => setSettingsOpen(false)} /> : null}
     </div>
   );
@@ -350,45 +470,78 @@ function baseName(path: string) {
   return path.replace(/[\\/]+$/g, "").split(/[\\/]/).pop() || path;
 }
 
-function MemoryDrawer({ onClose, workspace }: { onClose: () => void; workspace: WorkspaceInfo | null }) {
+function MemoryDrawer({
+  currentTitle,
+  memoryError,
+  memoryState,
+  onAcceptCandidate,
+  onClose,
+  onIgnoreCandidate,
+  workspace,
+}: {
+  currentTitle: string;
+  memoryError: string;
+  memoryState: MemoryState;
+  onAcceptCandidate: (id: string) => void;
+  onClose: () => void;
+  onIgnoreCandidate: (id: string) => void;
+  workspace: WorkspaceInfo | null;
+}) {
   return (
     <div className="drawer-backdrop" onMouseDown={onClose} role="presentation">
       <aside className="memory-drawer" role="dialog" aria-modal="true" aria-label="记忆" onMouseDown={(event) => event.stopPropagation()}>
         <div className="drawer-header">
           <div>
             <div className="drawer-title">记忆</div>
-            <div className="drawer-subtitle">当前作品：雾城手记</div>
+            <div className="drawer-subtitle">当前文件：{currentTitle}</div>
           </div>
           <button type="button" className="icon-button" onClick={onClose} aria-label="关闭">
             ×
           </button>
         </div>
 
+        {memoryError ? <div className="rail-error">{memoryError}</div> : null}
+
         <section className="memory-card">
           <h2>当前现场</h2>
-          <p>第三章：雨夜</p>
-          <p>上次讨论：女主进门前的动机。</p>
+          <p>{currentTitle}</p>
+          <p>共创输入会先变成待确认记忆，由你决定是否写入。</p>
         </section>
 
         <section className="memory-card">
           <h2>相关记忆</h2>
-          <ul>
-            {memoryItems.map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
+          {memoryState.memories.length ? (
+            <ul>
+              {memoryState.memories.map((item) => (
+                <li key={item.id}>{item.text}</li>
+              ))}
+            </ul>
+          ) : (
+            <p>还没有写入的记忆。</p>
+          )}
         </section>
 
-        <section className="memory-card pending">
-          <h2>待确认</h2>
-          <p>第三章需要让女主动机提前出现。</p>
-          <div className="drawer-actions">
-            <button type="button">记住</button>
-            <button type="button" className="secondary">
-              忽略
-            </button>
-          </div>
-        </section>
+        {memoryState.candidates.length ? (
+          memoryState.candidates.map((candidate) => (
+            <section className="memory-card pending" key={candidate.id}>
+              <h2>待确认</h2>
+              <p>{candidate.text}</p>
+              <div className="drawer-actions">
+                <button type="button" onClick={() => onAcceptCandidate(candidate.id)}>
+                  记住
+                </button>
+                <button type="button" className="secondary" onClick={() => onIgnoreCandidate(candidate.id)}>
+                  忽略
+                </button>
+              </div>
+            </section>
+          ))
+        ) : (
+          <section className="memory-card pending">
+            <h2>待确认</h2>
+            <p>暂无待确认记忆。</p>
+          </section>
+        )}
 
         <footer className="drawer-footer">{workspace?.vaultPath ? `Vault: ${workspace.vaultPath}` : "本地 Vault 初始化中"}</footer>
       </aside>
