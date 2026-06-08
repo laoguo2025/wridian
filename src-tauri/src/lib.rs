@@ -1,4 +1,5 @@
 mod cocreation;
+mod chat_persistence;
 mod memory;
 mod model_accounts;
 mod runtime;
@@ -23,6 +24,7 @@ pub fn run() {
             model_accounts::wridian_save_custom_api_settings,
             model_accounts::wridian_test_custom_api,
             cocreation::wridian_cocreate,
+            chat_persistence::wridian_save_chat_transcript,
             memory::wridian_get_memory_state,
             memory::wridian_create_memory_candidate,
             memory::wridian_extract_memory_candidates,

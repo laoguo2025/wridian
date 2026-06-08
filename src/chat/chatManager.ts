@@ -1,5 +1,6 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { requestCocreation, type CoCreateEdit } from "./cocreationClient";
+import { createChatSessionId, saveChatTranscript } from "./chatPersistence";
 import { createAssistantChatMessage, createUserChatMessage, type ChatMessage } from "./messageRepository";
 import type { PromptContextPill } from "./promptContext";
 
@@ -21,6 +22,7 @@ export function useChatManager({ onDraftEdits }: { onDraftEdits: (edits: ChatDra
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
+  const sessionIdRef = useRef(createChatSessionId());
 
   const sendPrompt = useCallback(async (input: SendChatPromptInput) => {
     const userInput = input.text.trim();
@@ -35,7 +37,9 @@ export function useChatManager({ onDraftEdits }: { onDraftEdits: (edits: ChatDra
       text: userInput,
     });
     const selectedText = userMessage.selectedText ?? "";
-    setMessages((current) => [...current, userMessage]);
+    const messagesWithUser = [...messages, userMessage];
+    setMessages(messagesWithUser);
+    void persistChat(messagesWithUser, input, sessionIdRef.current, setError);
 
     try {
       const response = await requestCocreation({
@@ -45,7 +49,9 @@ export function useChatManager({ onDraftEdits }: { onDraftEdits: (edits: ChatDra
         userInput,
         selectedText,
       });
-      setMessages((current) => [...current, createAssistantChatMessage(response.reply)]);
+      const messagesWithAssistant = [...messagesWithUser, createAssistantChatMessage(response.reply)];
+      setMessages(messagesWithAssistant);
+      void persistChat(messagesWithAssistant, input, sessionIdRef.current, setError);
       onDraftEdits(createPendingDraftEdits(response.edits));
       return true;
     } catch (requestError) {
@@ -54,7 +60,7 @@ export function useChatManager({ onDraftEdits }: { onDraftEdits: (edits: ChatDra
     } finally {
       setPending(false);
     }
-  }, [onDraftEdits, pending]);
+  }, [messages, onDraftEdits, pending]);
 
   return {
     error,
@@ -63,6 +69,24 @@ export function useChatManager({ onDraftEdits }: { onDraftEdits: (edits: ChatDra
     sendPrompt,
     setError,
   };
+}
+
+async function persistChat(
+  messages: ChatMessage[],
+  input: SendChatPromptInput,
+  sessionId: string,
+  setError: (error: string) => void,
+) {
+  try {
+    await saveChatTranscript({
+      messages,
+      sessionId,
+      sourcePath: input.sourcePath,
+      title: input.title,
+    });
+  } catch (error) {
+    setError(error instanceof Error ? error.message : String(error));
+  }
 }
 
 function createPendingDraftEdits(edits: CoCreateEdit[]): ChatDraftEdit[] {

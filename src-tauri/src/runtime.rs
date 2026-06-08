@@ -46,8 +46,9 @@ pub(crate) fn ensure_workspace(data_dir: &Path) -> Result<(), String> {
     let runtime = runtime_root(data_dir);
     let sessions = runtime.join("sessions");
     let episodes = runtime.join("episodes");
+    let chat = runtime.join("chat");
 
-    for dir in [&vault, &works, &runtime, &sessions, &episodes] {
+    for dir in [&vault, &works, &runtime, &sessions, &episodes, &chat] {
         fs::create_dir_all(dir).map_err(|error| format!("Wridian 目录创建失败：{error}"))?;
     }
 
