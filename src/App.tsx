@@ -12,6 +12,7 @@ import {
   createPromptPillFromSuggestion,
   createSelectionPromptPill,
   upsertPromptContextPill,
+  type DraftKind,
   type PromptContextPill,
 } from "./chat/promptContext";
 import {
@@ -125,6 +126,7 @@ function App() {
     setPendingEdits((current) => [...current, ...edits]);
   }, []);
   const chatManager = useChatManager({ onDraftEdits: appendDraftEdits });
+  const draftKind = useMemo(() => detectDraftKind(selectedPath, editorContent), [editorContent, selectedPath]);
 
   const loadMemoryState = useCallback(async () => {
     try {
@@ -144,6 +146,7 @@ function App() {
     const sent = await chatManager.sendPrompt({
       content: editorContent,
       contextPills: override ? [] : promptPills,
+      draftKind,
       selectedText: override?.selectedText,
       sourcePath: selectedPath,
       text: userInput,
@@ -442,6 +445,7 @@ function App() {
   );
   const blockedDraftEditCount = draftReplaceGuardReport.skipped.length;
   const promptSuggestions = useMemo(() => buildPromptSuggestions({
+    draftKind,
     draftSelectionEnd: draftSelection.end,
     draftSelectionStart: draftSelection.start,
     editorContent,
@@ -449,7 +453,7 @@ function App() {
     selectedPath,
     titleFallback: selectedPath ? baseName(selectedPath) : "",
     workspaceFiles: promptFileCandidates,
-  }), [draftSelection.end, draftSelection.start, editorContent, editorTitle, promptFileCandidates, selectedPath]);
+  }), [draftKind, draftSelection.end, draftSelection.start, editorContent, editorTitle, promptFileCandidates, selectedPath]);
 
   const statusLabel = useMemo(() => {
     if (saveStatus === "idle") return "读取中";
@@ -853,6 +857,15 @@ function flattenPromptFileCandidates(nodes: WorkFileNode[]) {
   };
   nodes.forEach(visit);
   return files.sort((left, right) => left.name.localeCompare(right.name, "zh-Hans-CN"));
+}
+
+function detectDraftKind(path: string, content: string): DraftKind {
+  const lowerPath = path.toLowerCase();
+  if (lowerPath.endsWith(".fountain")) return "screenplay";
+
+  const sceneSignals = (content.match(/(^|\n)\s*(INT\.|EXT\.|内景|外景|第[一二三四五六七八九十\d]+[集场])/g) ?? []).length;
+  const dialogueSignals = (content.match(/(^|\n)\s*[\u4e00-\u9fa5A-Za-z0-9_]{2,12}[：:]/g) ?? []).length;
+  return sceneSignals >= 2 || dialogueSignals >= 4 ? "screenplay" : "prose";
 }
 
 function PencilIcon() {

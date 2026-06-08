@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from "react";
 import { requestCocreation, type CoCreateEdit } from "./cocreationClient";
 import { createChatSessionId, saveChatTranscript } from "./chatPersistence";
 import { createAssistantChatMessage, createUserChatMessage, type ChatMessage } from "./messageRepository";
-import type { PromptContextPill, PromptContextRange } from "./promptContext";
+import type { DraftKind, PromptContextPill, PromptContextRange } from "./promptContext";
 
 export type ChatDraftEdit = CoCreateEdit & {
   id: string;
@@ -13,6 +13,7 @@ export type ChatDraftEdit = CoCreateEdit & {
 export type SendChatPromptInput = {
   content: string;
   contextPills: PromptContextPill[];
+  draftKind: DraftKind;
   selectedText?: string;
   sourcePath: string;
   text: string;
@@ -47,6 +48,7 @@ export function useChatManager({ onDraftEdits }: { onDraftEdits: (edits: ChatDra
         sourcePath: input.sourcePath,
         title: input.title,
         content: input.content,
+        draftKind: input.draftKind,
         userInput,
         selectedText,
       });

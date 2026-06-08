@@ -6,6 +6,8 @@ export type PromptContextPillKind =
   | "tool"
   | "memory";
 
+export type DraftKind = "prose" | "screenplay";
+
 export type PromptContextPill = {
   id: string;
   kind: PromptContextPillKind;
@@ -32,6 +34,7 @@ export type PromptSuggestion = {
 export type PromptSuggestionInput = {
   draftSelectionEnd: number;
   draftSelectionStart: number;
+  draftKind: DraftKind;
   editorContent: string;
   editorTitle: string;
   selectedPath: string;
@@ -169,6 +172,9 @@ export function buildPromptSuggestions(input: PromptSuggestionInput): PromptSugg
     });
   }
 
+  if (input.draftKind === "screenplay") {
+    suggestions.push(...SCREENPLAY_COMMAND_SUGGESTIONS);
+  }
   suggestions.push(...WRITING_COMMAND_SUGGESTIONS);
 
   return suggestions;
@@ -215,6 +221,37 @@ const WRITING_COMMAND_SUGGESTIONS: PromptSuggestion[] = [
     label: "提取记忆",
     detail: "提取人物、设定、伏笔、风格、禁区和剧本规则",
     insertText: "请从当前稿件中提取可以进入写作记忆的人物、设定、伏笔、风格、禁区和剧本规则。",
+    kind: "command",
+  },
+];
+
+const SCREENPLAY_COMMAND_SUGGESTIONS: PromptSuggestion[] = [
+  {
+    id: "episode-rhythm",
+    label: "拆分分集节奏",
+    detail: "按短剧节奏拆分信息点、冲突点和结尾钩子",
+    insertText: "请按短剧节奏拆分这一段的分集节奏，标出每集信息点、冲突点和结尾钩子。",
+    kind: "command",
+  },
+  {
+    id: "scene-hook",
+    label: "强化场景钩子",
+    detail: "让本场结尾更适合短剧转场或卡点",
+    insertText: "请强化这一场的结尾钩子，让它更适合短剧转场、卡点或下一集开头。",
+    kind: "command",
+  },
+  {
+    id: "performable-dialogue",
+    label: "对白口语化",
+    detail: "把对白改得更短、更可表演、更有冲突",
+    insertText: "请把这段对白改得更口语化、更可表演，并保留角色关系和核心信息。",
+    kind: "command",
+  },
+  {
+    id: "budget-scene-check",
+    label: "场景成本检查",
+    detail: "检查场景、人物和动作是否适合低成本短剧拍摄",
+    insertText: "请检查这一段的场景、人物调度和动作是否适合低成本短剧拍摄，并给出精简建议。",
     kind: "command",
   },
 ];

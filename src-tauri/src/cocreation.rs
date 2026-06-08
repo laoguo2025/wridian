@@ -12,6 +12,7 @@ pub(crate) struct CoCreateInput {
     source_path: String,
     title: String,
     content: String,
+    draft_kind: Option<String>,
     user_input: String,
     selected_text: Option<String>,
 }
@@ -145,9 +146,14 @@ fn build_cocreation_prompt(
     } else {
         active_context.to_string()
     };
+    let draft_kind = match input.draft_kind.as_deref() {
+        Some("screenplay") => "短剧/剧本稿件",
+        _ => "小说/散文稿件",
+    };
 
     format!(
-        "当前文件：{}\n来源路径：{}\n\n当前现场：\n{}\n\n已确认相关记忆：\n{}\n\n用户选中的片段：\n{}\n\n稿件内容：\n{}\n\n用户这次想要：\n{}",
+        "稿件类型：{}\n当前文件：{}\n来源路径：{}\n\n当前现场：\n{}\n\n已确认相关记忆：\n{}\n\n用户选中的片段：\n{}\n\n稿件内容：\n{}\n\n用户这次想要：\n{}",
+        draft_kind,
         input.title,
         input.source_path,
         active_context_block,
@@ -212,6 +218,7 @@ fn cocreation_system_prompt() -> &'static str {
     r#"你是 Wridian 的写作共创助手。
 你的任务是围绕当前稿件给出可执行的写作建议、局部改写方案或结构判断。
 你会同时服务小说和短剧/剧本创作：小说关注章节、人物动机、叙述节奏、伏笔和设定一致性；短剧/剧本关注对白、场景冲突、钩子、角色口吻和分集节奏。
+当稿件类型是短剧/剧本时，优先关注场次、对白可表演性、结尾钩子、分集节奏和低成本拍摄约束。
 不要写成通用聊天回复；不要自动声称已经修改正文；不要把普通共创内容写入长期记忆。
 必须输出 JSON 对象：
 {"reply":"给用户看的正常回复","edits":[{"target":"需要被替换的原文片段，必须从稿件内容或用户选中片段中逐字复制","replacement":"替换后的新文本","rationale":"简短理由"}]}
@@ -230,6 +237,7 @@ mod tests {
             source_path: "demo://03.md".to_string(),
             title: "03.md".to_string(),
             content: "她推开门，没有立刻喊人。".to_string(),
+            draft_kind: Some("prose".to_string()),
             user_input: "强化她进门前的动机".to_string(),
             selected_text: None,
         };

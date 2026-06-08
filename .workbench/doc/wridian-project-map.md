@@ -52,6 +52,7 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
   - `ChatInput.tsx`：带边框的底部输入容器、上下文 pill 区、中间约 60px 起步输入区、24px 底部工具栏、小发送/停止动作。
   - `LexicalEditor.tsx`：输入区内部滚动，长文本不撑高右栏；Wridian 聊天输入区已从 textarea 切换为 Lexical `ContentEditable`，使用受控文本同步、历史插件和 Enter 发送；实现入口为 `src/chat/CopilotPromptEditor.tsx`。
   - `AtMentionCommandPlugin.tsx` / `SlashCommandPlugin.tsx`：Wridian 已接入本地第一版 `@` 上下文选择和 `/` 写作命令提示，实现在 `src/chat/CopilotPromptEditor.tsx` 内。`@` 可把当前选区、当前文件、当前正文放入输入框上方上下文 pill；`/` 可插入改对白、增强冲突、加结尾钩子、检查角色口吻、批量改角色名、提取记忆等小说和短剧共用命令。
+    - 剧本模式：前端按 `.fountain` 扩展名、内景/外景/集/场信号和角色对白行识别短剧/剧本稿件；识别后 `/` 命令额外显示拆分分集节奏、强化场景钩子、对白口语化和场景成本检查，共创请求会把稿件类型传给后端 prompt。
   - 文件/上下文检索：Wridian 已把当前工作区文件树 flatten 为 prompt file candidates，`@` 菜单会展示匹配文件项，选择后以 `file` pill 注入上下文；当前检索基于文件名/路径，暂未建立全文内容缓存。
   - `ContextManager.ts` / `PromptContextTypes.ts`：Wridian 已开始拆出聊天上下文边界，`src/chat/promptContext.ts` 负责 prompt pill 类型、序列化、上下文建议构造和写作命令建议；消息仓库只保存消息和已绑定的上下文快照。
   - `MessageRepository.ts`：Wridian 已开始拆出前端消息仓库边界，`src/chat/messageRepository.ts` 负责消息类型、ID、用户/助手消息创建、编辑恢复和重试定位；`App.tsx` 仍负责调用 Tauri 共创命令。
@@ -70,6 +71,7 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 
 - 小说模式：章节、场景、人物、世界观、剧情线、伏笔、禁区、风格。
 - 短剧/剧本模式：集、场、对白、转折、冲突、钩子、角色口吻、场地/预算限制、分集节奏。
+- 当前前端会把 `.fountain` 文件，或包含多处内景/外景/集/场标记、角色对白行的文本识别为短剧/剧本模式；后端共创 prompt 会收到稿件类型并调整关注点。
 - `.fountain` 不是普通可打开文件类型，后续应升级为剧本工作流：场景识别、角色对白、outline、预览和导出。
 - UI 文案避免过早写死为“章节”；默认可用“稿件”“当前文件”“作品文件”，需要时按文件类型显示“章节 / 场景 / 剧本段落”。
 
