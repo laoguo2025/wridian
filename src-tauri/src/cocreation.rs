@@ -13,13 +13,23 @@ pub(crate) struct CoCreateInput {
     title: String,
     content: String,
     user_input: String,
+    selected_text: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CoCreateResponse {
     reply: String,
+    edits: Vec<CoCreateEdit>,
     memories_used: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CoCreateEdit {
+    target: String,
+    replacement: String,
+    rationale: Option<String>,
 }
 
 #[tauri::command]
@@ -36,12 +46,27 @@ pub(crate) async fn wridian_cocreate(input: CoCreateInput) -> Result<CoCreateRes
     let memories_used =
         read_relevant_memory_snippets(&data_dir, &input.source_path, &input.title, 8)?;
     let active_context = read_active_context(&data_dir);
-    let reply = cocreate_with_model(&settings, &input, &memories_used, &active_context).await?;
+    let model_output =
+        cocreate_with_model(&settings, &input, &memories_used, &active_context).await?;
 
     Ok(CoCreateResponse {
-        reply,
+        reply: model_output.reply,
+        edits: model_output.edits,
         memories_used,
     })
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelCoCreateResponse {
+    reply: Option<String>,
+    #[serde(default)]
+    edits: Vec<CoCreateEdit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedCoCreateResponse {
+    reply: String,
+    edits: Vec<CoCreateEdit>,
 }
 
 async fn cocreate_with_model(
@@ -49,7 +74,7 @@ async fn cocreate_with_model(
     input: &CoCreateInput,
     memories: &[String],
     active_context: &str,
-) -> Result<String, String> {
+) -> Result<ParsedCoCreateResponse, String> {
     let url = format!("{}/chat/completions", settings.base_url);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(90))
@@ -70,6 +95,7 @@ async fn cocreate_with_model(
                     "content": build_cocreation_prompt(input, memories, active_context)
                 }
             ],
+            "response_format": { "type": "json_object" },
             "temperature": 0.7
         }))
         .send()
@@ -84,12 +110,12 @@ async fn cocreate_with_model(
             body.chars().take(240).collect::<String>()
         ));
     }
-    let reply = read_chat_completion_content(&body)?;
-    let trimmed = reply.trim();
-    if trimmed.is_empty() {
+    let content = read_chat_completion_content(&body)?;
+    let parsed = parse_cocreation_model_output(&content)?;
+    if parsed.reply.trim().is_empty() {
         Err("模型返回了空回复。".to_string())
     } else {
-        Ok(trimmed.to_string())
+        Ok(parsed)
     }
 }
 
@@ -121,11 +147,17 @@ fn build_cocreation_prompt(
     };
 
     format!(
-        "当前文件：{}\n来源路径：{}\n\n当前现场：\n{}\n\n已确认相关记忆：\n{}\n\n稿件内容：\n{}\n\n用户这次想要：\n{}",
+        "当前文件：{}\n来源路径：{}\n\n当前现场：\n{}\n\n已确认相关记忆：\n{}\n\n用户选中的片段：\n{}\n\n稿件内容：\n{}\n\n用户这次想要：\n{}",
         input.title,
         input.source_path,
         active_context_block,
         memories_block,
+        input
+            .selected_text
+            .as_deref()
+            .map(|text| compact_text(text, 3000))
+            .filter(|text| !text.is_empty())
+            .unwrap_or_else(|| "未选择片段。".to_string()),
         compact_text(&input.content, 7000),
         input.user_input.trim()
     )
@@ -150,12 +182,42 @@ fn compact_text(text: &str, max_chars: usize) -> String {
     compact.chars().take(max_chars).collect()
 }
 
+fn parse_cocreation_model_output(output: &str) -> Result<ParsedCoCreateResponse, String> {
+    let parsed: ModelCoCreateResponse = serde_json::from_str(output.trim())
+        .map_err(|error| format!("共创结果不是有效 JSON：{error}"))?;
+    let reply = parsed.reply.unwrap_or_default().trim().to_string();
+    let edits = parsed
+        .edits
+        .into_iter()
+        .filter_map(|edit| {
+            let target = edit.target.trim().to_string();
+            let replacement = edit.replacement.trim().to_string();
+            if target.is_empty() || replacement.is_empty() || target == replacement {
+                return None;
+            }
+            Some(CoCreateEdit {
+                target,
+                replacement,
+                rationale: edit
+                    .rationale
+                    .map(|text| text.trim().to_string())
+                    .filter(|text| !text.is_empty()),
+            })
+        })
+        .collect();
+    Ok(ParsedCoCreateResponse { reply, edits })
+}
+
 fn cocreation_system_prompt() -> &'static str {
     r#"你是 Wridian 的写作共创助手。
 你的任务是围绕当前稿件给出可执行的写作建议、局部改写方案或结构判断。
 你会同时服务小说和短剧/剧本创作：小说关注章节、人物动机、叙述节奏、伏笔和设定一致性；短剧/剧本关注对白、场景冲突、钩子、角色口吻和分集节奏。
 不要写成通用聊天回复；不要自动声称已经修改正文；不要把普通共创内容写入长期记忆。
-如果用户要求改写，先给出可直接插入或替换的文本，再用简短说明解释处理理由。"#
+必须输出 JSON 对象：
+{"reply":"给用户看的正常回复","edits":[{"target":"需要被替换的原文片段，必须从稿件内容或用户选中片段中逐字复制","replacement":"替换后的新文本","rationale":"简短理由"}]}
+如果只是聊天、讨论、解释，edits 输出空数组。
+如果用户要求修改、润色、批量替换角色名、调整对白或重写片段，必须尽量给 edits。
+target 必须是原文中存在的精确片段；不要用行号、摘要或正则；不能确定精确原文时只给 reply，不给 edits。"#
 }
 
 #[cfg(test)]
@@ -169,6 +231,7 @@ mod tests {
             title: "03.md".to_string(),
             content: "她推开门，没有立刻喊人。".to_string(),
             user_input: "强化她进门前的动机".to_string(),
+            selected_text: None,
         };
         let prompt = build_cocreation_prompt(
             &input,
@@ -192,5 +255,25 @@ mod tests {
         let content = read_chat_completion_content(body).expect("content exists");
 
         assert_eq!(content, "可以先补一段动作。");
+    }
+
+    #[test]
+    fn parse_cocreation_model_output_reads_reply_and_edits() {
+        let output = r#"{
+            "reply": "我会把动机提前到进门动作里。",
+            "edits": [
+                {
+                    "target": "她没有立刻喊人。",
+                    "replacement": "她没有立刻喊人，而是先摸了摸口袋里那把旧钥匙。",
+                    "rationale": "让动机从动作里出现。"
+                }
+            ]
+        }"#;
+
+        let parsed = parse_cocreation_model_output(output).expect("valid output");
+
+        assert_eq!(parsed.reply, "我会把动机提前到进门动作里。");
+        assert_eq!(parsed.edits.len(), 1);
+        assert_eq!(parsed.edits[0].target, "她没有立刻喊人。");
     }
 }

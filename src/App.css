@@ -429,6 +429,32 @@ button {
   margin-bottom: 10px;
 }
 
+.paper-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.paper-action {
+  min-height: 28px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.paper-action:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.paper-action:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
 .paper-kicker {
   min-width: 0;
   overflow: hidden;
@@ -466,17 +492,87 @@ button {
   padding: 0 0 22px;
 }
 
+.draft-review-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 18px;
+  margin-bottom: 10px;
+}
+
+.draft-review-actions[hidden] {
+  display: none;
+}
+
+.draft-review-actions span {
+  color: var(--text-muted);
+}
+
+.draft-review-actions button,
+.inline-edit-actions button {
+  min-height: 28px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--text-primary);
+  color: var(--bg-panel);
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.draft-review-actions button.secondary,
+.inline-edit-actions button.secondary {
+  background: transparent;
+  color: var(--text-muted);
+}
+
 .draft-editor {
   width: 100%;
   min-height: 0;
   border: 0;
   outline: none;
-  resize: none;
+  overflow: auto;
   background: transparent;
   color: var(--text-body);
   font-size: 16px;
   line-height: 1.9;
   padding: 0;
+  white-space: pre-wrap;
+}
+
+.inline-edit {
+  display: inline;
+}
+
+.inline-diff {
+  display: inline;
+}
+
+.inline-diff del {
+  background: rgba(202, 74, 61, 0.16);
+  color: #9f2f25;
+  text-decoration-thickness: 1px;
+}
+
+.inline-diff ins {
+  background: rgba(45, 145, 82, 0.18);
+  color: #226c3d;
+  text-decoration: none;
+}
+
+.inline-edit small {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-left: 6px;
+}
+
+.inline-edit-actions {
+  display: inline-flex;
+  gap: 8px;
+  margin-left: 8px;
+  vertical-align: 1px;
 }
 
 .draft-editor::selection,
@@ -497,13 +593,43 @@ button {
   margin: 0 auto 18px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 34px;
-  grid-template-rows: minmax(92px, auto);
+  grid-template-rows: auto minmax(92px, auto);
   gap: 8px;
   align-items: end;
   border-radius: 10px;
   background: color-mix(in srgb, var(--bg-panel), transparent 8%);
   box-shadow: var(--shadow-card);
   padding: 10px 8px 8px 14px;
+}
+
+.prompt-attachment {
+  grid-column: 1 / -1;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-selected), transparent 18%);
+  padding: 8px;
+}
+
+.prompt-attachment span {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 14px;
+}
+
+.prompt-attachment button {
+  float: right;
+  width: 22px;
+  height: 22px;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.prompt-attachment p {
+  max-height: 62px;
+  overflow: hidden;
+  color: var(--text-body);
+  font-size: 12px;
+  line-height: 18px;
+  margin: 4px 0 0;
 }
 
 .prompt-bar:focus-within {
@@ -647,6 +773,63 @@ button {
 
 .cocreation-reply {
   white-space: pre-wrap;
+}
+
+.chat-thread {
+  display: grid;
+  gap: 10px;
+  overflow: auto;
+}
+
+.chat-message {
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-selected), transparent 24%);
+  padding: 12px;
+}
+
+.chat-message.assistant {
+  border: 1px solid color-mix(in srgb, var(--focus), transparent 64%);
+  background: color-mix(in srgb, var(--bg-panel), transparent 6%);
+}
+
+.chat-message-label {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 16px;
+  margin-bottom: 6px;
+}
+
+.chat-message blockquote {
+  border-left: 2px solid color-mix(in srgb, var(--focus), transparent 35%);
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 18px;
+  margin: 0 0 8px;
+  max-height: 90px;
+  overflow: hidden;
+  padding-left: 8px;
+}
+
+.message-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.message-actions button {
+  min-height: 28px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.message-actions button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .memory-card h2 {

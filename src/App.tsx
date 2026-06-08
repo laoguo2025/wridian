@@ -45,7 +45,26 @@ type TestCustomApiResponse = {
 
 type CoCreateResponse = {
   reply: string;
+  edits: CoCreateEdit[];
   memoriesUsed: string[];
+};
+
+type CoCreateEdit = {
+  target: string;
+  replacement: string;
+  rationale?: string | null;
+};
+
+type DraftEdit = CoCreateEdit & {
+  id: string;
+  status: "pending" | "accepted" | "rejected";
+};
+
+type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  selectedText?: string;
 };
 
 type MemoryItem = {
@@ -144,7 +163,15 @@ const demoMemoryState: MemoryState = {
 };
 
 const demoCocreationReply =
-  "这里可以先补一段进门前的动作，让她不是被剧情推着走，而是主动验证线索。比如先写她在门口停住，摸到口袋里父亲留下的旧钥匙，再决定推门。";
+  "可以。我会把动机提前到进门动作里，让她不是被剧情推着走，而是主动验证线索。";
+
+const demoCocreationEdits: CoCreateEdit[] = [
+  {
+    target: "她没有立刻喊人。",
+    replacement: "她没有立刻喊人，而是先摸了摸口袋里那把旧钥匙。",
+    rationale: "用动作提前交代她进门是为了确认父亲线索。",
+  },
+];
 
 function App() {
   const [theme, setTheme] = useState<Theme>("light");
@@ -156,9 +183,10 @@ function App() {
   const [prompt, setPrompt] = useState("");
   const [cocreating, setCocreating] = useState(false);
   const [cocreationError, setCocreationError] = useState("");
-  const [cocreationReply, setCocreationReply] = useState("");
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [cocreationMemories, setCocreationMemories] = useState<string[]>([]);
-  const [lastCocreationRequest, setLastCocreationRequest] = useState("");
+  const [pendingEdits, setPendingEdits] = useState<DraftEdit[]>([]);
+  const [attachedSelection, setAttachedSelection] = useState("");
   const [hasDraftSelection, setHasDraftSelection] = useState(false);
   const [cocreationActionStatus, setCocreationActionStatus] = useState("");
   const [selectedPath, setSelectedPath] = useState("demo://chapters/03.md");
@@ -171,7 +199,7 @@ function App() {
   const [memoryError, setMemoryError] = useState("");
   const [extractingMemory, setExtractingMemory] = useState(false);
   const [fileMenu, setFileMenu] = useState<FileContextMenu | null>(null);
-  const draftEditorRef = useRef<HTMLTextAreaElement | null>(null);
+  const draftEditorRef = useRef<HTMLDivElement | null>(null);
   const draftSelectionRef = useRef<TextSelection>({ start: editorContent.length, end: editorContent.length });
 
   const loadMemoryState = useCallback(async () => {
@@ -184,19 +212,37 @@ function App() {
     }
   }, []);
 
-  const sendPrompt = async () => {
-    const userInput = prompt.trim();
+  const sendPrompt = async (override?: { text: string; selectedText?: string }) => {
+    const userInput = (override?.text ?? prompt).trim();
     if (!userInput || cocreating) return;
-    setPrompt("");
-    setLastCocreationRequest(userInput);
+    if (!override) setPrompt("");
     setCocreationOpen(true);
     setMemoryOpen(false);
     setCocreating(true);
     setCocreationError("");
-    setCocreationActionStatus("");
+    const selectedText = (override?.selectedText ?? attachedSelection).trim();
+    const userMessage: ChatMessage = {
+      id: `user-${Date.now()}`,
+      role: "user",
+      text: userInput,
+      selectedText: selectedText || undefined,
+    };
+    setChatMessages((messages) => [...messages, userMessage]);
+    if (!override) setAttachedSelection("");
     try {
       if (selectedPath.startsWith("demo://")) {
-        setCocreationReply(demoCocreationReply);
+        setChatMessages((messages) => [
+          ...messages,
+          {
+            id: `assistant-${Date.now()}`,
+            role: "assistant",
+            text: demoCocreationReply,
+          },
+        ]);
+        setPendingEdits((edits) => [
+          ...edits,
+          ...demoCocreationEdits.map((edit) => ({ ...edit, id: `edit-${Date.now()}-${edit.target}`, status: "pending" as const })),
+        ]);
         setCocreationMemories(memoryState.memories.slice(0, 3).map((item) => `【${item.category ?? "其他"}】${item.text}`));
         return;
       }
@@ -206,12 +252,23 @@ function App() {
           title: editorTitle,
           content: editorContent,
           userInput,
+          selectedText: selectedText || null,
         },
       });
-      setCocreationReply(response.reply);
+      setChatMessages((messages) => [
+        ...messages,
+        {
+          id: `assistant-${Date.now()}`,
+          role: "assistant",
+          text: response.reply,
+        },
+      ]);
+      setPendingEdits((edits) => [
+        ...edits,
+        ...response.edits.map((edit, index) => ({ ...edit, id: `edit-${Date.now()}-${index}`, status: "pending" as const })),
+      ]);
       setCocreationMemories(response.memoriesUsed);
     } catch (error) {
-      setCocreationReply("");
       setCocreationMemories([]);
       setCocreationError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -228,11 +285,23 @@ function App() {
   const updateDraftSelection = useCallback(() => {
     const editor = draftEditorRef.current;
     if (!editor) return;
-    const start = editor.selectionStart;
-    const end = editor.selectionEnd;
+    const selection = readContentEditableSelection(editor);
+    if (!selection) return;
+    const { start, end } = selection;
     draftSelectionRef.current = { start, end };
     setHasDraftSelection(end > start);
   }, []);
+
+  const attachCurrentSelectionToPrompt = () => {
+    const editor = draftEditorRef.current;
+    if (!editor) return;
+    const selection = readContentEditableSelection(editor);
+    if (!selection) return;
+    const selected = editorContent.slice(selection.start, selection.end).trim();
+    if (!selected) return;
+    setAttachedSelection(selected);
+    setPrompt((current) => current || "请修改这段。");
+  };
 
   useEffect(() => {
     document.documentElement.classList.toggle("darkTheme", theme === "dark");
@@ -372,6 +441,8 @@ function App() {
       setLastSavedContent(content);
       draftSelectionRef.current = { start: content.length, end: content.length };
       setHasDraftSelection(false);
+      setAttachedSelection("");
+      setPendingEdits([]);
       setSaveStatus("demo");
       return;
     }
@@ -384,6 +455,8 @@ function App() {
       setLastSavedContent(response.content);
       draftSelectionRef.current = { start: response.content.length, end: response.content.length };
       setHasDraftSelection(false);
+      setAttachedSelection("");
+      setPendingEdits([]);
       setSaveStatus("saved");
     } catch (error) {
       setSaveStatus("error");
@@ -391,7 +464,7 @@ function App() {
     }
   };
 
-  const handleDraftKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+  const handleDraftKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
       event.preventDefault();
       void saveCurrentFile();
@@ -407,31 +480,12 @@ function App() {
     draftSelectionRef.current = { start: nextCursor, end: nextCursor };
     setHasDraftSelection(false);
     window.requestAnimationFrame(() => {
-      const editor = draftEditorRef.current;
-      if (!editor) return;
-      editor.focus();
-      editor.setSelectionRange(nextCursor, nextCursor);
+      setContentEditableCaret(draftEditorRef.current, nextCursor);
     });
   }, [editorContent]);
 
-  const insertCocreationReply = () => {
-    const reply = cocreationReply.trim();
-    if (!reply) return;
-    const current = draftSelectionRef.current;
-    applyTextToDraft(reply, { start: current.start, end: current.start });
-    setCocreationActionStatus("已插入到光标处。");
-  };
-
-  const replaceSelectionWithCocreationReply = () => {
-    const reply = cocreationReply.trim();
-    const current = draftSelectionRef.current;
-    if (!reply || current.end <= current.start) return;
-    applyTextToDraft(reply, current);
-    setCocreationActionStatus("已替换选区。");
-  };
-
-  const copyCocreationReply = async () => {
-    const reply = cocreationReply.trim();
+  const copyText = async (text: string) => {
+    const reply = text.trim();
     if (!reply) return;
     try {
       await navigator.clipboard.writeText(reply);
@@ -440,6 +494,61 @@ function App() {
       setCocreationActionStatus("复制失败。");
     }
   };
+
+  const addTextToMemory = async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    try {
+      const response = await invoke<MemoryState>("wridian_create_memory_candidate", {
+        input: {
+          sourcePath: selectedPath,
+          title: editorTitle,
+          content: editorContent,
+          userIntent: trimmed,
+        },
+      });
+      setMemoryState(response);
+      setCocreationActionStatus("已加入待确认记忆。");
+    } catch (error) {
+      setMemoryError(error instanceof Error ? error.message : String(error));
+      setCocreationActionStatus("添加到记忆失败。");
+    }
+  };
+
+  const editUserMessage = (message: ChatMessage) => {
+    setPrompt(message.text);
+    if (message.selectedText) setAttachedSelection(message.selectedText);
+  };
+
+  const retryLastUserMessage = (message: ChatMessage) => {
+    void sendPrompt({ text: message.text, selectedText: message.selectedText });
+  };
+
+  const acceptEdit = (id: string) => {
+    const edit = pendingEdits.find((item) => item.id === id && item.status === "pending");
+    if (!edit) return;
+    const index = editorContent.indexOf(edit.target);
+    if (index < 0) {
+      setCocreationActionStatus("原文片段已变化，无法应用。");
+      return;
+    }
+    applyTextToDraft(edit.replacement, { start: index, end: index + edit.target.length });
+    setPendingEdits((edits) => edits.map((item) => (item.id === id ? { ...item, status: "accepted" } : item)));
+  };
+
+  const rejectEdit = (id: string) => {
+    setPendingEdits((edits) => edits.map((item) => (item.id === id ? { ...item, status: "rejected" } : item)));
+  };
+
+  const acceptAllEdits = () => {
+    pendingEdits.filter((edit) => edit.status === "pending").forEach((edit) => acceptEdit(edit.id));
+  };
+
+  const rejectAllEdits = () => {
+    setPendingEdits((edits) => edits.map((edit) => (edit.status === "pending" ? { ...edit, status: "rejected" } : edit)));
+  };
+
+  const pendingDraftEdits = pendingEdits.filter((edit) => edit.status === "pending");
 
   const statusLabel = useMemo(() => {
     if (saveStatus === "demo") return "示例";
@@ -597,22 +706,37 @@ function App() {
           <section className="paper" aria-label="正文编辑区">
             <div className="paper-topline">
               <div className="paper-kicker">{selectedPath.startsWith("demo://") ? "示例作品" : baseName(selectedPath)}</div>
-              <div className={`save-state ${saveStatus}`} title={saveError || undefined}>
-                {statusLabel}
+              <div className="paper-actions">
+                <button type="button" className="paper-action" onClick={attachCurrentSelectionToPrompt} disabled={!hasDraftSelection}>
+                  添加选区到输入框
+                </button>
+                <button type="button" className="paper-action" onClick={() => {
+                  setMemoryOpen(true);
+                  setCocreationOpen(false);
+                  void extractMemoryCandidates();
+                }}>
+                  提取当前内容到记忆
+                </button>
+                <div className={`save-state ${saveStatus}`} title={saveError || undefined}>
+                  {statusLabel}
+                </div>
               </div>
             </div>
             <h1 className="chapter-heading">{editorTitle}</h1>
-            <textarea
-              ref={draftEditorRef}
-              className="draft-editor"
-              value={editorContent}
-              onChange={(event) => setEditorContent(event.currentTarget.value)}
+            <div className="draft-review-actions" aria-label="待确认修改操作" hidden={!pendingDraftEdits.length}>
+                <span>{pendingDraftEdits.length} 处待确认修改</span>
+                <button type="button" onClick={acceptAllEdits}>全部确认</button>
+                <button type="button" className="secondary" onClick={rejectAllEdits}>全部取消</button>
+            </div>
+            <DraftEditor
+              content={editorContent}
+              edits={pendingDraftEdits}
+              editorRef={draftEditorRef}
+              onAcceptEdit={acceptEdit}
+              onChange={setEditorContent}
               onKeyDown={handleDraftKeyDown}
-              onKeyUp={updateDraftSelection}
-              onMouseUp={updateDraftSelection}
-              onSelect={updateDraftSelection}
-              aria-label="正文"
-              spellCheck={false}
+              onRejectEdit={rejectEdit}
+              onSelectionChange={updateDraftSelection}
             />
             {saveError ? <div className="paper-error">{saveError}</div> : null}
           </section>
@@ -624,6 +748,13 @@ function App() {
               void sendPrompt();
             }}
           >
+            {attachedSelection ? (
+              <div className="prompt-attachment">
+                <span>已附加片段</span>
+                <button type="button" onClick={() => setAttachedSelection("")} aria-label="移除片段">×</button>
+                <p>{attachedSelection}</p>
+              </div>
+            ) : null}
             <textarea
               value={prompt}
               onChange={(event) => setPrompt(event.currentTarget.value)}
@@ -643,15 +774,14 @@ function App() {
           currentTitle={editorTitle}
           error={cocreationError}
           actionStatus={cocreationActionStatus}
-          canReplaceSelection={hasDraftSelection}
-          lastRequest={lastCocreationRequest}
+          messages={chatMessages}
           memoriesUsed={cocreationMemories}
+          onAddToMemory={addTextToMemory}
           onClose={() => setCocreationOpen(false)}
-          onCopy={copyCocreationReply}
-          onInsert={insertCocreationReply}
-          onReplaceSelection={replaceSelectionWithCocreationReply}
+          onCopy={copyText}
+          onEditUserMessage={editUserMessage}
+          onRetry={retryLastUserMessage}
           pending={cocreating}
-          reply={cocreationReply}
         />
       ) : null}
       {memoryOpen ? (
@@ -873,34 +1003,168 @@ function SettingsIcon() {
   );
 }
 
+function DraftEditor({
+  content,
+  editorRef,
+  edits,
+  onAcceptEdit,
+  onChange,
+  onKeyDown,
+  onRejectEdit,
+  onSelectionChange,
+}: {
+  content: string;
+  editorRef: React.RefObject<HTMLDivElement | null>;
+  edits: DraftEdit[];
+  onAcceptEdit: (id: string) => void;
+  onChange: (content: string) => void;
+  onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
+  onRejectEdit: (id: string) => void;
+  onSelectionChange: () => void;
+}) {
+  const chunks = buildDraftReviewChunks(content, edits);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor || edits.length) return;
+    if (editor.innerText !== content) {
+      editor.innerText = content;
+    }
+  }, [content, editorRef, edits.length]);
+
+  return (
+    <div
+      ref={editorRef}
+      className="draft-editor"
+      contentEditable={!edits.length}
+      role="textbox"
+      aria-label="正文"
+      spellCheck={false}
+      suppressContentEditableWarning
+      onInput={(event) => onChange(event.currentTarget.innerText)}
+      onKeyDown={onKeyDown}
+      onKeyUp={onSelectionChange}
+      onMouseUp={onSelectionChange}
+    >
+      {chunks.map((chunk, index) => {
+        if (chunk.kind === "text") {
+          return <span key={`text-${index}`}>{chunk.text}</span>;
+        }
+        return (
+          <span className="inline-edit" key={chunk.edit.id}>
+            <span className="inline-diff">
+              <del>{chunk.edit.target}</del>
+              <ins>{chunk.edit.replacement}</ins>
+            </span>
+            {chunk.edit.rationale ? <small>{chunk.edit.rationale}</small> : null}
+            <span className="inline-edit-actions" contentEditable={false}>
+              <button type="button" onClick={() => onAcceptEdit(chunk.edit.id)}>确认</button>
+              <button type="button" className="secondary" onClick={() => onRejectEdit(chunk.edit.id)}>取消</button>
+            </span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function readContentEditableSelection(root: HTMLElement): TextSelection | null {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return null;
+  const range = selection.getRangeAt(0);
+  if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return null;
+  const beforeStart = range.cloneRange();
+  beforeStart.selectNodeContents(root);
+  beforeStart.setEnd(range.startContainer, range.startOffset);
+  const beforeEnd = range.cloneRange();
+  beforeEnd.selectNodeContents(root);
+  beforeEnd.setEnd(range.endContainer, range.endOffset);
+  const start = beforeStart.toString().length;
+  const end = beforeEnd.toString().length;
+  return { start: Math.min(start, end), end: Math.max(start, end) };
+}
+
+function setContentEditableCaret(root: HTMLElement | null, offset: number) {
+  if (!root) return;
+  root.focus();
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let remaining = offset;
+  let node = walker.nextNode();
+  while (node) {
+    const textLength = node.textContent?.length ?? 0;
+    if (remaining <= textLength) {
+      const range = document.createRange();
+      range.setStart(node, remaining);
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      return;
+    }
+    remaining -= textLength;
+    node = walker.nextNode();
+  }
+  const range = document.createRange();
+  range.selectNodeContents(root);
+  range.collapse(false);
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+}
+
+type DraftReviewChunk =
+  | { kind: "text"; text: string }
+  | { kind: "edit"; edit: DraftEdit };
+
+function buildDraftReviewChunks(content: string, edits: DraftEdit[]): DraftReviewChunk[] {
+  const matches = edits
+    .map((edit) => ({ edit, index: content.indexOf(edit.target) }))
+    .filter((match) => match.index >= 0)
+    .sort((left, right) => left.index - right.index);
+  const chunks: DraftReviewChunk[] = [];
+  let cursor = 0;
+
+  for (const match of matches) {
+    if (match.index < cursor) continue;
+    if (match.index > cursor) {
+      chunks.push({ kind: "text", text: content.slice(cursor, match.index) });
+    }
+    chunks.push({ kind: "edit", edit: match.edit });
+    cursor = match.index + match.edit.target.length;
+  }
+
+  if (cursor < content.length) {
+    chunks.push({ kind: "text", text: content.slice(cursor) });
+  }
+  return chunks.length ? chunks : [{ kind: "text", text: content }];
+}
+
 function CoCreationDrawer({
   actionStatus,
-  canReplaceSelection,
   currentTitle,
   error,
-  lastRequest,
+  messages,
   memoriesUsed,
+  onAddToMemory,
   onClose,
   onCopy,
-  onInsert,
-  onReplaceSelection,
+  onEditUserMessage,
+  onRetry,
   pending,
-  reply,
 }: {
   actionStatus: string;
-  canReplaceSelection: boolean;
   currentTitle: string;
   error: string;
-  lastRequest: string;
+  messages: ChatMessage[];
   memoriesUsed: string[];
+  onAddToMemory: (text: string) => void;
   onClose: () => void;
-  onCopy: () => void;
-  onInsert: () => void;
-  onReplaceSelection: () => void;
+  onCopy: (text: string) => void;
+  onEditUserMessage: (message: ChatMessage) => void;
+  onRetry: (message: ChatMessage) => void;
   pending: boolean;
-  reply: string;
 }) {
-  const hasReply = Boolean(reply.trim()) && !pending && !error;
+  const lastUserMessage = [...messages].reverse().find((message) => message.role === "user");
 
   return (
     <div className="drawer-backdrop" onMouseDown={onClose} role="presentation">
@@ -915,30 +1179,42 @@ function CoCreationDrawer({
           </button>
         </div>
 
-        <section className="memory-card cocreation-card">
-          <h2>这次请求</h2>
-          <p>{lastRequest || "等待输入。"}</p>
-        </section>
-
-        <section className="memory-card cocreation-card primary">
-          <h2>Wridian 建议</h2>
-          {pending ? <p>正在根据当前稿件和已确认记忆生成建议。</p> : null}
+        <div className="chat-thread">
+          {messages.length ? (
+            messages.map((message) => (
+              <article className={`chat-message ${message.role}`} key={message.id}>
+                <div className="chat-message-label">{message.role === "user" ? "你" : "Wridian"}</div>
+                {message.selectedText ? (
+                  <blockquote>{message.selectedText}</blockquote>
+                ) : null}
+                <p className="cocreation-reply">{message.text}</p>
+                <div className="message-actions">
+                  {message.role === "user" ? (
+                    <>
+                      <button type="button" onClick={() => onEditUserMessage(message)}>编辑</button>
+                      <button type="button" onClick={() => onCopy(message.text)}>复制</button>
+                      <button type="button" onClick={() => onAddToMemory(message.text)}>添加到记忆</button>
+                    </>
+                  ) : (
+                    <>
+                      <button type="button" onClick={() => lastUserMessage ? onRetry(lastUserMessage) : undefined}>重试</button>
+                      <button type="button" onClick={() => onCopy(message.text)}>复制</button>
+                      <button type="button" onClick={() => onAddToMemory(message.text)}>添加到记忆</button>
+                    </>
+                  )}
+                </div>
+              </article>
+            ))
+          ) : (
+            <section className="memory-card cocreation-card">
+              <h2>共创对话</h2>
+              <p>在底部输入框发送消息后，这里会显示你和 Wridian 的讨论。</p>
+            </section>
+          )}
+          {pending ? <div className="inline-status">Wridian 正在回复。</div> : null}
           {error ? <div className="rail-error">{error}</div> : null}
-          {!pending && !error && reply ? <p className="cocreation-reply">{reply}</p> : null}
-          {!pending && !error && !reply ? <p>发送底部共创输入后，这里会显示建议。</p> : null}
-          <div className="drawer-actions cocreation-actions">
-            <button type="button" onClick={onInsert} disabled={!hasReply}>
-              插入到光标处
-            </button>
-            <button type="button" className="secondary" onClick={onReplaceSelection} disabled={!hasReply || !canReplaceSelection}>
-              替换选区
-            </button>
-            <button type="button" className="secondary" onClick={onCopy} disabled={!hasReply}>
-              复制
-            </button>
-          </div>
           {actionStatus ? <div className="inline-status">{actionStatus}</div> : null}
-        </section>
+        </div>
 
         <section className="memory-card cocreation-card">
           <h2>本次使用的记忆</h2>
