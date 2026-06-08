@@ -1,5 +1,6 @@
 import { KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { requestCocreation, type CoCreateEdit } from "./chat/cocreationClient";
 import {
   createAssistantChatMessage,
   createUserChatMessage,
@@ -60,18 +61,6 @@ type CustomApiSettingsStatus = {
 type TestCustomApiResponse = {
   ok: boolean;
   message: string;
-};
-
-type CoCreateResponse = {
-  reply: string;
-  edits: CoCreateEdit[];
-  memoriesUsed: string[];
-};
-
-type CoCreateEdit = {
-  target: string;
-  replacement: string;
-  rationale?: string | null;
 };
 
 type DraftEdit = CoCreateEdit & {
@@ -167,14 +156,12 @@ function App() {
     setChatMessages((messages) => [...messages, userMessage]);
     if (!override) setPromptPills([]);
     try {
-      const response = await invoke<CoCreateResponse>("wridian_cocreate", {
-        input: {
-          sourcePath: selectedPath || "未选择文件",
-          title: editorTitle || "未选择文件",
-          content: editorContent,
-          userInput,
-          selectedText: selectedText || null,
-        },
+      const response = await requestCocreation({
+        sourcePath: selectedPath,
+        title: editorTitle,
+        content: editorContent,
+        userInput,
+        selectedText,
       });
       setChatMessages((messages) => [...messages, createAssistantChatMessage(response.reply)]);
       setPendingEdits((edits) => [
