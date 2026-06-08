@@ -669,6 +669,27 @@ button {
   padding: 0 6px;
 }
 
+.prompt-attachment-kind {
+  color: var(--text-primary);
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.prompt-attachment.pill-url,
+.message-context-pill.pill-url {
+  background: color-mix(in srgb, var(--focus), transparent 84%);
+}
+
+.prompt-attachment.pill-tool,
+.message-context-pill.pill-tool {
+  background: color-mix(in srgb, var(--accent), transparent 86%);
+}
+
+.prompt-attachment.pill-memory,
+.message-context-pill.pill-memory {
+  background: color-mix(in srgb, var(--text-primary), transparent 90%);
+}
+
 .prompt-attachment span {
   font-size: 11px;
   line-height: 14px;

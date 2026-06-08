@@ -42,7 +42,7 @@ export function restorePromptPillsFromMessage(message: ChatMessage): PromptConte
   if (!message.selectedText) {
     return [];
   }
-  return [{ id: "message-context", label: "上下文", value: message.selectedText }];
+  return [{ id: "message-context", kind: "selection", label: "上下文", value: message.selectedText }];
 }
 
 export function findPreviousUserMessage(messages: ChatMessage[], beforeIndex: number) {

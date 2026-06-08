@@ -76,7 +76,8 @@ export function ChatPanel({
         {promptPills.length ? (
           <div className="prompt-attachments" aria-label="已添加上下文">
             {promptPills.map((pill) => (
-              <span className="prompt-attachment" key={pill.id}>
+              <span className={`prompt-attachment ${pillClassName(pill)}`} key={pill.id}>
+                <span className="prompt-attachment-kind">{pillKindLabel(pill)}</span>
                 <span>{pill.label}</span>
                 <button type="button" onClick={() => onRemovePill(pill.id)} aria-label={`移除${pill.label}`}>
                   ×
@@ -123,7 +124,7 @@ function ChatMessageView({
       {message.selectedText ? (
         <div className="message-context-row">
           {contextPills.map((pill) => (
-            <span className="message-context-pill" key={pill.id}>
+            <span className={`message-context-pill ${pillClassName(pill)}`} key={pill.id}>
               {pill.label}
             </span>
           ))}
@@ -159,4 +160,25 @@ function ChatMessageView({
       </div>
     </article>
   );
+}
+
+function pillClassName(pill: PromptContextPill) {
+  return `pill-${pill.kind}`;
+}
+
+function pillKindLabel(pill: PromptContextPill) {
+  switch (pill.kind) {
+    case "active-file":
+      return "FILE";
+    case "file":
+      return "NOTE";
+    case "memory":
+      return "MEM";
+    case "tool":
+      return "TOOL";
+    case "url":
+      return "URL";
+    case "selection":
+      return "SEL";
+  }
 }

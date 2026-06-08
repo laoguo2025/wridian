@@ -33,6 +33,7 @@
   - 追加迁移：新增 `src/chat/cocreationClient.ts`，承载 `wridian_cocreate` 的 Tauri 请求/响应类型和参数组装；`App.tsx` 不再直接拼共创命令入参。
   - 追加迁移：新增 `src/chat/chatManager.ts`，接管消息列表、pending/error、发送共创请求、追加助手回复和生成待确认正文修改；`App.tsx` 只负责当前稿件状态和把返回 edits 接入正文待确认区。
   - 追加迁移：新增 `src/chat/chatPersistence.ts` 与 `src-tauri/src/chat_persistence.rs`，聊天会话自动保存为 `.wridian/chat/<session>.md`，包含来源文件、用户/助手消息和上下文 pill。
+  - 追加迁移：扩展 `src/chat/promptContext.ts` 的本地 pill 数据结构，新增 `PromptContextPillKind`，覆盖 selection、active-file、file、url、tool、memory；右侧输入区和消息上下文按类型显示 pill，为后续 Lexical DecoratorNode 留稳定数据接口。
   - 追加迁移：参考 `obsidian-copilot/src/editor/replaceGuard.ts` 新增 `src/editor/draftReplaceGuard.ts`。正文 inline diff 只允许唯一命中且不重叠的 target 被渲染和确认；重复、找不到或重叠的修改会提示需要重新定位，避免误改第一处同名文本。
   - 暂未引入 Copilot 的完整自定义 pill node、图片 pill、URL pill、工具开关、模型选择、文件内容异步检索、ChatManager 和持久化；这些属于后续上下文系统，不再标记为已复刻。
 - 根页面和工作区固定视口高度，隐藏窗口级滚动；正文编辑器、文件树、右侧聊天消息区使用内部滚动。

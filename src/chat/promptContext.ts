@@ -1,5 +1,14 @@
+export type PromptContextPillKind =
+  | "selection"
+  | "active-file"
+  | "file"
+  | "url"
+  | "tool"
+  | "memory";
+
 export type PromptContextPill = {
   id: string;
+  kind: PromptContextPillKind;
   label: string;
   value: string;
 };
@@ -10,6 +19,7 @@ export type PromptSuggestion = {
   detail: string;
   insertText: string;
   kind: "context" | "command";
+  pillKind?: PromptContextPillKind;
 };
 
 export type PromptSuggestionInput = {
@@ -32,6 +42,7 @@ export function upsertPromptContextPill(pills: PromptContextPill[], pill: Prompt
 export function createSelectionPromptPill(value: string): PromptContextPill {
   return {
     id: "selection",
+    kind: "selection",
     label: "选区",
     value,
   };
@@ -40,14 +51,52 @@ export function createSelectionPromptPill(value: string): PromptContextPill {
 export function createFilePromptPill(name: string, path: string): PromptContextPill {
   return {
     id: `file:${path}`,
+    kind: "file",
     label: name,
     value: `路径：${path}`,
+  };
+}
+
+export function createActiveFilePromptPill(label: string, value: string): PromptContextPill {
+  return {
+    id: "current-file",
+    kind: "active-file",
+    label,
+    value,
+  };
+}
+
+export function createUrlPromptPill(url: string): PromptContextPill {
+  return {
+    id: `url:${url}`,
+    kind: "url",
+    label: "URL",
+    value: url,
+  };
+}
+
+export function createToolPromptPill(name: string, value: string): PromptContextPill {
+  return {
+    id: `tool:${name}`,
+    kind: "tool",
+    label: name,
+    value,
+  };
+}
+
+export function createMemoryPromptPill(label: string, value: string): PromptContextPill {
+  return {
+    id: `memory:${label}:${value.slice(0, 24)}`,
+    kind: "memory",
+    label,
+    value,
   };
 }
 
 export function createPromptPillFromSuggestion(suggestion: PromptSuggestion): PromptContextPill {
   return {
     id: suggestion.id,
+    kind: suggestion.pillKind ?? "selection",
     label: suggestion.label,
     value: suggestion.insertText,
   };
@@ -64,6 +113,7 @@ export function buildPromptSuggestions(input: PromptSuggestionInput): PromptSugg
       detail: "把正文里划选的片段作为本轮上下文",
       insertText: selectedDraftText,
       kind: "context",
+      pillKind: "selection",
     });
   }
 
@@ -75,6 +125,7 @@ export function buildPromptSuggestions(input: PromptSuggestionInput): PromptSugg
         detail: input.editorTitle || input.titleFallback,
         insertText: `标题：${input.editorTitle || input.titleFallback}\n\n${input.editorContent}`,
         kind: "context",
+        pillKind: "active-file",
       },
       {
         id: "current-draft",
@@ -82,6 +133,7 @@ export function buildPromptSuggestions(input: PromptSuggestionInput): PromptSugg
         detail: "把全文作为重点上下文",
         insertText: input.editorContent,
         kind: "context",
+        pillKind: "active-file",
       },
     );
   }
