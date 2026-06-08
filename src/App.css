@@ -199,7 +199,6 @@ button {
   color: var(--text-primary);
 }
 
-.work-title,
 .chapter,
 .provider-row {
   width: 100%;
@@ -215,12 +214,10 @@ button {
   text-align: left;
 }
 
-.work-title.active,
 .chapter.active {
   background: var(--bg-selected);
 }
 
-.work-title span,
 .chapter span,
 .provider-row span {
   font-size: 13px;
@@ -228,7 +225,6 @@ button {
   font-weight: 520;
 }
 
-.work-title small,
 .chapter small,
 .provider-row small {
   color: var(--text-muted);

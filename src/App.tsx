@@ -461,11 +461,6 @@ function App() {
               </button>
             </div>
           </div>
-          <button className="work-title active" type="button" title={workspace?.activeWorkRoot || workspace?.vaultPath || undefined}>
-            <span>{workspace?.activeWorkRoot ? baseName(workspace.activeWorkRoot) : "Wridian Vault"}</span>
-            <small>{workspace?.activeWorkRoot || "默认本地写作目录"}</small>
-          </button>
-
           {workspaceError ? <div className="rail-error">{workspaceError}</div> : null}
 
           <div className="file-tree">
