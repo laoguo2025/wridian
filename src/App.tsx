@@ -10,10 +10,13 @@ import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext
 import {
   $createParagraphNode,
   $createTextNode,
+  $getSelection,
   $getRoot,
+  $isRangeSelection,
   COMMAND_PRIORITY_LOW,
   EditorState,
   KEY_ENTER_COMMAND,
+  TextNode,
 } from "lexical";
 import "./App.css";
 
@@ -82,6 +85,20 @@ type ChatMessage = {
   selectedText?: string;
 };
 
+type PromptContextPill = {
+  id: string;
+  label: string;
+  value: string;
+};
+
+type PromptSuggestion = {
+  id: string;
+  label: string;
+  detail: string;
+  insertText: string;
+  kind: "context" | "command";
+};
+
 type MemoryItem = {
   id: string;
   category?: string;
@@ -128,8 +145,9 @@ function App() {
   const [cocreationError, setCocreationError] = useState("");
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [pendingEdits, setPendingEdits] = useState<DraftEdit[]>([]);
-  const [attachedSelection, setAttachedSelection] = useState("");
+  const [promptPills, setPromptPills] = useState<PromptContextPill[]>([]);
   const [hasDraftSelection, setHasDraftSelection] = useState(false);
+  const [draftSelection, setDraftSelection] = useState<TextSelection>({ start: 0, end: 0 });
   const [selectedPath, setSelectedPath] = useState("");
   const [editorTitle, setEditorTitle] = useState("");
   const [editorContent, setEditorContent] = useState("");
@@ -160,7 +178,8 @@ function App() {
     setMemoryOpen(false);
     setCocreating(true);
     setCocreationError("");
-    const selectedText = (override?.selectedText ?? attachedSelection).trim();
+    const promptContextText = promptPills.map((pill) => `【${pill.label}】\n${pill.value}`).join("\n\n");
+    const selectedText = (override?.selectedText ?? promptContextText).trim();
     const userMessage: ChatMessage = {
       id: `user-${Date.now()}`,
       role: "user",
@@ -168,7 +187,7 @@ function App() {
       selectedText: selectedText || undefined,
     };
     setChatMessages((messages) => [...messages, userMessage]);
-    if (!override) setAttachedSelection("");
+    if (!override) setPromptPills([]);
     try {
       const response = await invoke<CoCreateResponse>("wridian_cocreate", {
         input: {
@@ -205,6 +224,7 @@ function App() {
     if (!selection) return;
     const { start, end } = selection;
     draftSelectionRef.current = { start, end };
+    setDraftSelection({ start, end });
     setHasDraftSelection(end > start);
   }, []);
 
@@ -215,7 +235,10 @@ function App() {
     if (!selection) return;
     const selected = editorContent.slice(selection.start, selection.end).trim();
     if (!selected) return;
-    setAttachedSelection(selected);
+    setPromptPills((current) => [
+      ...current.filter((pill) => pill.id !== "selection"),
+      { id: "selection", label: "选区", value: selected },
+    ]);
     setPrompt((current) => current || "请修改这段。");
   };
 
@@ -328,7 +351,11 @@ function App() {
   };
 
   const addNodeToPrompt = (node: WorkFileNode) => {
-    setPrompt((current) => `${current}${current ? "\n" : ""}@${node.name} ${node.path}`);
+    if (node.folder) return;
+    setPromptPills((current) => [
+      ...current.filter((pill) => pill.id !== `file:${node.path}`),
+      { id: `file:${node.path}`, label: node.name, value: `路径：${node.path}` },
+    ]);
   };
 
   const openFileContextMenu = (node: WorkFileNode, x: number, y: number) => {
@@ -359,8 +386,9 @@ function App() {
       setEditorContent(response.content);
       setLastSavedContent(response.content);
       draftSelectionRef.current = { start: response.content.length, end: response.content.length };
+      setDraftSelection({ start: response.content.length, end: response.content.length });
       setHasDraftSelection(false);
-      setAttachedSelection("");
+      setPromptPills([]);
       setPendingEdits([]);
       setSaveStatus("saved");
     } catch (error) {
@@ -383,6 +411,7 @@ function App() {
     const nextCursor = start + text.length;
     setEditorContent(nextContent);
     draftSelectionRef.current = { start: nextCursor, end: nextCursor };
+    setDraftSelection({ start: nextCursor, end: nextCursor });
     setHasDraftSelection(false);
     window.requestAnimationFrame(() => {
       setContentEditableCaret(draftEditorRef.current, nextCursor);
@@ -418,7 +447,9 @@ function App() {
 
   const editUserMessage = (message: ChatMessage) => {
     setPrompt(message.text);
-    if (message.selectedText) setAttachedSelection(message.selectedText);
+    if (message.selectedText) {
+      setPromptPills([{ id: "selection", label: "选区", value: message.selectedText }]);
+    }
   };
 
   const retryLastUserMessage = (message: ChatMessage) => {
@@ -460,6 +491,7 @@ function App() {
     setEditorContent(nextContent);
     setPendingEdits((edits) => edits.map((edit) => (appliedIds.has(edit.id) ? { ...edit, status: "accepted" } : edit)));
     draftSelectionRef.current = { start: 0, end: 0 };
+    setDraftSelection({ start: 0, end: 0 });
     setHasDraftSelection(false);
 
   };
@@ -469,6 +501,86 @@ function App() {
   };
 
   const pendingDraftEdits = pendingEdits.filter((edit) => edit.status === "pending");
+  const promptSuggestions = useMemo(() => {
+    const suggestions: PromptSuggestion[] = [];
+    const selectedDraftText = editorContent.slice(draftSelection.start, draftSelection.end).trim();
+
+    if (selectedDraftText) {
+      suggestions.push({
+        id: "selection",
+        label: "当前选区",
+        detail: "把正文里划选的片段作为本轮上下文",
+        insertText: selectedDraftText,
+        kind: "context",
+      });
+    }
+
+    if (selectedPath && editorContent.trim()) {
+      suggestions.push(
+        {
+          id: "current-file",
+          label: "当前文件",
+          detail: editorTitle || baseName(selectedPath),
+          insertText: `标题：${editorTitle || baseName(selectedPath)}\n\n${editorContent}`,
+          kind: "context",
+        },
+        {
+          id: "current-draft",
+          label: "当前正文",
+          detail: "把全文作为重点上下文",
+          insertText: editorContent,
+          kind: "context",
+        },
+      );
+    }
+
+    suggestions.push(
+      {
+        id: "rewrite-dialogue",
+        label: "改对白",
+        detail: "让对白更像角色本人、更适合小说或短剧表演",
+        insertText: "请把这段对白改得更符合角色口吻，并增强短剧冲突。",
+        kind: "command",
+      },
+      {
+        id: "raise-conflict",
+        label: "增强冲突",
+        detail: "提高场景里的阻力、误会、压迫感或选择成本",
+        insertText: "请增强这一段的戏剧冲突，但不要改变既有人物关系和事件顺序。",
+        kind: "command",
+      },
+      {
+        id: "add-hook",
+        label: "加结尾钩子",
+        detail: "补一个适合章节、分场或短剧结尾的悬念",
+        insertText: "请给这一段补一个结尾钩子，让读者或观众想继续看下一段。",
+        kind: "command",
+      },
+      {
+        id: "voice-check",
+        label: "检查角色口吻",
+        detail: "检查人物说话是否串味，指出并改写",
+        insertText: "请检查这一段的角色口吻是否一致，指出问题并给出修改建议。",
+        kind: "command",
+      },
+      {
+        id: "rename-character",
+        label: "批量修改角色名",
+        detail: "跨段落替换当前文件里的角色名",
+        insertText: "请把当前文件里的角色名从「旧名字」批量改成「新名字」，并保持上下文自然。",
+        kind: "command",
+      },
+      {
+        id: "extract-memory",
+        label: "提取记忆",
+        detail: "提取人物、设定、伏笔、风格、禁区和剧本规则",
+        insertText: "请从当前稿件中提取可以进入写作记忆的人物、设定、伏笔、风格、禁区和剧本规则。",
+        kind: "command",
+      },
+    );
+
+    return suggestions;
+  }, [draftSelection.end, draftSelection.start, editorContent, editorTitle, selectedPath]);
 
   const statusLabel = useMemo(() => {
     if (saveStatus === "idle") return "读取中";
@@ -676,9 +788,17 @@ function App() {
           onRetry={retryLastUserMessage}
           pending={cocreating}
           prompt={prompt}
-          attachedSelection={attachedSelection}
+          promptPills={promptPills}
+          promptSuggestions={promptSuggestions}
           onPromptChange={setPrompt}
-          onRemoveSelection={() => setAttachedSelection("")}
+          onRemovePill={(id) => setPromptPills((current) => current.filter((pill) => pill.id !== id))}
+          onSelectSuggestion={(suggestion) => {
+            if (suggestion.kind !== "context") return;
+            setPromptPills((current) => [
+              ...current.filter((pill) => pill.id !== suggestion.id),
+              { id: suggestion.id, label: suggestion.label, value: suggestion.insertText },
+            ]);
+          }}
           onSubmit={() => void sendPrompt()}
         />
       </div>
@@ -1063,31 +1183,35 @@ function buildDraftSuggestionChunks(content: string, edits: DraftEdit[]): DraftS
 }
 
 function ChatPanel({
-  attachedSelection,
   error,
   messages,
   onAddToMemory,
   onCopy,
   onEditUserMessage,
   onPromptChange,
-  onRemoveSelection,
+  onRemovePill,
   onRetry,
+  onSelectSuggestion,
   onSubmit,
   pending,
   prompt,
+  promptPills,
+  promptSuggestions,
 }: {
-  attachedSelection: string;
   error: string;
   messages: ChatMessage[];
   onAddToMemory: (text: string) => void;
   onCopy: (text: string) => void;
   onEditUserMessage: (message: ChatMessage) => void;
   onPromptChange: (value: string) => void;
-  onRemoveSelection: () => void;
+  onRemovePill: (id: string) => void;
   onRetry: (message: ChatMessage) => void;
+  onSelectSuggestion: (suggestion: PromptSuggestion) => void;
   onSubmit: () => void;
   pending: boolean;
   prompt: string;
+  promptPills: PromptContextPill[];
+  promptSuggestions: PromptSuggestion[];
 }) {
   const threadRef = useRef<HTMLDivElement | null>(null);
 
@@ -1107,7 +1231,7 @@ function ChatPanel({
               <article className={`chat-message ${message.role}`} key={message.id}>
               {message.selectedText ? (
                 <div className="message-context-row">
-                  <span className="message-context-pill">选区</span>
+                  <span className="message-context-pill">上下文</span>
                 </div>
               ) : null}
               <div className="chat-message-body">{message.text}</div>
@@ -1141,17 +1265,25 @@ function ChatPanel({
           onSubmit();
         }}
       >
-        {attachedSelection ? (
-          <div className="prompt-attachment">
-            <span>选区</span>
-            <button type="button" onClick={onRemoveSelection} aria-label="移除片段">×</button>
+        {promptPills.length ? (
+          <div className="prompt-attachments" aria-label="已添加上下文">
+            {promptPills.map((pill) => (
+              <span className="prompt-attachment" key={pill.id}>
+                <span>{pill.label}</span>
+                <button type="button" onClick={() => onRemovePill(pill.id)} aria-label={`移除${pill.label}`}>
+                  ×
+                </button>
+              </span>
+            ))}
           </div>
         ) : null}
         <CopilotPromptEditor
           value={prompt}
           onChange={onPromptChange}
+          onSelectSuggestion={onSelectSuggestion}
           onSubmit={onSubmit}
           placeholder="与 Wridian 对话"
+          suggestions={promptSuggestions}
         />
         <button type="submit" className="prompt-send" aria-label={pending ? "停止" : "发送"} disabled={pending || !prompt.trim()}>
           {pending ? "..." : "↵"}
@@ -1163,13 +1295,17 @@ function ChatPanel({
 
 function CopilotPromptEditor({
   onChange,
+  onSelectSuggestion,
   onSubmit,
   placeholder,
+  suggestions,
   value,
 }: {
   onChange: (value: string) => void;
+  onSelectSuggestion: (suggestion: PromptSuggestion) => void;
   onSubmit: () => void;
   placeholder: string;
+  suggestions: PromptSuggestion[];
   value: string;
 }) {
   const initialConfig = useMemo(
@@ -1203,6 +1339,7 @@ function CopilotPromptEditor({
         />
         <HistoryPlugin />
         <PromptKeyboardPlugin onSubmit={onSubmit} />
+        <PromptTypeaheadPlugin onSelectSuggestion={onSelectSuggestion} suggestions={suggestions} />
         <PromptValueSyncPlugin value={value} />
       </div>
     </LexicalComposer>
@@ -1233,6 +1370,186 @@ function PromptKeyboardPlugin({ onSubmit }: { onSubmit: () => void }) {
   }, [editor, onSubmit]);
 
   return null;
+}
+
+type PromptTriggerState = {
+  end: number;
+  query: string;
+  start: number;
+  trigger: "@" | "/";
+};
+
+function PromptTypeaheadPlugin({
+  onSelectSuggestion,
+  suggestions,
+}: {
+  onSelectSuggestion: (suggestion: PromptSuggestion) => void;
+  suggestions: PromptSuggestion[];
+}) {
+  const [editor] = useLexicalComposerContext();
+  const [triggerState, setTriggerState] = useState<PromptTriggerState | null>(null);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const triggerStateRef = useRef<PromptTriggerState | null>(null);
+  const filteredSuggestionsRef = useRef<PromptSuggestion[]>([]);
+  const selectedIndexRef = useRef(0);
+  const selectSuggestionRef = useRef<(suggestion: PromptSuggestion) => void>(() => {});
+  const filteredSuggestions = useMemo(() => {
+    if (!triggerState) return [];
+    const kind = triggerState.trigger === "@" ? "context" : "command";
+    const query = triggerState.query.trim().toLowerCase();
+    return suggestions
+      .filter((suggestion) => suggestion.kind === kind)
+      .filter((suggestion) => {
+        if (!query) return true;
+        return `${suggestion.label} ${suggestion.detail}`.toLowerCase().includes(query);
+      })
+      .slice(0, 7);
+  }, [suggestions, triggerState]);
+
+  useEffect(() => {
+    triggerStateRef.current = triggerState;
+  }, [triggerState]);
+
+  useEffect(() => {
+    filteredSuggestionsRef.current = filteredSuggestions;
+  }, [filteredSuggestions]);
+
+  useEffect(() => {
+    selectedIndexRef.current = selectedIndex;
+  }, [selectedIndex]);
+
+  useEffect(() => {
+    if (selectedIndex >= filteredSuggestions.length) {
+      setSelectedIndex(0);
+    }
+  }, [filteredSuggestions.length, selectedIndex]);
+
+  const closeMenu = useCallback(() => {
+    setTriggerState(null);
+    setSelectedIndex(0);
+  }, []);
+
+  const selectSuggestion = useCallback((suggestion: PromptSuggestion) => {
+    const currentTrigger = triggerStateRef.current;
+    if (!currentTrigger) return;
+    editor.update(() => {
+      replacePromptTrigger(currentTrigger, suggestion.kind === "command" ? suggestion.insertText : "");
+    });
+    if (suggestion.kind === "context") {
+      onSelectSuggestion(suggestion);
+    }
+    closeMenu();
+  }, [closeMenu, editor, onSelectSuggestion]);
+
+  useEffect(() => {
+    selectSuggestionRef.current = selectSuggestion;
+  }, [selectSuggestion]);
+
+  useEffect(() => {
+    return editor.registerUpdateListener(({ editorState }) => {
+      editorState.read(() => {
+        const selection = $getSelection();
+        if (!$isRangeSelection(selection) || !selection.isCollapsed()) {
+          setTriggerState(null);
+          return;
+        }
+
+        const anchor = selection.anchor;
+        const anchorNode = anchor.getNode();
+        if (!(anchorNode instanceof TextNode)) {
+          setTriggerState(null);
+          return;
+        }
+
+        setTriggerState(readPromptTrigger(anchorNode.getTextContent(), anchor.offset));
+      });
+    });
+  }, [editor]);
+
+  useEffect(() => {
+    let currentRoot: HTMLElement | null = null;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const currentSuggestions = filteredSuggestionsRef.current;
+      if (!triggerStateRef.current || !currentSuggestions.length) return;
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setSelectedIndex((current) => (current + 1) % currentSuggestions.length);
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setSelectedIndex((current) => (current - 1 + currentSuggestions.length) % currentSuggestions.length);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        closeMenu();
+      } else if (event.key === "Tab" || event.key === "Enter") {
+        event.preventDefault();
+        selectSuggestionRef.current(currentSuggestions[selectedIndexRef.current] ?? currentSuggestions[0]);
+      }
+    };
+    const unregister = editor.registerRootListener((rootElement, prevRootElement) => {
+      if (prevRootElement) {
+        prevRootElement.removeEventListener("keydown", handleKeyDown, true);
+      }
+      if (rootElement) {
+        rootElement.addEventListener("keydown", handleKeyDown, true);
+      }
+      currentRoot = rootElement;
+    });
+    return () => {
+      currentRoot?.removeEventListener("keydown", handleKeyDown, true);
+      unregister();
+    };
+  }, [closeMenu, editor]);
+
+  if (!triggerState || !filteredSuggestions.length) return null;
+
+  return (
+    <div className="prompt-suggestion-menu" role="listbox">
+      {filteredSuggestions.map((suggestion, index) => (
+        <button
+          type="button"
+          className={`prompt-suggestion-item ${index === selectedIndex ? "selected" : ""}`}
+          key={suggestion.id}
+          onMouseDown={(event) => {
+            event.preventDefault();
+            selectSuggestion(suggestion);
+          }}
+          role="option"
+          aria-selected={index === selectedIndex}
+        >
+          <span>{suggestion.label}</span>
+          <small>{suggestion.detail}</small>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function readPromptTrigger(text: string, offset: number): PromptTriggerState | null {
+  const textBeforeCaret = text.slice(0, offset);
+  const match = /(^|\s)([@/])([^\n@/]*)$/.exec(textBeforeCaret);
+  if (!match) return null;
+  const query = match[3] ?? "";
+  if (query.length > 36) return null;
+  return {
+    end: offset,
+    query,
+    start: match.index + (match[1]?.length ?? 0),
+    trigger: match[2] as "@" | "/",
+  };
+}
+
+function replacePromptTrigger(trigger: PromptTriggerState, replacement: string) {
+  const selection = $getSelection();
+  if (!$isRangeSelection(selection)) return;
+  const anchor = selection.anchor;
+  const anchorNode = anchor.getNode();
+  if (!(anchorNode instanceof TextNode)) return;
+  const text = anchorNode.getTextContent();
+  const normalizedReplacement = replacement ? `${replacement}${replacement.endsWith(" ") ? "" : " "}` : "";
+  const nextText = `${text.slice(0, trigger.start)}${normalizedReplacement}${text.slice(trigger.end)}`;
+  const cursor = trigger.start + normalizedReplacement.length;
+  anchorNode.setTextContent(nextText);
+  anchorNode.select(cursor, cursor);
 }
 
 function PromptValueSyncPlugin({ value }: { value: string }) {

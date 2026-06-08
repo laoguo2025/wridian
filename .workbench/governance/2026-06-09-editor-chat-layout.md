@@ -25,7 +25,8 @@
   - 消息动作改为底部紧凑行，保留用户要求的用户消息“编辑、复制、记忆”和 AI 消息“重试、复制、记忆”。
   - 输入容器继续按 `ChatInput` / `LexicalEditor` 的可见结构：边框容器、pill 区、约 60px 输入区、24px 底部动作、小发送按钮；长文本在输入区内部滚动。
   - 追加迁移：聊天输入区已从 textarea 改为 Lexical `ContentEditable`，引入 `@lexical/react` 和 `lexical`，实现受控文本同步、历史插件、Enter 发送、Shift+Enter 换行和中文输入法 composition 防误发送。
-  - 暂未引入完整 `@`/`/` 类型提示、图片 pill、工具开关和模型选择；这些属于后续上下文系统，不再标记为已复刻。
+  - 追加迁移：按 `AtMentionCommandPlugin.tsx` / `SlashCommandPlugin.tsx` 的交互形态接入 Wridian 本地第一版类型提示。输入 `@` 显示当前选区、当前文件、当前正文并转为输入框上方上下文 pill；输入 `/` 显示小说和短剧共用写作命令并插入提示文本。
+  - 暂未引入 Copilot 的完整自定义 pill node、图片 pill、URL pill、工具开关、模型选择、文件内容异步检索和独立 ChatManager；这些属于后续上下文系统，不再标记为已复刻。
 - 根页面和工作区固定视口高度，隐藏窗口级滚动；正文编辑器、文件树、右侧聊天消息区使用内部滚动。
 - 增加主题化滚动条样式。
 

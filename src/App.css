@@ -631,16 +631,25 @@ button {
 
 .prompt-bar {
   width: 100%;
-  min-height: 96px;
+  min-height: 94px;
   margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: transparent;
-  padding: 8px 4px 4px;
+  padding: 6px 4px 4px;
   position: relative;
+}
+
+.prompt-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 48px;
+  overflow: auto;
+  padding: 0 2px;
 }
 
 .prompt-attachment {
@@ -700,6 +709,19 @@ button {
   padding: 0 8px;
   white-space: pre-wrap;
   word-break: break-word;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.prompt-editor::-webkit-scrollbar,
+.prompt-attachments::-webkit-scrollbar {
+  width: 6px;
+}
+
+.prompt-editor::-webkit-scrollbar-thumb,
+.prompt-attachments::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: var(--border);
 }
 
 .prompt-editor-paragraph {
@@ -738,6 +760,57 @@ button {
 .prompt-send:disabled {
   cursor: default;
   opacity: 0.45;
+}
+
+.prompt-suggestion-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 8;
+  max-height: 236px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-pop);
+  padding: 4px;
+}
+
+.prompt-suggestion-item {
+  width: 100%;
+  min-height: 42px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 1px;
+  padding: 5px 7px;
+  text-align: left;
+}
+
+.prompt-suggestion-item:hover,
+.prompt-suggestion-item.selected {
+  background: var(--bg-hover);
+}
+
+.prompt-suggestion-item span {
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.prompt-suggestion-item small {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: 100%;
 }
 
 .drawer-backdrop,
