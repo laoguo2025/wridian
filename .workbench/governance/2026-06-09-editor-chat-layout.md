@@ -28,6 +28,7 @@
   - 追加迁移：按 `AtMentionCommandPlugin.tsx` / `SlashCommandPlugin.tsx` 的交互形态接入 Wridian 本地第一版类型提示。输入 `@` 显示当前选区、当前文件、当前正文并转为输入框上方上下文 pill；输入 `/` 显示小说和短剧共用写作命令并插入提示文本。
   - 追加迁移：按 `MessageRepository.ts` 的单一消息源思路拆出 `src/chat/messageRepository.ts`，集中管理消息类型、消息 ID、用户/助手消息创建、上下文 pill 序列化、编辑恢复和重试定位。
   - 追加迁移：将 `CopilotPromptEditor`、键盘发送、受控值同步、`@`/`/` 类型提示从 `App.tsx` 拆到 `src/chat/CopilotPromptEditor.tsx`，为后续完整 pill node、URL/tool pill 和文件内容检索预留模块入口。
+  - 追加迁移：将右侧消息流、消息动作、上下文 pill 区和输入组件组合从 `App.tsx` 拆到 `src/chat/ChatPanel.tsx`，对齐 `ChatMessages` / `ChatSingleMessage` 的组件边界。
   - 暂未引入 Copilot 的完整自定义 pill node、图片 pill、URL pill、工具开关、模型选择、文件内容异步检索、ChatManager 和持久化；这些属于后续上下文系统，不再标记为已复刻。
 - 根页面和工作区固定视口高度，隐藏窗口级滚动；正文编辑器、文件树、右侧聊天消息区使用内部滚动。
 - 增加主题化滚动条样式。
