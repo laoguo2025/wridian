@@ -40,6 +40,10 @@ pub(crate) fn memory_folder_path(data_dir: &Path) -> PathBuf {
     runtime_root(data_dir)
 }
 
+pub(crate) fn memory_wiki_root(data_dir: &Path) -> PathBuf {
+    runtime_root(data_dir).join("wiki")
+}
+
 pub(crate) fn ensure_workspace(data_dir: &Path) -> Result<(), String> {
     let vault = vault_root(data_dir);
     let works = vault.join("works");
@@ -47,8 +51,23 @@ pub(crate) fn ensure_workspace(data_dir: &Path) -> Result<(), String> {
     let sessions = runtime.join("sessions");
     let episodes = runtime.join("episodes");
     let chat = runtime.join("chat");
+    let wiki = memory_wiki_root(data_dir);
+    let wiki_sources = wiki.join("sources");
+    let wiki_entities = wiki.join("entities");
+    let wiki_concepts = wiki.join("concepts");
 
-    for dir in [&vault, &works, &runtime, &sessions, &episodes, &chat] {
+    for dir in [
+        &vault,
+        &works,
+        &runtime,
+        &sessions,
+        &episodes,
+        &chat,
+        &wiki,
+        &wiki_sources,
+        &wiki_entities,
+        &wiki_concepts,
+    ] {
         fs::create_dir_all(dir).map_err(|error| format!("Wridian 目录创建失败：{error}"))?;
     }
 
@@ -92,6 +111,9 @@ pub(crate) fn ensure_workspace(data_dir: &Path) -> Result<(), String> {
         }))
         .map_err(|error| error.to_string())?,
     )?;
+    write_if_missing(&wiki.join("index.md"), "# Wridian 记忆索引\n\n")?;
+    write_if_missing(&wiki.join("hot.md"), "# Hot Context\n\n")?;
+    write_if_missing(&wiki.join("log.md"), "# 记忆同步日志\n\n")?;
     Ok(())
 }
 

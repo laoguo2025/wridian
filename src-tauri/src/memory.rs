@@ -1,7 +1,7 @@
 use crate::model_accounts::{read_custom_api_settings, StoredCustomApiSettings};
 use crate::runtime::{
     candidates_path, ensure_workspace, iso_timestamp, memory_folder_path, memory_tree_path,
-    next_runtime_id, wridian_data_dir,
+    memory_wiki_root, next_runtime_id, wridian_data_dir,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -276,7 +276,92 @@ fn write_memory_items(data_dir: &Path, memories: &[MemoryItem]) -> Result<(), St
     }))
     .map_err(|error| error.to_string())?;
     fs::write(memory_tree_path(data_dir), content)
-        .map_err(|error| format!("记忆树写入失败：{error}"))
+        .map_err(|error| format!("记忆树写入失败：{error}"))?;
+    write_memory_wiki(data_dir, memories)
+}
+
+fn write_memory_wiki(data_dir: &Path, memories: &[MemoryItem]) -> Result<(), String> {
+    let wiki = memory_wiki_root(data_dir);
+    let sources = wiki.join("sources");
+    let entities = wiki.join("entities");
+    let concepts = wiki.join("concepts");
+    for dir in [&wiki, &sources, &entities, &concepts] {
+        fs::create_dir_all(dir).map_err(|error| format!("记忆 wiki 目录创建失败：{error}"))?;
+    }
+
+    let mut index = String::from("# Wridian 记忆索引\n\n");
+    let mut hot = String::from("# Hot Context\n\n");
+    for memory in memories {
+        let folder = match memory.category.as_str() {
+            "人物" => &entities,
+            "其他" => &sources,
+            _ => &concepts,
+        };
+        let file_name = format!("{}.md", sanitize_markdown_file_name(&format!("{}-{}", memory.category, memory.id)));
+        let path = folder.join(&file_name);
+        let relative_path = format!(
+            "{}/{}",
+            folder
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("sources"),
+            file_name
+        );
+        fs::write(&path, render_memory_markdown(memory))
+            .map_err(|error| format!("记忆 wiki 写入失败：{error}"))?;
+        index.push_str(&format!(
+            "- [{}]({})：{}\n",
+            memory.category,
+            relative_path,
+            compact_text(&memory.text, 80)
+        ));
+    }
+
+    for memory in memories.iter().rev().take(12) {
+        hot.push_str(&format!("- 【{}】{}\n", memory.category, memory.text.trim()));
+    }
+
+    fs::write(wiki.join("index.md"), index).map_err(|error| format!("记忆索引写入失败：{error}"))?;
+    fs::write(wiki.join("hot.md"), hot).map_err(|error| format!("Hot Context 写入失败：{error}"))?;
+    fs::write(
+        wiki.join("log.md"),
+        format!("# 记忆同步日志\n\n- {} 同步 {} 条记忆。\n", iso_timestamp(), memories.len()),
+    )
+    .map_err(|error| format!("记忆日志写入失败：{error}"))?;
+    Ok(())
+}
+
+fn render_memory_markdown(memory: &MemoryItem) -> String {
+    format!(
+        "---\nid: {}\ncategory: {}\nsource: {}\ntitle: {}\ncreated: {}\n---\n\n# {}\n\n{}\n",
+        escape_yaml(&memory.id),
+        escape_yaml(&memory.category),
+        escape_yaml(&memory.source_path),
+        escape_yaml(&memory.title),
+        escape_yaml(&memory.created_at),
+        memory.category,
+        memory.text.trim()
+    )
+}
+
+fn sanitize_markdown_file_name(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|character| match character {
+            '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '-',
+            other => other,
+        })
+        .collect::<String>();
+    let trimmed = sanitized.trim_matches(['.', ' ']).trim();
+    if trimmed.is_empty() {
+        "memory".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn escape_yaml(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 fn read_memory_candidates(data_dir: &Path) -> Result<Vec<MemoryCandidate>, String> {

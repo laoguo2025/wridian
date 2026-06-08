@@ -90,6 +90,7 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 - 聊天记录：`.wridian/chat/*.md`，每个运行会话保存为 Markdown，包含 frontmatter、来源文件、用户/助手消息和上下文 pill。
 - 长期记忆：`.wridian/memory-tree.json`。
 - 候选记忆：`.wridian/candidates.json`。
+- Markdown 记忆 vault：`.wridian/wiki/`，包含 `sources/`、`entities/`、`concepts/`、`index.md`、`hot.md`、`log.md`。确认记忆时会继续写 JSON，同时镜像为 Markdown 条目。
 - 记忆条目支持写作分类：人物、世界观、剧情线、风格、禁区、其他。
 - 模型提取不得直接写入长期记忆，必须经过候选、编辑、确认。
 
