@@ -104,7 +104,12 @@ pub(crate) fn iso_timestamp() -> String {
 }
 
 pub(crate) fn next_runtime_id(prefix: &str) -> String {
-    format!("{prefix}-{}", iso_timestamp())
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    format!("{prefix}-{nanos}")
 }
 
 fn write_if_missing(path: &Path, content: &str) -> Result<(), String> {

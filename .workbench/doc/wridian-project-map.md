@@ -23,7 +23,7 @@ Wridian 是独立桌面写作共创系统，当前优先级是本地写作文件
 - 文件区采用 Obsidian 式结构：顶部新建文件/文件夹/作品文件夹，树节点支持多层级展开/收回和右键菜单，底部系统设置。
 - 文件区“移到回收站”只移动到当前工作根目录 `.wridian-trash/`，不做永久删除。
 - 模型接入先支持一个 OpenAI-compatible 自定义 API。
-- 记忆 MVP 使用 `.wridian/memory-tree.json` 和 `.wridian/candidates.json`，先做本地确认闭环，再接模型抽取。
+- 记忆 MVP 使用 `.wridian/memory-tree.json` 和 `.wridian/candidates.json`；模型只提取待确认候选，用户编辑确认后才写入长期记忆。
 - 暂不接入生图、生视频和复杂模型网关。
 
 ## 记忆存储
@@ -31,7 +31,7 @@ Wridian 是独立桌面写作共创系统，当前优先级是本地写作文件
 - 记忆文件夹：Wridian 数据目录下的 `.wridian/`。
 - 长期记忆：`.wridian/memory-tree.json`。
 - 候选记忆：`.wridian/candidates.json`。
-- 当前分类只有“长期记忆”和“待确认候选”；后续应扩展为作品、人物、世界观、风格、禁区等写作分类。
+- 记忆条目支持写作分类：人物、世界观、剧情线、风格、禁区、其他。
 - 模型提取不得直接写入长期记忆，必须经过候选、编辑、确认。
 
 ## 后端约束

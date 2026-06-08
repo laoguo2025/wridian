@@ -45,6 +45,7 @@ type TestCustomApiResponse = {
 
 type MemoryItem = {
   id: string;
+  category?: string;
   text: string;
   sourcePath: string;
   title: string;
@@ -53,6 +54,7 @@ type MemoryItem = {
 
 type MemoryCandidate = {
   id: string;
+  category?: string;
   text: string;
   sourcePath: string;
   title: string;
@@ -146,6 +148,7 @@ function App() {
   const [saveError, setSaveError] = useState("");
   const [memoryState, setMemoryState] = useState<MemoryState>(demoMemoryState);
   const [memoryError, setMemoryError] = useState("");
+  const [extractingMemory, setExtractingMemory] = useState(false);
   const [fileMenu, setFileMenu] = useState<FileContextMenu | null>(null);
 
   const loadMemoryState = useCallback(async () => {
@@ -414,6 +417,28 @@ function App() {
     }
   };
 
+  const extractMemoryCandidates = async () => {
+    setExtractingMemory(true);
+    setMemoryError("");
+    try {
+      if (!("__TAURI_INTERNALS__" in window)) {
+        throw new Error("请在 Wridian 桌面端使用正文记忆提取。");
+      }
+      const response = await invoke<MemoryState>("wridian_extract_memory_candidates", {
+        input: {
+          sourcePath: selectedPath,
+          title: editorTitle,
+          content: editorContent,
+        },
+      });
+      setMemoryState(response);
+    } catch (error) {
+      setMemoryError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setExtractingMemory(false);
+    }
+  };
+
   const openMemoryFolder = async () => {
     if (!memoryState.memoryFolderPath) {
       setMemoryError("请在 Wridian 桌面端打开记忆文件夹。");
@@ -534,9 +559,11 @@ function App() {
           memoryState={memoryState}
           onAcceptCandidate={acceptMemoryCandidate}
           onClose={() => setMemoryOpen(false)}
+          onExtractCandidates={extractMemoryCandidates}
           onIgnoreCandidate={ignoreMemoryCandidate}
           onOpenMemoryFolder={openMemoryFolder}
           onUpdateCandidate={updateMemoryCandidate}
+          extracting={extractingMemory}
           workspace={workspace}
         />
       ) : null}
@@ -746,20 +773,24 @@ function SettingsIcon() {
 
 function MemoryDrawer({
   currentTitle,
+  extracting,
   memoryError,
   memoryState,
   onAcceptCandidate,
   onClose,
+  onExtractCandidates,
   onIgnoreCandidate,
   onOpenMemoryFolder,
   onUpdateCandidate,
   workspace,
 }: {
   currentTitle: string;
+  extracting: boolean;
   memoryError: string;
   memoryState: MemoryState;
   onAcceptCandidate: (id: string) => void;
   onClose: () => void;
+  onExtractCandidates: () => void;
   onIgnoreCandidate: (id: string) => void;
   onOpenMemoryFolder: () => void;
   onUpdateCandidate: (id: string, text: string) => void;
@@ -788,7 +819,10 @@ function MemoryDrawer({
         <section className="memory-card">
           <h2>当前现场</h2>
           <p>{currentTitle}</p>
-          <p>共创输入会先变成待确认记忆，由你决定是否写入。</p>
+          <p>正文提取只会生成待确认记忆，由你决定是否写入。</p>
+          <button type="button" className="extract-action" onClick={onExtractCandidates} disabled={extracting}>
+            {extracting ? "提取中" : "从当前正文提取"}
+          </button>
         </section>
 
         <section className="memory-card">
@@ -796,7 +830,10 @@ function MemoryDrawer({
           {memoryState.memories.length ? (
             <ul>
               {memoryState.memories.map((item) => (
-                <li key={item.id}>{item.text}</li>
+                <li key={item.id}>
+                  <span className="memory-category">{item.category ?? "其他"}</span>
+                  {item.text}
+                </li>
               ))}
             </ul>
           ) : (
@@ -856,7 +893,10 @@ function MemoryCandidateCard({
 
   return (
     <section className="memory-card pending">
-      <h2>待确认</h2>
+      <h2>
+        待确认
+        <span className="memory-category">{candidate.category ?? "其他"}</span>
+      </h2>
       {editing ? (
         <textarea className="candidate-editor" value={draft} onChange={(event) => setDraft(event.currentTarget.value)} aria-label="编辑候选记忆" />
       ) : (

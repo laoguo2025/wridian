@@ -23,6 +23,7 @@ pub fn run() {
             model_accounts::wridian_test_custom_api,
             memory::wridian_get_memory_state,
             memory::wridian_create_memory_candidate,
+            memory::wridian_extract_memory_candidates,
             memory::wridian_update_memory_candidate,
             memory::wridian_accept_memory_candidate,
             memory::wridian_ignore_memory_candidate

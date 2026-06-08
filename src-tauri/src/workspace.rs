@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct WorkspaceInfo {
+pub(crate) struct WorkspaceInfo {
     vault_path: String,
     runtime_path: String,
     files_root_path: String,
@@ -18,40 +18,40 @@ struct WorkspaceInfo {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SetWorkRootInput {
+pub(crate) struct SetWorkRootInput {
     path: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct FilePathInput {
+pub(crate) struct FilePathInput {
     path: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SaveFileInput {
+pub(crate) struct SaveFileInput {
     path: String,
     content: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CreateNodeInput {
+pub(crate) struct CreateNodeInput {
     parent_path: String,
     name: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct RenameNodeInput {
+pub(crate) struct RenameNodeInput {
     path: String,
     new_name: String,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct OpenFileResponse {
+pub(crate) struct OpenFileResponse {
     path: String,
     name: String,
     content: String,
@@ -59,14 +59,14 @@ struct OpenFileResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SaveFileResponse {
+pub(crate) struct SaveFileResponse {
     ok: bool,
     saved_at: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-struct WorkFileNode {
+pub(crate) struct WorkFileNode {
     name: String,
     path: String,
     folder: bool,
@@ -243,10 +243,6 @@ fn read_active_work_root(data_dir: &Path) -> Result<Option<String>, String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned))
-}
-
-fn read_workspace_files(data_dir: &Path) -> Result<Vec<WorkFileNode>, String> {
-    read_work_tree(&files_root(data_dir)?)
 }
 
 fn files_root(data_dir: &Path) -> Result<PathBuf, String> {

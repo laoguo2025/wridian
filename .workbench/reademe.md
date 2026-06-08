@@ -4,5 +4,4 @@
 
 - 项目地图：`.workbench/doc/wridian-project-map.md`
 - 长期文档登记：`.workbench/doc/workbench-longterm-doc-registry.md`
-- 本轮过程留痕：`.workbench/governance/2026-06-08-file-autosave-custom-api.md`
-
+- 本轮过程留痕：`.workbench/governance/2026-06-08-model-memory-extraction.md`

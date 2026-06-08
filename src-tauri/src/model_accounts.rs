@@ -7,7 +7,7 @@ use std::time::Duration;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CustomApiSettingsInput {
+pub(crate) struct CustomApiSettingsInput {
     base_url: String,
     api_key: String,
     model: String,
@@ -15,7 +15,7 @@ struct CustomApiSettingsInput {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct CustomApiSettingsStatus {
+pub(crate) struct CustomApiSettingsStatus {
     configured: bool,
     base_url: Option<String>,
     model: Option<String>,
@@ -24,17 +24,17 @@ struct CustomApiSettingsStatus {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct TestCustomApiResponse {
+pub(crate) struct TestCustomApiResponse {
     ok: bool,
     message: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct StoredCustomApiSettings {
-    base_url: String,
-    api_key: String,
-    model: String,
+pub(crate) struct StoredCustomApiSettings {
+    pub(crate) base_url: String,
+    pub(crate) api_key: String,
+    pub(crate) model: String,
 }
 
 #[tauri::command]
@@ -110,7 +110,9 @@ fn normalize_custom_api_settings(
     })
 }
 
-fn read_custom_api_settings(data_dir: &Path) -> Result<Option<StoredCustomApiSettings>, String> {
+pub(crate) fn read_custom_api_settings(
+    data_dir: &Path,
+) -> Result<Option<StoredCustomApiSettings>, String> {
     let path = model_accounts_path(data_dir);
     if !path.exists() {
         return Ok(None);
