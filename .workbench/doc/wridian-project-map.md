@@ -11,6 +11,8 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 ## 当前入口
 
 - 前端入口：`src/App.tsx`
+- 聊天输入组件：`src/chat/CopilotPromptEditor.tsx`
+- 聊天消息仓库：`src/chat/messageRepository.ts`
 - 主要样式：`src/App.css`
 - Tauri 组装入口：`src-tauri/src/lib.rs`
 - 后端模块：
@@ -42,12 +44,12 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 - 共创对话区常驻在工作界面右侧，按 `obsidian-copilot` 的简洁侧栏聊天形态复刻可见交互：消息流为空时不显示说明卡片，输入框位于对话区底部，发送后只更新右侧消息流，不弹出共创抽屉。
 - 当前对齐的 `obsidian-copilot` 源码基线：
   - `ChatInput.tsx`：带边框的底部输入容器、上下文 pill 区、中间约 60px 起步输入区、24px 底部工具栏、小发送/停止动作。
-  - `LexicalEditor.tsx`：输入区内部滚动，长文本不撑高右栏；Wridian 聊天输入区已从 textarea 切换为 Lexical `ContentEditable`，使用受控文本同步、历史插件和 Enter 发送。
-  - `AtMentionCommandPlugin.tsx` / `SlashCommandPlugin.tsx`：Wridian 已接入本地第一版 `@` 上下文选择和 `/` 写作命令提示。`@` 可把当前选区、当前文件、当前正文放入输入框上方上下文 pill；`/` 可插入改对白、增强冲突、加结尾钩子、检查角色口吻、批量改角色名、提取记忆等小说和短剧共用命令。
+  - `LexicalEditor.tsx`：输入区内部滚动，长文本不撑高右栏；Wridian 聊天输入区已从 textarea 切换为 Lexical `ContentEditable`，使用受控文本同步、历史插件和 Enter 发送；实现入口为 `src/chat/CopilotPromptEditor.tsx`。
+  - `AtMentionCommandPlugin.tsx` / `SlashCommandPlugin.tsx`：Wridian 已接入本地第一版 `@` 上下文选择和 `/` 写作命令提示，实现在 `src/chat/CopilotPromptEditor.tsx` 内。`@` 可把当前选区、当前文件、当前正文放入输入框上方上下文 pill；`/` 可插入改对白、增强冲突、加结尾钩子、检查角色口吻、批量改角色名、提取记忆等小说和短剧共用命令。
   - `MessageRepository.ts`：Wridian 已开始拆出前端消息仓库边界，`src/chat/messageRepository.ts` 负责消息类型、ID、用户/助手消息创建、上下文 pill 序列化、编辑恢复和重试定位；`App.tsx` 仍负责调用 Tauri 共创命令。
   - `ChatMessages.tsx`：空消息流保持空白，Relevant Notes / Suggested Prompts 这类辅助块不固定展示。
   - `ChatSingleMessage.tsx` / `ChatButtons.tsx`：用户消息使用浅边框背景，AI 消息不做重卡片；消息动作放在底部紧凑行。
-  - 后续仍需补齐 Copilot 的完整文件内容检索、URL/工具 pill 节点、模型/工具选择器、图片粘贴和独立 ChatManager/ChatPersistenceManager；当前 `@`/`/` 是嵌入 `App.tsx` 的本地 MVP，不是最终模块边界。
+  - 后续仍需补齐 Copilot 的完整文件内容检索、URL/工具 pill 节点、模型/工具选择器、图片粘贴和独立 ChatManager/ChatPersistenceManager；当前 `@`/`/` 是本地 MVP，不是最终完整 Copilot 插件边界。
 - 记忆命中、注入和上下文选择默认在后台执行，不在右侧对话区常驻展示“本次使用的记忆”等系统说明；记忆面板只由顶部“记忆”、显式“从当前正文提取”或“记住这条”动作打开。
 - 右侧侧边面板应支持模式切换，第一版至少区分“共创”和“记忆”。
 - 记忆提取是显式动作；模型不得在普通共创发送时直接写长期记忆。
