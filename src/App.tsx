@@ -1083,36 +1083,46 @@ function ChatPanel({
   pending: boolean;
   prompt: string;
 }) {
-  const lastUserMessage = [...messages].reverse().find((message) => message.role === "user");
+  const threadRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const thread = threadRef.current;
+    if (!thread) return;
+    thread.scrollTop = thread.scrollHeight;
+  }, [error, messages.length, pending]);
 
   return (
     <aside className="chat-panel" aria-label="对话区">
-      <div className="chat-thread">
+      <div className="chat-thread" ref={threadRef}>
         {messages.length ? (
-          messages.map((message) => (
-            <article className={`chat-message ${message.role}`} key={message.id}>
-              <div className="chat-message-label">{message.role === "user" ? "你" : "Wridian"}</div>
+          messages.map((message, index) => {
+            const userForRetry = [...messages.slice(0, index)].reverse().find((item) => item.role === "user");
+            return (
+              <article className={`chat-message ${message.role}`} key={message.id}>
               {message.selectedText ? (
-                <blockquote>{message.selectedText}</blockquote>
+                <div className="message-context-row">
+                  <span className="message-context-pill">选区</span>
+                </div>
               ) : null}
-              <p className="cocreation-reply">{message.text}</p>
+              <div className="chat-message-body">{message.text}</div>
               <div className="message-actions">
                 {message.role === "user" ? (
                   <>
-                    <button type="button" onClick={() => onEditUserMessage(message)}>编辑</button>
-                    <button type="button" onClick={() => onCopy(message.text)}>复制</button>
-                    <button type="button" onClick={() => onAddToMemory(message.text)}>添加到记忆</button>
+                    <button type="button" onClick={() => onEditUserMessage(message)} title="编辑">编辑</button>
+                    <button type="button" onClick={() => onCopy(message.text)} title="复制">复制</button>
+                    <button type="button" onClick={() => onAddToMemory(message.text)} title="添加到记忆">记忆</button>
                   </>
                 ) : (
                   <>
-                    <button type="button" onClick={() => lastUserMessage ? onRetry(lastUserMessage) : undefined}>重试</button>
-                    <button type="button" onClick={() => onCopy(message.text)}>复制</button>
-                    <button type="button" onClick={() => onAddToMemory(message.text)}>添加到记忆</button>
+                    <button type="button" onClick={() => userForRetry ? onRetry(userForRetry) : undefined} disabled={!userForRetry} title="重试">重试</button>
+                    <button type="button" onClick={() => onCopy(message.text)} title="复制">复制</button>
+                    <button type="button" onClick={() => onAddToMemory(message.text)} title="添加到记忆">记忆</button>
                   </>
                 )}
               </div>
             </article>
-          ))
+            );
+          })
         ) : null}
         {pending ? <div className="chat-status">正在回复。</div> : null}
         {error ? <div className="chat-status error">{error}</div> : null}
@@ -1139,9 +1149,9 @@ function ChatPanel({
           aria-label="共创输入"
         />
         <div className="prompt-toolbar">
-          <span>Wridian</span>
+          <span aria-hidden="true" />
           <button type="submit" aria-label={pending ? "停止" : "发送"} disabled={pending || !prompt.trim()}>
-            {pending ? "■" : "↵"}
+            {pending ? "..." : "↵"}
           </button>
         </div>
       </form>

@@ -635,12 +635,12 @@ button {
   margin: 0;
   display: grid;
   grid-template-rows: auto minmax(60px, auto) 24px;
-  gap: 3px;
+  gap: 2px;
   align-items: stretch;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--bg-panel), transparent 20%);
-  padding: 7px 7px 5px;
+  border-radius: 6px;
+  background: transparent;
+  padding: 8px 5px 5px;
 }
 
 .prompt-attachment {
@@ -683,8 +683,8 @@ button {
 
 .prompt-bar textarea {
   min-width: 0;
-  height: 63px;
-  max-height: 220px;
+  height: 60px;
+  max-height: 160px;
   border: 0;
   outline: none;
   resize: none;
@@ -692,7 +692,7 @@ button {
   color: var(--text-primary);
   font-size: 14px;
   line-height: 21px;
-  padding: 0 2px;
+  padding: 0 7px;
   overflow: auto;
 }
 
@@ -704,22 +704,25 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 4px;
   min-width: 0;
+  height: 24px;
+  padding: 0 3px;
   color: var(--text-muted);
   font-size: 12px;
   line-height: 16px;
 }
 
 .prompt-toolbar button {
-  width: 26px;
-  height: 24px;
+  min-width: 26px;
+  height: 22px;
   border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--text-muted);
-  font-size: 13px;
-  line-height: 13px;
+  font-size: 14px;
+  line-height: 14px;
+  padding: 0 6px;
 }
 
 .prompt-toolbar button:hover {
@@ -772,14 +775,14 @@ button {
 .chat-panel {
   min-width: 0;
   min-height: 0;
-  border-radius: 10px;
-  background: var(--bg-sidebar);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-sidebar), transparent 10%);
   box-shadow: var(--shadow-card);
   backdrop-filter: blur(22px);
-  padding: 10px;
+  padding: 8px;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
-  gap: 8px;
+  gap: 6px;
   overflow: hidden;
 }
 
@@ -837,46 +840,60 @@ button {
   padding: 12px;
 }
 
-.cocreation-reply {
-  white-space: pre-wrap;
-}
-
 .chat-thread {
-  display: grid;
-  gap: 10px;
-  align-content: start;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   min-height: 0;
   overflow: auto;
-  padding-right: 2px;
+  padding: 0 0 4px;
+  scroll-behavior: smooth;
 }
 
 .chat-message {
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--bg-selected), transparent 24%);
-  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  border-radius: 6px;
+  padding: 8px;
+  overflow: hidden;
+}
+
+.chat-message.user {
+  border: 1px solid var(--border);
+  background: var(--bg-hover);
 }
 
 .chat-message.assistant {
-  border: 1px solid color-mix(in srgb, var(--focus), transparent 64%);
-  background: color-mix(in srgb, var(--bg-panel), transparent 6%);
+  background: transparent;
 }
 
-.chat-message-label {
+.message-context-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.message-context-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  border-radius: 999px;
+  background: var(--bg-selected);
   color: var(--text-muted);
+  padding: 0 7px;
   font-size: 12px;
   line-height: 16px;
-  margin-bottom: 6px;
 }
 
-.chat-message blockquote {
-  border-left: 2px solid color-mix(in srgb, var(--focus), transparent 35%);
-  color: var(--text-muted);
-  font-size: 12px;
-  line-height: 18px;
-  margin: 0 0 8px;
-  max-height: 90px;
-  overflow: hidden;
-  padding-left: 8px;
+.chat-message-body {
+  color: var(--text-body);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .chat-status {
@@ -893,23 +910,29 @@ button {
 .message-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  padding-top: 8px;
+  justify-content: flex-end;
+  gap: 2px;
+  min-height: 22px;
 }
 
 .message-actions button {
-  min-height: 28px;
+  min-height: 22px;
   border: 0;
-  border-radius: 7px;
+  border-radius: 6px;
   background: transparent;
   color: var(--text-muted);
-  padding: 0 8px;
+  padding: 0 6px;
   font-size: 12px;
+  line-height: 16px;
 }
 
 .message-actions button:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+.message-actions button:disabled {
+  opacity: 0.45;
 }
 
 .memory-card h2 {

@@ -19,7 +19,12 @@
   - `src/components/chat-components/LexicalEditor.tsx`：输入区 `min-height` 约 60px，内部滚动，支持 `@`、`/`、pill 和粘贴。
   - `src/components/chat-components/ChatMessages.tsx`：空消息时辅助组件可由设置开关控制，不是固定说明面板。
   - `src/components/chat-components/ChatSingleMessage.tsx`：用户消息和 AI 消息底部提供动作按钮。
-- Wridian 本轮只复刻轻量结构：消息流为空则空着；输入框为三行输入区加底部小工具栏；选区显示为 pill；`@`、`/`、多工具 pill、模型选择和完整 Lexical 输入后续再补。
+- 追加修正：根据用户反馈，“复刻”必须基于 `obsidian-copilot` 实际代码而不是泛泛参考。本轮重新按源码对齐可见形态：
+  - 右侧消息流改为 `ChatMessages` / `ChatSingleMessage` 风格的整宽流；用户消息浅边框背景，AI 消息不做显眼重卡片。
+  - 移除消息顶部角色标签和大块选区引用；选区上下文改为类似 context badge 的小 pill。
+  - 消息动作改为底部紧凑行，保留用户要求的用户消息“编辑、复制、记忆”和 AI 消息“重试、复制、记忆”。
+  - 输入容器继续按 `ChatInput` / `LexicalEditor` 的可见结构：边框容器、pill 区、约 60px 输入区、24px 底部工具栏、小发送按钮；长文本在输入区内部滚动。
+  - 暂不引入 Lexical、完整 `@`/`/` 类型提示、图片 pill、工具开关和模型选择；这些属于后续功能，不再标记为已复刻。
 - 根页面和工作区固定视口高度，隐藏窗口级滚动；正文编辑器、文件树、右侧聊天消息区使用内部滚动。
 - 增加主题化滚动条样式。
 
