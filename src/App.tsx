@@ -36,6 +36,14 @@ import "./App.css";
 type Theme = "light" | "dark";
 type FontSizeMode = "default" | "large" | "max";
 type SaveStatus = "idle" | "dirty" | "saving" | "saved" | "error";
+type CreativeSkillId = "knowledgeOps" | "workDecompose" | "knowledgeCard" | "authorDistill" | "shortDrama";
+
+type CreativeSkill = {
+  id: CreativeSkillId;
+  title: string;
+  domain: string;
+  status: string;
+};
 
 type WorkspaceInfo = {
   vaultPath: string;
@@ -169,6 +177,20 @@ const FONT_SIZE_SCALE: Record<FontSizeMode, number> = {
   large: 1.12,
   max: 1.25,
 };
+const CREATIVE_SKILLS: CreativeSkill[] = [
+  { id: "knowledgeOps", title: "知识库运营", domain: "知识域", status: "目录体检、归档、进化" },
+  { id: "workDecompose", title: "作品拆解", domain: "知识生产", status: "拆解报告与案例分析" },
+  { id: "knowledgeCard", title: "知识卡提炼", domain: "知识生产", status: "S 级知识卡入库" },
+  { id: "authorDistill", title: "大神蒸馏", domain: "创作技能", status: "作者方法论与小 skill" },
+  { id: "shortDrama", title: "短剧剧本", domain: "作品域", status: "分集、场景、对白、卡点" },
+];
+const DEFAULT_CREATIVE_SKILL_STATE: Record<CreativeSkillId, boolean> = {
+  knowledgeOps: true,
+  workDecompose: true,
+  knowledgeCard: true,
+  authorDistill: false,
+  shortDrama: true,
+};
 
 function App() {
   const [theme, setTheme] = useState<Theme>("light");
@@ -176,8 +198,10 @@ function App() {
   const [fontSizeMenuOpen, setFontSizeMenuOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [knowledgeGraphOpen, setKnowledgeGraphOpen] = useState(false);
+  const [creativeSkillsOpen, setCreativeSkillsOpen] = useState(false);
   const [knowledgeGraphState, setKnowledgeGraphState] = useState<KnowledgeGraphState>({ nodes: [], edges: [] });
   const [knowledgeGraphError, setKnowledgeGraphError] = useState("");
+  const [creativeSkillEnabled, setCreativeSkillEnabled] = useState<Record<CreativeSkillId, boolean>>(DEFAULT_CREATIVE_SKILL_STATE);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [workspace, setWorkspace] = useState<WorkspaceInfo | null>(null);
   const [workspaceError, setWorkspaceError] = useState("");
@@ -773,6 +797,9 @@ function App() {
           <button type="button" title="知识图谱" aria-label="知识图谱" onClick={() => setKnowledgeGraphOpen(true)}>
             <KnowledgeGraphIcon />
           </button>
+          <button type="button" title="创作技能" aria-label="创作技能" onClick={() => setCreativeSkillsOpen(true)}>
+            <LightningIcon />
+          </button>
           <button type="button" title="模型配置" aria-label="模型配置" onClick={() => setSettingsOpen(true)}>
             <ModelConfigIcon />
           </button>
@@ -1007,6 +1034,16 @@ function App() {
           onRefresh={loadKnowledgeGraph}
         />
       ) : null}
+      {creativeSkillsOpen ? (
+        <CreativeSkillsDrawer
+          enabled={creativeSkillEnabled}
+          onClose={() => setCreativeSkillsOpen(false)}
+          onToggle={(id) => {
+            setCreativeSkillEnabled((current) => ({ ...current, [id]: !current[id] }));
+          }}
+          skills={CREATIVE_SKILLS}
+        />
+      ) : null}
       {settingsOpen ? <ModelSettingsDialog onClose={() => setSettingsOpen(false)} /> : null}
       {fileMenu ? (
         <FileContextMenuView
@@ -1235,6 +1272,14 @@ function KnowledgeGraphIcon() {
       <path d="M43 36C43 37.3416 42.4716 38.5597 41.6117 39.4577C40.7015 40.4082 39.4199 41 38 41C35.2386 41 33 38.7614 33 36C33 33.9899 34.1861 32.2569 35.8967 31.4626C36.536 31.1657 37.2487 31 38 31C40.7614 31 43 33.2386 43 36Z" />
       <path d="M15 36C15 37.3416 14.4716 38.5597 13.6117 39.4577C12.7015 40.4082 11.4199 41 10 41C7.23858 41 5 38.7614 5 36C5 33.9899 6.18614 32.2569 7.89667 31.4626C8.53604 31.1657 9.24867 31 10 31C12.7614 31 15 33.2386 15 36Z" />
       <path d="M29 9C29 10.3416 28.4716 11.5597 27.6117 12.4577C26.7015 13.4082 25.4199 14 24 14C21.2386 14 19 11.7614 19 9C19 6.98991 20.1861 5.25686 21.8967 4.4626C22.536 4.16572 23.2487 4 24 4C26.7614 4 29 6.23858 29 9Z" />
+    </svg>
+  );
+}
+
+function LightningIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 48 48">
+      <path d="M27 4L10 27H22L19 44L38 19H25L27 4Z" />
     </svg>
   );
 }
@@ -1853,6 +1898,60 @@ function KnowledgeGraphDrawer({
           ) : (
             <div className="knowledge-graph-empty">知识库里还没有 Markdown 知识卡</div>
           )}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function CreativeSkillsDrawer({
+  enabled,
+  onClose,
+  onToggle,
+  skills,
+}: {
+  enabled: Record<CreativeSkillId, boolean>;
+  onClose: () => void;
+  onToggle: (id: CreativeSkillId) => void;
+  skills: CreativeSkill[];
+}) {
+  const enabledCount = skills.filter((skill) => enabled[skill.id]).length;
+
+  return (
+    <div className="drawer-backdrop" onMouseDown={onClose} role="presentation">
+      <aside className="memory-drawer creative-skills-drawer" role="dialog" aria-modal="true" aria-label="创作技能" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="drawer-header">
+          <div>
+            <div className="drawer-title">创作技能</div>
+            <div className="drawer-subtitle">管理写作、知识生产和知识库运营技能。</div>
+          </div>
+          <button type="button" className="icon-button" onClick={onClose} aria-label="关闭">
+            ×
+          </button>
+        </div>
+
+        <div className="creative-skills-summary">
+          <span>{enabledCount} 个已启用</span>
+          <span>技能只作为调用入口，不改变知识库目录所有权。</span>
+        </div>
+
+        <div className="creative-skills-list">
+          {skills.map((skill) => (
+            <div className="creative-skill-row" key={skill.id}>
+              <div className="creative-skill-main">
+                <div className="creative-skill-title">{skill.title}</div>
+                <div className="creative-skill-meta">{skill.domain} · {skill.status}</div>
+              </div>
+              <button
+                type="button"
+                className={enabled[skill.id] ? "skill-toggle active" : "skill-toggle"}
+                aria-pressed={enabled[skill.id]}
+                onClick={() => onToggle(skill.id)}
+              >
+                <span />
+              </button>
+            </div>
+          ))}
         </div>
       </aside>
     </div>

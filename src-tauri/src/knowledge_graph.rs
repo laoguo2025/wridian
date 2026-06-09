@@ -1,5 +1,5 @@
 use crate::runtime::{ensure_workspace, wridian_data_dir};
-use crate::workspace::read_active_knowledge_root;
+use crate::workspace::resolved_knowledge_root;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -35,13 +35,7 @@ pub(crate) struct KnowledgeGraphEdge {
 pub(crate) fn wridian_get_knowledge_graph() -> Result<KnowledgeGraphResponse, String> {
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
-    let Some(root) = read_active_knowledge_root(&data_dir)? else {
-        return Ok(KnowledgeGraphResponse {
-            nodes: Vec::new(),
-            edges: Vec::new(),
-        });
-    };
-    let root = PathBuf::from(root);
+    let root = resolved_knowledge_root(&data_dir)?;
     if !root.is_dir() {
         return Ok(KnowledgeGraphResponse {
             nodes: Vec::new(),
@@ -251,7 +245,10 @@ mod tests {
         let graph = read_knowledge_graph(&root).expect("graph");
 
         assert!(graph.nodes.iter().any(|node| node.id == "folder:人物"));
-        assert!(graph.nodes.iter().any(|node| node.id == "card:人物/阿宁.md"));
+        assert!(graph
+            .nodes
+            .iter()
+            .any(|node| node.id == "card:人物/阿宁.md"));
         assert!(graph
             .edges
             .iter()

@@ -1,7 +1,5 @@
 use crate::runtime::{ensure_workspace, memory_folder_path, wridian_data_dir};
-use crate::workspace::{
-    read_active_knowledge_root, read_active_work_root, resolved_knowledge_root,
-};
+use crate::workspace::{read_active_work_root, resolved_knowledge_root};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -533,9 +531,7 @@ fn folder_node(path: &Path, label: String, description: String) -> Result<Memory
 }
 
 fn knowledge_cards_folder_node(data_dir: &Path, root: &Path) -> Result<MemoryTreeNode, String> {
-    let knowledge = read_active_knowledge_root(data_dir)?
-        .map(PathBuf::from)
-        .filter(|path| path.is_dir());
+    let knowledge = Some(resolved_knowledge_root(data_dir)?).filter(|path| path.is_dir());
     let mut children = Vec::new();
     if let Some(knowledge_root) = &knowledge {
         collect_knowledge_card_nodes(knowledge_root, &mut children)?;
@@ -620,7 +616,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!(
             "wridian-memory-test-{}-{}",
             name,
-            crate::runtime::iso_timestamp()
+            crate::runtime::unique_test_suffix()
         ));
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).expect("create temp data dir");

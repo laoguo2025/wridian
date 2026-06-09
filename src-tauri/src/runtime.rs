@@ -5,6 +5,24 @@ use std::path::{Path, PathBuf};
 const WRIDIAN_DATA_DIR_NAME: &str = "Wridian";
 const WRIDIAN_VAULT_DIR_NAME: &str = "Wridian Vault";
 const WRIDIAN_RUNTIME_DIR_NAME: &str = ".wridian";
+const DEFAULT_KNOWLEDGE_DIR_NAME: &str = "Wridian知识库";
+const DEFAULT_KNOWLEDGE_CATEGORIES: &[(&str, Option<&str>)] = &[
+    (
+        "00知识库治理",
+        Some(
+            "# Wridian 知识库使用说明\n\n这个文件夹用于保存知识库规则、运营记录、体检结果和分类说明。\n\n- `01原始资料`：存放未加工的一手资料。\n- `02拆解报告`：存放作品拆解、案例分析和中间报告。\n- `03故事模型`：存放可复用的故事结构、叙事模型和判断框架。\n- `04人物原型`：存放人物类型、关系模式、角色弧光和人设参考。\n- `05情节方程`：存放冲突、反转、钩子、节奏和情节公式。\n- `06写作技法`：存放对白、场景、风格、爽点、短剧卡点等技法卡。\n- `07综合素材`：存放可复用素材、清单、灵感和跨分类资料。\n- `08大神蒸馏`：存放作者方法论、作者 skill 和版本记录。\n- `09文件归档`：存放废弃、过期或待删除文件。\n\n这些分类只是默认模板。你可以在 Wridian 里新增、改名或移除分类文件夹；知识库运营 skill 体检时应按实际目录修正。\n",
+        ),
+    ),
+    ("01原始资料", None),
+    ("02拆解报告", None),
+    ("03故事模型", None),
+    ("04人物原型", None),
+    ("05情节方程", None),
+    ("06写作技法", None),
+    ("07综合素材", None),
+    ("08大神蒸馏", None),
+    ("09文件归档", None),
+];
 
 pub(crate) fn wridian_data_dir() -> Result<PathBuf, String> {
     dirs::data_dir()
@@ -18,6 +36,22 @@ pub(crate) fn vault_root(data_dir: &Path) -> PathBuf {
 
 pub(crate) fn knowledge_root(data_dir: &Path) -> PathBuf {
     vault_root(data_dir).join("knowledge")
+}
+
+pub(crate) fn default_knowledge_root(data_dir: &Path) -> PathBuf {
+    #[cfg(test)]
+    {
+        data_dir.join(DEFAULT_KNOWLEDGE_DIR_NAME)
+    }
+    #[cfg(not(test))]
+    {
+        let d_drive = PathBuf::from(r"D:\");
+        if d_drive.is_dir() {
+            d_drive.join(DEFAULT_KNOWLEDGE_DIR_NAME)
+        } else {
+            knowledge_root(data_dir)
+        }
+    }
 }
 
 pub(crate) fn runtime_root(data_dir: &Path) -> PathBuf {
@@ -43,7 +77,7 @@ pub(crate) fn memory_wiki_root(data_dir: &Path) -> PathBuf {
 pub(crate) fn ensure_workspace(data_dir: &Path) -> Result<(), String> {
     let vault = vault_root(data_dir);
     let works = vault.join("works");
-    let knowledge = knowledge_root(data_dir);
+    let knowledge = default_knowledge_root(data_dir);
     let runtime = runtime_root(data_dir);
     let sessions = runtime.join("sessions");
     let episodes = runtime.join("episodes");
@@ -57,7 +91,6 @@ pub(crate) fn ensure_workspace(data_dir: &Path) -> Result<(), String> {
     for dir in [
         &vault,
         &works,
-        &knowledge,
         &runtime,
         &sessions,
         &episodes,
@@ -107,6 +140,7 @@ pub(crate) fn ensure_workspace(data_dir: &Path) -> Result<(), String> {
         &vault.join("creative.md"),
         "# 创作记忆\n\n## 方法\n\n## 审美\n\n## 禁区\n",
     )?;
+    ensure_default_knowledge_categories(&knowledge)?;
     write_if_missing(
         &runtime.join("active-context.json"),
         &serde_json::to_string_pretty(&json!({
@@ -125,6 +159,22 @@ pub(crate) fn ensure_workspace(data_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+pub(crate) fn ensure_default_knowledge_categories(root: &Path) -> Result<(), String> {
+    let should_seed = !root.exists();
+    fs::create_dir_all(root).map_err(|error| format!("知识库目录创建失败：{error}"))?;
+    if !should_seed {
+        return Ok(());
+    }
+    for (name, readme) in DEFAULT_KNOWLEDGE_CATEGORIES {
+        let dir = root.join(name);
+        fs::create_dir_all(&dir).map_err(|error| format!("知识库分类目录创建失败：{error}"))?;
+        if let Some(content) = readme {
+            write_if_missing(&dir.join("使用说明.md"), content)?;
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn iso_timestamp() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let seconds = SystemTime::now()
@@ -132,6 +182,24 @@ pub(crate) fn iso_timestamp() -> String {
         .map(|duration| duration.as_secs())
         .unwrap_or(0);
     format!("{seconds}")
+}
+
+#[cfg(test)]
+pub(crate) fn unique_test_suffix() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    format!(
+        "{}-{}-{}",
+        std::process::id(),
+        nanos,
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 fn write_if_missing(path: &Path, content: &str) -> Result<(), String> {
@@ -142,4 +210,32 @@ fn write_if_missing(path: &Path, content: &str) -> Result<(), String> {
         fs::create_dir_all(parent).map_err(|error| format!("Wridian 目录创建失败：{error}"))?;
     }
     fs::write(path, content).map_err(|error| format!("Wridian 文件写入失败：{error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_knowledge_categories_seed_only_missing_roots() {
+        let root = std::env::temp_dir().join(format!(
+            "wridian-runtime-test-{}",
+            crate::runtime::unique_test_suffix()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("create root");
+        fs::create_dir_all(root.join("自定义分类")).expect("create custom folder");
+
+        ensure_default_knowledge_categories(&root).expect("ensure categories");
+
+        assert!(root.join("自定义分类").is_dir());
+        assert!(!root.join("00知识库治理").exists());
+
+        let _ = fs::remove_dir_all(&root);
+
+        ensure_default_knowledge_categories(&root).expect("seed missing root");
+        assert!(root.join("00知识库治理").join("使用说明.md").is_file());
+
+        let _ = fs::remove_dir_all(&root);
+    }
 }

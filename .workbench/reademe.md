@@ -12,3 +12,4 @@
   - `.workbench/governance/2026-06-10-creative-memory-knowledge-graph.md`
   - `.workbench/governance/2026-06-10-domain-boundary-confirmation.md`
   - `.workbench/governance/2026-06-10-frontmatter-relation-protocol.md`
+  - `.workbench/governance/2026-06-10-creative-skills-default-knowledge.md`

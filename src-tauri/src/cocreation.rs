@@ -2,7 +2,7 @@ use crate::memory::read_relevant_memory_snippets;
 use crate::model_accounts::{read_custom_api_settings, StoredCustomApiSettings};
 use crate::projects::{active_project_model, read_active_project_context};
 use crate::runtime::{ensure_workspace, runtime_root, wridian_data_dir};
-use crate::workspace::{read_active_knowledge_root, read_active_work_root};
+use crate::workspace::{read_active_work_root, resolved_knowledge_root};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fs;
@@ -243,14 +243,13 @@ fn selected_context_roots(data_dir: &Path) -> Result<Vec<PathBuf>, String> {
             );
         }
     }
-    if let Some(root) = read_active_knowledge_root(data_dir)? {
-        let path = PathBuf::from(root);
-        if path.is_dir() {
-            roots.push(
-                path.canonicalize()
-                    .map_err(|error| format!("知识库目录解析失败：{error}"))?,
-            );
-        }
+    let knowledge = resolved_knowledge_root(data_dir)?;
+    if knowledge.is_dir() {
+        roots.push(
+            knowledge
+                .canonicalize()
+                .map_err(|error| format!("知识库目录解析失败：{error}"))?,
+        );
     }
     Ok(roots)
 }
@@ -415,7 +414,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!(
             "wridian-cocreation-test-{}-{}",
             name,
-            crate::runtime::iso_timestamp()
+            crate::runtime::unique_test_suffix()
         ));
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).expect("create temp data dir");
@@ -532,14 +531,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_default_library_context_before_user_selection() {
-        let data_dir = temp_data_dir("reject-default-context");
-        let default_knowledge = crate::runtime::knowledge_root(&data_dir);
-        fs::create_dir_all(&default_knowledge).expect("create default knowledge");
-        let card_path = default_knowledge.join("默认人物.md");
+    fn accepts_default_knowledge_context_without_user_selection() {
+        let data_dir = temp_data_dir("default-knowledge-context");
+        crate::runtime::ensure_workspace(&data_dir).expect("ensure workspace");
+        let default_knowledge = crate::runtime::default_knowledge_root(&data_dir);
+        let card_path = default_knowledge.join("03故事模型").join("默认人物.md");
         fs::write(&card_path, "默认知识").expect("write default card");
 
-        let error = expand_context_items(
+        let expanded = expand_context_items(
             &data_dir,
             &[DialogueContextItem {
                 kind: "memory".to_string(),
@@ -549,9 +548,10 @@ mod tests {
                 relative_path: None,
             }],
         )
-        .expect_err("default library context should be rejected");
+        .expect("default knowledge context should be accepted");
 
-        assert!(error.contains("已选择的作品库或知识库"));
+        assert_eq!(expanded[0].value, "默认知识");
+        assert_eq!(expanded[0].relative_path.as_deref(), Some("03故事模型/默认人物.md"));
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use crate::runtime::{
-    ensure_workspace, iso_timestamp, knowledge_root, vault_root, workspace_config_path,
+    default_knowledge_root, ensure_workspace, iso_timestamp, vault_root, workspace_config_path,
     wridian_data_dir,
 };
 use serde::{Deserialize, Serialize};
@@ -263,12 +263,8 @@ fn workspace_info(data_dir: &Path) -> Result<WorkspaceInfo, String> {
         },
         knowledge_root_path: resolved_knowledge.to_string_lossy().into_owned(),
         active_knowledge_root: active_knowledge_root.clone(),
-        knowledge_root_configured: active_knowledge_root.is_some(),
-        knowledge_files: if active_knowledge_root.is_some() {
-            read_work_tree(&resolved_knowledge, &resolved_knowledge, "knowledge")?
-        } else {
-            Vec::new()
-        },
+        knowledge_root_configured: true,
+        knowledge_files: read_work_tree(&resolved_knowledge, &resolved_knowledge, "knowledge")?,
     })
 }
 
@@ -338,7 +334,7 @@ pub(crate) fn resolved_knowledge_root(data_dir: &Path) -> Result<PathBuf, String
             return Ok(path);
         }
     }
-    Ok(knowledge_root(data_dir))
+    Ok(default_knowledge_root(data_dir))
 }
 
 fn read_work_tree(root: &Path, base: &Path, library: &str) -> Result<Vec<WorkFileNode>, String> {
@@ -477,7 +473,7 @@ pub(crate) fn allowed_work_roots(data_dir: &Path) -> Result<Vec<PathBuf>, String
                 .canonicalize()
                 .map_err(|error| format!("默认写作目录解析失败：{error}"))?,
         );
-        let knowledge = knowledge_root(data_dir);
+        let knowledge = default_knowledge_root(data_dir);
         if knowledge.is_dir() {
             roots.push(
                 knowledge
@@ -578,7 +574,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!(
             "wridian-workspace-test-{}-{}",
             name,
-            crate::runtime::iso_timestamp()
+            crate::runtime::unique_test_suffix()
         ));
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).expect("create temp data dir");
@@ -614,5 +610,20 @@ mod tests {
         assert_eq!(knowledge_file.relative_path, "人物卡.md");
         assert_eq!(work_file.library, "works");
         assert_eq!(knowledge_file.library, "knowledge");
+    }
+
+    #[test]
+    fn workspace_info_uses_default_knowledge_root_without_user_selection() {
+        let data_dir = temp_data_dir("default-knowledge-root");
+        crate::runtime::ensure_workspace(&data_dir).expect("ensure workspace");
+
+        let info = workspace_info(&data_dir).expect("workspace info");
+
+        assert!(info.knowledge_root_configured);
+        assert!(info.knowledge_root_path.ends_with("Wridian知识库"));
+        assert!(info
+            .knowledge_files
+            .iter()
+            .any(|node| node.folder && node.name == "00知识库治理"));
     }
 }

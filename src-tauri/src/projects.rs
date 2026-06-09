@@ -468,7 +468,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!(
             "wridian-projects-test-{}-{}",
             name,
-            crate::runtime::iso_timestamp()
+            crate::runtime::unique_test_suffix()
         ));
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).expect("create temp data dir");
