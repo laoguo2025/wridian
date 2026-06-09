@@ -1919,31 +1919,33 @@ function KnowledgeGraphDrawer({
             <div className="knowledge-graph-empty">先选择知识库文件夹</div>
           ) : graph.nodes.length ? (
             <svg className="knowledge-graph-canvas" viewBox="0 0 100 100" role="img" aria-label="知识库动态图谱">
-              <g transform={`translate(${viewport.x} ${viewport.y}) translate(50 50) scale(${viewport.scale}) translate(-50 -50)`}>
-                {layout.edges.map((edge) => (
-                  <line
-                    key={`${edge.source.id}-${edge.target.id}-${edge.kind}`}
-                    x1={edge.source.x}
-                    y1={edge.source.y}
-                    x2={edge.target.x}
-                    y2={edge.target.y}
-                    className={`graph-edge edge-${edge.kind}`}
-                  />
-                ))}
-                {layout.nodes.map((node) => (
-                  <g
-                    key={node.id}
-                    className={`graph-node node-${node.kind}`}
-                    onClick={() => openGraphNode(node)}
-                    style={{ "--node-fill": node.color } as CSSProperties}
-                  >
-                    <title>{node.path ?? node.label}</title>
-                    <circle cx={node.x} cy={node.y} r={node.radius} />
-                    {node.showLabel ? (
-                      <text x={node.x} y={node.y + node.radius + 1.8}>{node.label}</text>
-                    ) : null}
-                  </g>
-                ))}
+              <g className="graph-viewport" transform={`translate(${viewport.x} ${viewport.y}) translate(50 50) scale(${viewport.scale}) translate(-50 -50)`}>
+                <g className="graph-motion">
+                  {layout.edges.map((edge) => (
+                    <line
+                      key={`${edge.source.id}-${edge.target.id}-${edge.kind}`}
+                      x1={edge.source.x}
+                      y1={edge.source.y}
+                      x2={edge.target.x}
+                      y2={edge.target.y}
+                      className={`graph-edge edge-${edge.kind}`}
+                    />
+                  ))}
+                  {layout.nodes.map((node) => (
+                    <g
+                      key={node.id}
+                      className={`graph-node node-${node.kind}`}
+                      onClick={() => openGraphNode(node)}
+                      style={{ "--node-fill": node.color } as CSSProperties}
+                    >
+                      <title>{node.path ?? node.label}</title>
+                      <circle cx={node.x} cy={node.y} r={node.radius} />
+                      {node.showLabel ? (
+                        <text x={node.x} y={node.y + node.radius + 1.8}>{node.label}</text>
+                      ) : null}
+                    </g>
+                  ))}
+                </g>
               </g>
             </svg>
           ) : (

@@ -1715,20 +1715,30 @@ button {
   height: 100%;
 }
 
+.graph-motion {
+  animation: graph-breathe 14s ease-in-out infinite;
+  transform-box: view-box;
+  transform-origin: 50% 50%;
+}
+
 .graph-edge {
-  stroke: color-mix(in srgb, var(--text-muted), transparent 28%);
-  stroke-width: 0.24;
+  stroke: color-mix(in srgb, var(--text-muted), transparent 8%);
+  stroke-linecap: round;
+  stroke-width: 0.58;
+  stroke-dasharray: 3.2 2.2;
+  animation: graph-edge-flow 4.8s linear infinite;
   vector-effect: non-scaling-stroke;
 }
 
 .graph-edge.edge-wikilink {
-  stroke: color-mix(in srgb, #dc7d57, var(--text-muted) 32%);
-  stroke-width: 0.3;
+  stroke: color-mix(in srgb, #dc7d57, var(--text-muted) 18%);
+  stroke-width: 0.72;
 }
 
 .graph-node {
   transform-box: fill-box;
   transform-origin: center;
+  animation: graph-node-pulse 5.6s ease-in-out infinite;
 }
 
 .graph-node circle {
@@ -1760,6 +1770,32 @@ button {
 .graph-node:hover circle {
   stroke: color-mix(in srgb, var(--text-primary), transparent 26%);
   stroke-width: 0.44;
+}
+
+@keyframes graph-breathe {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  50% {
+    transform: translate(0.35px, -0.35px);
+  }
+}
+
+@keyframes graph-edge-flow {
+  to {
+    stroke-dashoffset: -5.4;
+  }
+}
+
+@keyframes graph-node-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.045);
+  }
 }
 
 .creative-skills-list {
