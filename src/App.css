@@ -1187,108 +1187,235 @@ button {
 
 .memory-forest {
   position: relative;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(160px, 1fr));
-  align-content: start;
-  gap: 18px 24px;
+  min-width: 780px;
   min-height: 100%;
   overflow: auto;
-  padding: 42px 28px 180px;
+  padding: 24px 28px 180px;
+  background:
+    radial-gradient(circle at 50% 4%, color-mix(in srgb, var(--accent), transparent 70%), transparent 18%),
+    radial-gradient(circle at 50% 72%, color-mix(in srgb, var(--accent), transparent 84%), transparent 28%),
+    linear-gradient(180deg, color-mix(in srgb, #061412, var(--bg-panel) 30%), color-mix(in srgb, #020607, var(--bg-panel) 18%));
 }
 
 .memory-forest::before {
   content: "";
   position: absolute;
-  inset: 18px 22px auto 22px;
-  height: 96px;
+  left: 50%;
+  bottom: 48px;
+  width: 320px;
+  height: 42px;
   border-radius: 50%;
-  background:
-    radial-gradient(circle at 22% 46%, color-mix(in srgb, var(--accent), transparent 76%), transparent 32%),
-    radial-gradient(circle at 52% 18%, color-mix(in srgb, var(--text-primary), transparent 88%), transparent 28%),
-    radial-gradient(circle at 78% 52%, color-mix(in srgb, var(--accent), transparent 82%), transparent 34%);
+  border: 1px solid color-mix(in srgb, var(--accent), transparent 20%);
+  box-shadow: 0 0 28px color-mix(in srgb, var(--accent), transparent 46%);
+  transform: translateX(-50%);
   pointer-events: none;
 }
 
 .memory-forest-ground {
   position: absolute;
   left: 50%;
-  top: 88px;
-  bottom: 96px;
-  width: 4px;
-  border-radius: 999px;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--text-primary), transparent 62%), color-mix(in srgb, var(--accent), transparent 52%));
+  top: 34px;
+  bottom: 72px;
+  width: 12px;
+  border-radius: 12px 12px 4px 4px;
+  background:
+    linear-gradient(90deg, transparent, color-mix(in srgb, #d8fff3, var(--accent) 38%), transparent),
+    linear-gradient(180deg, color-mix(in srgb, var(--accent), transparent 44%), color-mix(in srgb, #d19d5f, transparent 18%));
+  box-shadow:
+    0 0 18px color-mix(in srgb, var(--accent), transparent 36%),
+    inset 0 0 8px color-mix(in srgb, #ffffff, transparent 54%);
   transform: translateX(-50%);
   pointer-events: none;
 }
 
-.memory-sim-node {
+.memory-tree-glow {
+  position: absolute;
+  left: 50%;
+  top: 18px;
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, #ffffff, var(--accent) 28%), transparent 62%);
+  filter: blur(1px);
+  opacity: 0.75;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.memory-tree-trunk span {
+  position: absolute;
+  left: 50%;
+  width: 120px;
+  height: 20px;
+  border-top: 2px solid color-mix(in srgb, var(--accent), #ffe6b0 28%);
+  border-radius: 50%;
+  filter: drop-shadow(0 0 8px color-mix(in srgb, var(--accent), transparent 32%));
+  pointer-events: none;
+}
+
+.memory-tree-trunk span:nth-child(1) {
+  top: 148px;
+  transform: translateX(-96%) rotate(-28deg);
+}
+
+.memory-tree-trunk span:nth-child(2) {
+  top: 268px;
+  transform: translateX(-4%) rotate(24deg);
+}
+
+.memory-tree-trunk span:nth-child(3) {
+  top: 390px;
+  transform: translateX(-96%) rotate(-18deg);
+}
+
+.memory-tree-roots {
+  position: absolute;
+  left: 50%;
+  bottom: 28px;
+  z-index: 2;
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  width: 190px;
+  transform: translateX(-50%);
+}
+
+.memory-trunk-card {
   position: relative;
   display: grid;
   justify-items: center;
-  gap: 12px;
-  z-index: 1;
-}
-
-.memory-sim-node.root {
-  grid-column: 1 / -1;
-  max-width: 520px;
-  justify-self: center;
-}
-
-.memory-sim-node.branches,
-.memory-sim-node.leaves {
-  grid-column: span 1;
-}
-
-.memory-sim-node-button {
-  position: relative;
-  display: grid;
-  justify-items: center;
-  gap: 3px;
-  width: min(100%, 190px);
-  min-height: 66px;
-  border: 1px solid color-mix(in srgb, var(--border), transparent 18%);
-  border-radius: 999px 999px 18px 18px;
-  background: color-mix(in srgb, var(--bg-panel), transparent 8%);
+  gap: 2px;
+  width: 156px;
+  min-height: 42px;
+  border: 1px solid color-mix(in srgb, #f2d59c, transparent 24%);
+  border-radius: 8px;
+  background: color-mix(in srgb, #241c13, transparent 22%);
   color: var(--text-primary);
-  padding: 10px 12px;
-  box-shadow: 0 12px 26px color-mix(in srgb, var(--text-primary), transparent 94%);
+  padding: 7px 10px;
+  box-shadow: 0 0 16px color-mix(in srgb, #d7a45a, transparent 74%);
   text-align: center;
 }
 
-.memory-sim-node-button.file {
-  min-height: 58px;
-  border-radius: 999px 999px 999px 12px;
-  background: color-mix(in srgb, var(--accent), transparent 88%);
-}
-
-.memory-sim-node-button.folder {
-  border-radius: 18px;
-}
-
-.memory-sim-node-button:hover,
-.memory-sim-node-button.active {
-  border-color: color-mix(in srgb, var(--accent), transparent 18%);
-  background: color-mix(in srgb, var(--accent), transparent 84%);
-}
-
-.memory-sim-symbol {
-  color: color-mix(in srgb, var(--accent), var(--text-muted) 24%);
-  font-size: 13px;
-}
-
-.memory-sim-node-button strong {
+.memory-trunk-card strong,
+.memory-branch-card strong,
+.memory-leaf-card strong {
   max-width: 100%;
   overflow: hidden;
-  font-size: 13px;
-  font-weight: 560;
-  line-height: 17px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.memory-sim-node-button small {
-  max-width: 100%;
+.memory-trunk-card strong {
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.memory-trunk-card small {
+  display: none;
+}
+
+.memory-trunk-card:hover,
+.memory-trunk-card.active {
+  border-color: color-mix(in srgb, #fff3bf, transparent 8%);
+  background: color-mix(in srgb, #3a2a18, transparent 14%);
+}
+
+.memory-branch-arm {
+  --branch-y: calc(58px + var(--branch-index) * 58px);
+  position: absolute;
+  top: var(--branch-y);
+  z-index: 2;
+  display: grid;
+  align-items: center;
+  width: 340px;
+  min-height: 76px;
+}
+
+.memory-branch-arm.left {
+  left: calc(50% - 370px);
+  grid-template-columns: minmax(132px, 176px) minmax(92px, 1fr);
+}
+
+.memory-branch-arm.right {
+  right: calc(50% - 370px);
+  grid-template-columns: minmax(92px, 1fr) minmax(132px, 176px);
+}
+
+.memory-branch-line {
+  position: absolute;
+  top: 31px;
+  width: 166px;
+  height: 44px;
+  pointer-events: none;
+}
+
+.memory-branch-arm.left .memory-branch-line {
+  right: 56px;
+  border-top: 2px solid color-mix(in srgb, var(--accent), #ffda98 24%);
+  border-radius: 0 90px 0 0;
+  transform: rotate(-9deg);
+}
+
+.memory-branch-arm.right .memory-branch-line {
+  left: 56px;
+  border-top: 2px solid color-mix(in srgb, var(--accent), #ffda98 24%);
+  border-radius: 90px 0 0 0;
+  transform: rotate(9deg);
+}
+
+.memory-branch-line span {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: color-mix(in srgb, #eaffff, var(--accent) 32%);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent), transparent 24%);
+}
+
+.memory-branch-arm.left .memory-branch-line span:first-child {
+  right: 0;
+  top: -5px;
+}
+
+.memory-branch-arm.right .memory-branch-line span:first-child {
+  left: 0;
+  top: -5px;
+}
+
+.memory-branch-line span:last-child {
+  top: 12px;
+  left: 50%;
+}
+
+.memory-branch-card {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  gap: 3px;
+  min-height: 54px;
+  border: 1px solid color-mix(in srgb, #cbe7ff, transparent 22%);
+  border-radius: 8px;
+  background: color-mix(in srgb, #0b1522, transparent 12%);
+  color: var(--text-primary);
+  padding: 8px 10px;
+  box-shadow: 0 0 18px color-mix(in srgb, #4bbfff, transparent 70%);
+  text-align: left;
+}
+
+.memory-branch-arm.left .memory-branch-card {
+  grid-column: 1;
+}
+
+.memory-branch-arm.right .memory-branch-card {
+  grid-column: 2;
+}
+
+.memory-branch-card strong {
+  font-size: 13px;
+  line-height: 17px;
+}
+
+.memory-branch-card small {
   overflow: hidden;
   color: var(--text-muted);
   font-size: 11px;
@@ -1297,23 +1424,81 @@ button {
   white-space: nowrap;
 }
 
-.memory-sim-children {
-  position: relative;
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 10px;
-  width: 100%;
+.memory-branch-card:hover,
+.memory-branch-card.active,
+.memory-branch-arm.active .memory-branch-card {
+  border-color: color-mix(in srgb, #f5fbff, transparent 5%);
+  background: color-mix(in srgb, #10263b, transparent 4%);
 }
 
-.memory-sim-children::before {
+.memory-leaf-cluster {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  gap: 5px;
+}
+
+.memory-branch-arm.left .memory-leaf-cluster {
+  grid-column: 2;
+  justify-items: start;
+}
+
+.memory-branch-arm.right .memory-leaf-cluster {
+  grid-column: 1;
+  justify-items: end;
+}
+
+.memory-leaf-card,
+.memory-leaf-placeholder {
+  display: inline-grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
+  max-width: 142px;
+  min-height: 25px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: color-mix(in srgb, var(--text-primary), transparent 7%);
+  padding: 0;
+  text-align: left;
+}
+
+.memory-leaf-card span,
+.memory-leaf-placeholder span {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 22px;
+  border-radius: 3px;
+  background: #f2f5f7;
+  color: #233;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.memory-leaf-card strong,
+.memory-leaf-placeholder strong {
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 14px;
+}
+
+.memory-leaf-card:hover,
+.memory-leaf-card.active {
+  color: #fff;
+}
+
+.memory-leaf-placeholder {
+  opacity: 0.45;
+}
+
+.memory-leaf-placeholder span::before {
   content: "";
-  position: absolute;
-  top: -8px;
-  left: 16%;
-  right: 16%;
-  height: 1px;
-  background: color-mix(in srgb, var(--border), transparent 5%);
+  width: 7px;
+  height: 7px;
+  border-radius: 999px 999px 999px 2px;
+  background: color-mix(in srgb, var(--accent), transparent 24%);
 }
 
 .memory-node-detail {

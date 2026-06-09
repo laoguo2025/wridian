@@ -1120,6 +1120,7 @@ function MemoryDrawer({
   workspace: WorkspaceInfo | null;
 }) {
   const firstFile = useMemo(() => findFirstMemoryFile(memoryTree.roots), [memoryTree.roots]);
+  const viewModel = useMemo(() => buildMemoryTreeViewModel(memoryTree.roots), [memoryTree.roots]);
   const [selectedPath, setSelectedPath] = useState(firstFile?.path ?? "");
   const selectedNode = useMemo(() => findMemoryNodeByPath(memoryTree.roots, selectedPath) ?? firstFile, [firstFile, memoryTree.roots, selectedPath]);
   const [draft, setDraft] = useState(selectedNode?.content ?? "");
@@ -1164,11 +1165,30 @@ function MemoryDrawer({
 
         <div className="memory-forest-shell" aria-label="记忆树仿真视图">
           <div className="memory-forest" aria-label="记忆树">
-            <div className="memory-forest-ground" aria-hidden="true" />
-            {memoryTree.roots.map((node) => (
-              <MemoryTreeSimulationNode
-                key={node.id}
-                node={node}
+            <div className="memory-tree-glow" aria-hidden="true" />
+            <div className="memory-tree-trunk" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </div>
+            <div className="memory-tree-roots">
+              {viewModel.trunk.map((node) => (
+                <button
+                  type="button"
+                  key={node.id}
+                  className={`memory-trunk-card ${node.path === selectedPath ? "active" : ""}`}
+                  onClick={() => node.path ? setSelectedPath(node.path) : undefined}
+                >
+                  <strong>{node.label}</strong>
+                  <small>{node.description}</small>
+                </button>
+              ))}
+            </div>
+            {viewModel.branches.map((branch, index) => (
+              <MemoryBranchArm
+                key={branch.key}
+                branch={branch}
+                index={index}
                 selectedPath={selectedNode?.path ?? ""}
                 onSelect={(node) => node.path && node.content != null ? setSelectedPath(node.path) : undefined}
               />
@@ -1237,6 +1257,58 @@ function MemoryDrawer({
   );
 }
 
+type MemoryBranchView = {
+  branchNode?: MemoryTreeNode;
+  key: string;
+  label: string;
+  rule?: MemoryTreeNode;
+  leaves: MemoryTreeNode[];
+};
+
+const MEMORY_BRANCH_LAYOUT = [
+  { key: "sense", label: "SENSE" },
+  { key: "user", label: "USER" },
+  { key: "relationship", label: "RELATIONSHIP" },
+  { key: "journey", label: "JOURNEY" },
+  { key: "drama", label: "DRAMA" },
+  { key: "novel", label: "NOVEL" },
+  { key: "knowledge", label: "KNOWLEDGE" },
+  { key: "skill", label: "SKILL" },
+  { key: "awareness", label: "AWARENESS" },
+] as const;
+
+function buildMemoryTreeViewModel(roots: MemoryTreeNode[]) {
+  const rootLayer = roots.find((node) => node.id === "totem");
+  const branchLayer = roots.find((node) => node.id === "branches");
+  const leavesLayer = roots.find((node) => node.id === "leaves");
+  const trunk = rootLayer?.children ?? [];
+  const branches = MEMORY_BRANCH_LAYOUT.map(({ key, label }) => {
+    const rule = branchLayer?.children.find((node) => node.label.toLowerCase().startsWith(key));
+    const leafFolder = leavesLayer?.children.find((node) => node.label.toLowerCase() === key);
+    return {
+      branchNode: leafFolder,
+      key,
+      label,
+      rule,
+      leaves: collectLeafFiles(leafFolder).slice(0, 4),
+    };
+  });
+  return { branches, trunk };
+}
+
+function collectLeafFiles(node?: MemoryTreeNode): MemoryTreeNode[] {
+  if (!node) return [];
+  const files: MemoryTreeNode[] = [];
+  const visit = (current: MemoryTreeNode) => {
+    if (current.path && current.content != null) {
+      files.push(current);
+    }
+    current.children.forEach(visit);
+  };
+  node.children.forEach(visit);
+  return files;
+}
+
 function branchLabel(branch: string) {
   switch (branch) {
     case "sense":
@@ -1262,42 +1334,52 @@ function branchLabel(branch: string) {
   }
 }
 
-function MemoryTreeSimulationNode({
-  node,
+function MemoryBranchArm({
+  branch,
+  index,
   onSelect,
   selectedPath,
 }: {
-  node: MemoryTreeNode;
+  branch: MemoryBranchView;
+  index: number;
   onSelect: (node: MemoryTreeNode) => void;
   selectedPath: string;
 }) {
-  const [expanded, setExpanded] = useState(true);
-  const selectable = Boolean(node.path && node.content != null);
-  const active = selectable && node.path === selectedPath;
+  const side = index % 2 === 0 ? "left" : "right";
+  const active = branch.rule?.path === selectedPath || branch.leaves.some((leaf) => leaf.path === selectedPath);
+  const branchStyle = { "--branch-index": index } as React.CSSProperties;
   return (
-    <div className={`memory-sim-node ${node.kind}`}>
+    <div className={`memory-branch-arm ${side} ${active ? "active" : ""}`} style={branchStyle}>
+      <div className="memory-branch-line" aria-hidden="true">
+        <span />
+        <span />
+      </div>
       <button
         type="button"
-        className={`memory-sim-node-button ${node.kind} ${active ? "active" : ""}`}
-        onClick={() => {
-          if (selectable) {
-            onSelect(node);
-          } else {
-            setExpanded((current) => !current);
-          }
-        }}
+        className={`memory-branch-card ${active ? "active" : ""}`}
+        onClick={() => branch.rule ? onSelect(branch.rule) : undefined}
       >
-        <span className="memory-sim-symbol">{node.children.length ? (expanded ? "●" : "○") : "◦"}</span>
-        <strong>{node.label}</strong>
-        <small>{node.description}</small>
+        <strong>{branch.label}</strong>
+        <small>{branch.rule?.description ?? "分支机制"}</small>
       </button>
-      {expanded && node.children.length ? (
-        <div className="memory-sim-children">
-          {node.children.map((child) => (
-            <MemoryTreeSimulationNode key={child.id} node={child} onSelect={onSelect} selectedPath={selectedPath} />
-          ))}
-        </div>
-      ) : null}
+      <div className="memory-leaf-cluster">
+        {branch.leaves.length ? branch.leaves.map((leaf) => (
+          <button
+            type="button"
+            key={leaf.id}
+            className={`memory-leaf-card ${leaf.path === selectedPath ? "active" : ""}`}
+            onClick={() => onSelect(leaf)}
+          >
+            <span>.md</span>
+            <strong>{leaf.label}</strong>
+          </button>
+        )) : (
+          <div className="memory-leaf-placeholder">
+            <span />
+            <strong>等待长叶</strong>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
