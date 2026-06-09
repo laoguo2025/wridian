@@ -289,6 +289,9 @@ fn read_memory_tree_files(data_dir: &Path) -> Result<MemoryTreeResponse, String>
 fn save_memory_tree_file(data_dir: &Path, path: &str, content: &str) -> Result<(), String> {
     ensure_memory_tree_files(data_dir)?;
     let target = PathBuf::from(path);
+    if !target.is_absolute() {
+        return Err("记忆树文件路径必须是绝对路径。".to_string());
+    }
     let canonical_parent = target
         .parent()
         .ok_or_else(|| "记忆树文件路径无效。".to_string())?
@@ -303,8 +306,26 @@ fn save_memory_tree_file(data_dir: &Path, path: &str, content: &str) -> Result<(
     if !canonical_parent.starts_with(&memory_root) && !canonical_parent.starts_with(&knowledge) {
         return Err("只能编辑记忆树或知识库里的 Markdown 文件。".to_string());
     }
-    if target.extension().and_then(|extension| extension.to_str()) != Some("md") {
+    if target
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_lowercase)
+        .as_deref()
+        != Some("md")
+    {
         return Err("记忆树只允许编辑 Markdown 文件。".to_string());
+    }
+    if let Ok(metadata) = fs::symlink_metadata(&target) {
+        if metadata.file_type().is_symlink() {
+            return Err("记忆树不允许编辑符号链接文件。".to_string());
+        }
+        let canonical_target = target
+            .canonicalize()
+            .map_err(|error| format!("记忆树文件路径无效：{error}"))?;
+        if !canonical_target.starts_with(&memory_root) && !canonical_target.starts_with(&knowledge)
+        {
+            return Err("只能编辑记忆树或知识库里的 Markdown 文件。".to_string());
+        }
     }
     fs::write(target, content).map_err(|error| format!("记忆树文件写入失败：{error}"))
 }
@@ -636,12 +657,14 @@ mod tests {
         let root = memory_tree_files_root(&data_dir);
         fs::create_dir_all(root.join("partner")).expect("create partner");
         fs::create_dir_all(root.join("global")).expect("create global");
-        fs::write(root.join("partner").join("user.md"), "旧用户主文件")
-            .expect("write legacy user");
+        fs::write(root.join("partner").join("user.md"), "旧用户主文件").expect("write legacy user");
         fs::write(root.join("partner").join("relationship.md"), "旧关系主文件")
             .expect("write legacy relationship");
-        fs::write(root.join("partner").join("partnermemory.md"), "旧伙伴记忆主文件")
-            .expect("write legacy partner memory");
+        fs::write(
+            root.join("partner").join("partnermemory.md"),
+            "旧伙伴记忆主文件",
+        )
+        .expect("write legacy partner memory");
         fs::write(root.join("global").join("AWARENESS.md"), "旧反思主文件")
             .expect("write legacy awareness");
 
@@ -651,6 +674,21 @@ mod tests {
         assert!(find_node_by_label(&tree.roots, "legacy-relationship.md").is_none());
         assert!(find_node_by_label(&tree.roots, "legacy-partnermemory.md").is_none());
         assert!(find_node_by_label(&tree.roots, "legacy-awareness.md").is_none());
+    }
+
+    #[test]
+    fn memory_tree_save_rejects_absolute_path_outside_allowed_roots() {
+        let data_dir = temp_data_dir("reject-outside-root");
+        crate::runtime::ensure_workspace(&data_dir).expect("ensure workspace");
+        let outside_dir = data_dir.join("outside");
+        fs::create_dir_all(&outside_dir).expect("create outside dir");
+        let outside_file = outside_dir.join("escape.md");
+
+        let error = save_memory_tree_file(&data_dir, &outside_file.to_string_lossy(), "逃逸")
+            .expect_err("outside path should be rejected");
+
+        assert!(error.contains("只能编辑记忆树或知识库里的 Markdown 文件"));
+        assert!(!outside_file.exists());
     }
 
     fn find_node_by_label<'a>(

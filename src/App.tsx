@@ -582,7 +582,7 @@ function App() {
     return "已保存";
   }, [saveStatus]);
 
-  const saveMemoryTreeFile = async (path: string, content: string) => {
+  const saveMemoryTreeFile = async (path: string, content: string): Promise<boolean> => {
     setSavingMemoryTree(true);
     try {
       const response = await invoke<MemoryTreeState>("wridian_save_memory_tree_file", {
@@ -590,8 +590,10 @@ function App() {
       });
       setMemoryTreeState(response);
       setMemoryError("");
+      return true;
     } catch (error) {
       setMemoryError(error instanceof Error ? error.message : String(error));
+      return false;
     } finally {
       setSavingMemoryTree(false);
     }
@@ -1336,7 +1338,7 @@ function MemoryDrawer({
   onOpenMemoryFolder: () => void;
   onPlantCandidate: (candidate: MemoryLeafCandidate) => void;
   onRejectCandidate: () => void;
-  onSaveFile: (path: string, content: string) => void;
+  onSaveFile: (path: string, content: string) => Promise<boolean>;
   saving: boolean;
 }) {
   const viewModel = useMemo(() => buildMemoryTreeViewModel(memoryTree.roots), [memoryTree.roots]);
@@ -1344,51 +1346,70 @@ function MemoryDrawer({
   const [editorSide, setEditorSide] = useState<"left" | "right">("right");
   const selectedNode = useMemo(() => findMemoryNodeByPath(memoryTree.roots, selectedPath), [memoryTree.roots, selectedPath]);
   const [draft, setDraft] = useState(selectedNode?.content ?? "");
+  const [transitionSaving, setTransitionSaving] = useState(false);
+  const isBusy = saving || transitionSaving;
 
   useEffect(() => {
     setDraft(selectedNode?.content ?? "");
   }, [selectedNode?.content, selectedNode?.path]);
 
-  const selectNode = (node: MemoryTreeNode | undefined, side: "left" | "right") => {
-    if (!node?.path || node.content == null) return;
-    if (selectedNode?.path && draft !== (selectedNode.content ?? "")) {
-      onSaveFile(selectedNode.path, draft);
+  const saveDirtyDraft = async () => {
+    if (!selectedNode?.path || draft === (selectedNode.content ?? "")) return true;
+    setTransitionSaving(true);
+    try {
+      return await onSaveFile(selectedNode.path, draft);
+    } finally {
+      setTransitionSaving(false);
     }
+  };
+
+  const selectNode = async (node: MemoryTreeNode | undefined, side: "left" | "right") => {
+    if (isBusy) return;
+    if (!node?.path || node.content == null) return;
+    if (node.path === selectedPath) {
+      setEditorSide(side);
+      return;
+    }
+    const saved = await saveDirtyDraft();
+    if (!saved) return;
     setEditorSide(side);
     setSelectedPath(node.path);
   };
 
-  const save = (closeAfterSave = false) => {
-    if (selectedNode?.path && draft !== (selectedNode.content ?? "")) {
-      onSaveFile(selectedNode.path, draft);
-    }
+  const save = async (closeAfterSave = false) => {
+    if (isBusy) return false;
+    const saved = await saveDirtyDraft();
+    if (!saved) return false;
     if (closeAfterSave) {
       setSelectedPath("");
     }
+    return true;
   };
 
-  const closeEditorFromBlank = () => {
+  const closeEditorFromBlank = async () => {
     if (!selectedNode?.path) return;
-    save(true);
+    await save(true);
   };
 
-  const closeDrawer = () => {
-    save(false);
+  const closeDrawer = async () => {
+    if (isBusy) return;
+    const saved = await save(false);
+    if (!saved) return;
     onClose();
   };
 
   return (
-    <div className="drawer-backdrop" onMouseDown={() => closeDrawer()} role="presentation">
+    <div className="drawer-backdrop" onMouseDown={() => void closeDrawer()} role="presentation">
       <aside className="memory-drawer memory-tree-drawer" role="dialog" aria-modal="true" aria-label="记忆树" onMouseDown={(event) => event.stopPropagation()}>
         <div className="drawer-header">
           <div>
             <div className="drawer-title">记忆树</div>
           </div>
           <div className="drawer-header-actions">
-            <button type="button" className="small-action" onClick={onOpenMemoryFolder}>
+            <button type="button" className="small-action" onClick={onOpenMemoryFolder} disabled={isBusy}>
               记忆文件夹
             </button>
-            <button type="button" className="icon-button" onClick={() => closeDrawer()} aria-label="关闭">
+            <button type="button" className="icon-button" onClick={() => void closeDrawer()} aria-label="关闭" disabled={isBusy}>
               ×
             </button>
           </div>
@@ -1397,14 +1418,15 @@ function MemoryDrawer({
         {memoryError ? <div className="rail-error">{memoryError}</div> : null}
 
         <div className="memory-forest-shell" aria-label="记忆树仿真视图">
-          <div className="memory-forest" aria-label="记忆树" onMouseDown={() => closeEditorFromBlank()}>
+          <div className="memory-forest" aria-label="记忆树" onMouseDown={() => void closeEditorFromBlank()}>
             <img className="memory-tree-base" src={memoryTreeBase} alt="" aria-hidden="true" />
             <div className="memory-tree-roots">
               <button
                 type="button"
                 className={`memory-sense-card ${viewModel.sense?.path === selectedPath ? "active" : ""}`}
                 onMouseDown={(event) => event.stopPropagation()}
-                onClick={() => selectNode(viewModel.sense, "left")}
+                onClick={() => void selectNode(viewModel.sense, "left")}
+                disabled={isBusy}
               >
                 <strong>自我意识</strong>
                 <small>SENSE.md</small>
@@ -1415,7 +1437,8 @@ function MemoryDrawer({
                   key={node.id}
                   className={`memory-trunk-card ${trunkNodeClass(node.label)} ${node.path === selectedPath ? "active" : ""}`}
                   onMouseDown={(event) => event.stopPropagation()}
-                  onClick={() => selectNode(node, "right")}
+                  onClick={() => void selectNode(node, "right")}
+                  disabled={isBusy}
                 >
                   <strong>{trunkTitleCn(node.label)}</strong>
                   <small>{node.label}</small>
@@ -1426,9 +1449,10 @@ function MemoryDrawer({
               <MemoryBranchArm
                 key={branch.key}
                 branch={branch}
+                disabled={isBusy}
                 index={index}
                 selectedPath={selectedNode?.path ?? ""}
-                onSelect={(node, side) => selectNode(node, side)}
+                onSelect={(node, side) => void selectNode(node, side)}
               />
             ))}
             {candidate ? (
@@ -1442,10 +1466,10 @@ function MemoryDrawer({
                     <p>候选叶子 / {branchLabel(candidate.branch)} / 等待确认</p>
                   </div>
                   <div className="candidate-actions">
-                    <button type="button" onClick={() => onPlantCandidate(candidate)} disabled={saving}>
-                      {saving ? "种下中" : "确认种下"}
+                    <button type="button" onClick={() => onPlantCandidate(candidate)} disabled={isBusy}>
+                      {isBusy ? "种下中" : "确认种下"}
                     </button>
-                    <button type="button" className="secondary" onClick={onRejectCandidate} disabled={saving}>
+                    <button type="button" className="secondary" onClick={onRejectCandidate} disabled={isBusy}>
                       放弃
                     </button>
                   </div>
@@ -1469,8 +1493,8 @@ function MemoryDrawer({
                     <h2>{selectedNode.label}</h2>
                     <p>{selectedNode.description}</p>
                   </div>
-                  <button type="button" onClick={() => save()} disabled={saving || draft === (selectedNode.content ?? "")}>
-                    {saving ? "保存中" : "保存"}
+                  <button type="button" onClick={() => void save()} disabled={isBusy || draft === (selectedNode.content ?? "")}>
+                    {isBusy ? "保存中" : "保存"}
                   </button>
                 </div>
                 <textarea
@@ -1571,10 +1595,12 @@ function branchLabel(branch: string) {
 
 function MemoryBranchArm({
   branch,
+  disabled,
   onSelect,
   selectedPath,
 }: {
   branch: MemoryBranchView;
+  disabled: boolean;
   index: number;
   onSelect: (node: MemoryTreeNode, side: "left" | "right") => void;
   selectedPath: string;
@@ -1591,6 +1617,7 @@ function MemoryBranchArm({
         className={`memory-branch-card ${active ? "active" : ""}`}
         onMouseDown={(event) => event.stopPropagation()}
         onClick={() => branch.rule ? onSelect(branch.rule, editorSide) : undefined}
+        disabled={disabled}
       >
         <strong>{branch.labelCn}</strong>
         <small>{branch.label}</small>
@@ -1609,6 +1636,7 @@ function MemoryBranchArm({
             aria-label={`打开记忆叶子 ${leaf.label}`}
             onMouseDown={(event) => event.stopPropagation()}
             onClick={() => onSelect(leaf, editorSide)}
+            disabled={disabled}
           />
         ))}
       </div>

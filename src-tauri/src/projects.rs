@@ -275,7 +275,8 @@ fn find_relevant_notes(
         if !project_allows_path(active_project, &path) {
             continue;
         }
-        let content = fs::read_to_string(&path).unwrap_or_default();
+        let content = fs::read_to_string(&path)
+            .map_err(|error| format!("相关稿件读取失败（{}）：{error}", path.to_string_lossy()))?;
         let path_text = path.to_string_lossy().to_string();
         let candidate_terms = tokenize_mixed(&format!("{path_text}\n{content}"));
         let lexical_score = overlap_score(&source_terms, &candidate_terms);
@@ -449,4 +450,46 @@ fn chrono_like_timestamp() -> String {
         .chars()
         .filter(|ch| ch.is_ascii_alphanumeric())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_data_dir(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "wridian-projects-test-{}-{}",
+            name,
+            crate::runtime::iso_timestamp()
+        ));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).expect("create temp data dir");
+        path
+    }
+
+    #[test]
+    fn relevant_notes_reports_candidate_read_errors() {
+        let data_dir = temp_data_dir("read-error");
+        crate::runtime::ensure_workspace(&data_dir).expect("ensure workspace");
+        let vault = crate::runtime::vault_root(&data_dir);
+        let source = vault.join("source.md");
+        let candidate = vault.join("candidate.md");
+        fs::write(&source, "共同线索").expect("write source");
+        fs::write(&candidate, [0xff, 0xfe, 0xfd]).expect("write invalid utf8 candidate");
+
+        let error = find_relevant_notes(
+            &data_dir,
+            &RelevantNotesInput {
+                source_path: source.to_string_lossy().into_owned(),
+                content: "共同线索".to_string(),
+                query: None,
+                limit: Some(8),
+            },
+            None,
+        )
+        .expect_err("candidate read error should be reported");
+
+        assert!(error.contains("相关稿件读取失败"));
+        assert!(error.contains("candidate.md"));
+    }
 }
