@@ -1258,9 +1258,19 @@ button {
   vector-effect: non-scaling-stroke;
 }
 
-.memory-tree-spine {
-  stroke-width: 5px;
+.memory-tree-spine.lower {
+  stroke-width: 9px;
+  filter: drop-shadow(0 0 7px color-mix(in srgb, var(--accent), transparent 70%));
+}
+
+.memory-tree-spine.middle {
+  stroke-width: 6px;
   filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent), transparent 68%));
+}
+
+.memory-tree-spine.upper {
+  stroke-width: 3px;
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--accent), transparent 72%));
 }
 
 .memory-tree-branch {
@@ -1277,13 +1287,30 @@ button {
 .memory-tree-roots {
   position: absolute;
   left: 50%;
-  top: 236px;
+  top: 40px;
   z-index: 2;
   display: grid;
   justify-items: center;
-  gap: 8px;
+  gap: 6px;
   width: 116px;
   transform: translateX(-50%);
+}
+
+.memory-sense-card {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 1px;
+  width: 116px;
+  min-height: 40px;
+  margin-bottom: 188px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-panel), var(--bg-selected) 18%);
+  color: var(--text-primary);
+  padding: 5px 8px;
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--text-primary), transparent 94%);
+  text-align: center;
 }
 
 .memory-trunk-card {
@@ -1304,6 +1331,8 @@ button {
 
 .memory-trunk-card strong,
 .memory-trunk-card small,
+.memory-sense-card strong,
+.memory-sense-card small,
 .memory-branch-card strong,
 .memory-branch-card small,
 .memory-leaf-card strong,
@@ -1319,20 +1348,33 @@ button {
   line-height: 15px;
 }
 
+.memory-sense-card strong {
+  font-size: 12px;
+  line-height: 15px;
+}
+
 .memory-trunk-card small {
   color: var(--text-muted);
   font-size: 10px;
   line-height: 12px;
 }
 
+.memory-sense-card small {
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 12px;
+}
+
 .memory-trunk-card:hover,
-.memory-trunk-card.active {
+.memory-trunk-card.active,
+.memory-sense-card:hover,
+.memory-sense-card.active {
   border-color: color-mix(in srgb, var(--accent), transparent 20%);
   background: color-mix(in srgb, var(--accent), transparent 88%);
 }
 
 .memory-branch-arm {
-  --branch-y: calc(46px + var(--branch-index) * 52px);
+  --branch-y: calc(126px + var(--branch-index) * 88px);
   position: absolute;
   top: var(--branch-y);
   z-index: 2;
@@ -1343,12 +1385,12 @@ button {
 }
 
 .memory-branch-arm.left {
-  left: calc(50% - 360px);
+  left: calc(50% - 372px);
   grid-template-columns: 146px 1fr;
 }
 
 .memory-branch-arm.right {
-  right: calc(50% - 360px);
+  right: calc(50% - 372px);
   grid-template-columns: 1fr 146px;
 }
 

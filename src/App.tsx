@@ -1161,6 +1161,16 @@ function MemoryDrawer({
             <div className="memory-tree-glow" aria-hidden="true" />
             <MemoryTreeSkeleton />
             <div className="memory-tree-roots">
+              {viewModel.sense ? (
+                <button
+                  type="button"
+                  className={`memory-sense-card ${viewModel.sense.path === selectedPath ? "active" : ""}`}
+                  onClick={() => viewModel.sense?.path ? setSelectedPath(viewModel.sense.path) : undefined}
+                >
+                  <strong>自我意识</strong>
+                  <small>SENSE</small>
+                </button>
+              ) : null}
               {viewModel.trunk.map((node) => (
                 <button
                   type="button"
@@ -1249,17 +1259,18 @@ function MemoryDrawer({
 function MemoryTreeSkeleton() {
   return (
     <svg className="memory-tree-skeleton" viewBox="0 0 820 560" preserveAspectRatio="none" aria-hidden="true">
-      <path className="memory-tree-spine" d="M410 30 C404 108 420 172 408 236 C396 310 416 392 410 528" />
-      <path className="memory-tree-branch" d="M409 58 C345 56 300 76 248 98" />
-      <path className="memory-tree-branch" d="M413 112 C478 110 526 130 578 150" />
-      <path className="memory-tree-branch" d="M409 164 C344 160 300 184 248 206" />
-      <path className="memory-tree-branch" d="M413 216 C478 212 526 238 578 258" />
-      <path className="memory-tree-branch" d="M409 268 C344 266 300 292 248 314" />
-      <path className="memory-tree-branch" d="M413 320 C478 318 526 344 578 366" />
-      <path className="memory-tree-branch" d="M409 372 C344 370 300 396 248 418" />
-      <path className="memory-tree-branch" d="M413 424 C478 422 526 448 578 470" />
-      <path className="memory-tree-branch" d="M409 476 C344 474 300 500 248 522" />
-      {[58, 112, 164, 216, 268, 320, 372, 424, 476].map((y) => (
+      <path className="memory-tree-spine lower" d="M410 530 C414 472 405 420 412 360" />
+      <path className="memory-tree-spine middle" d="M412 360 C418 300 402 248 410 190" />
+      <path className="memory-tree-spine upper" d="M410 190 C416 128 405 84 410 36" />
+      <path className="memory-tree-branch left" d="M409 96 C362 92 318 78 262 112 C238 126 226 136 214 150" />
+      <path className="memory-tree-branch right" d="M413 150 C470 144 508 130 564 164 C586 178 600 190 614 204" />
+      <path className="memory-tree-branch left" d="M408 206 C350 200 314 202 262 238 C238 254 224 266 210 282" />
+      <path className="memory-tree-branch right" d="M414 260 C468 252 512 258 566 292 C590 308 604 322 618 338" />
+      <path className="memory-tree-branch left" d="M408 314 C348 306 312 314 260 350 C236 366 222 382 208 398" />
+      <path className="memory-tree-branch right" d="M414 368 C470 360 510 370 562 406 C586 422 602 438 616 454" />
+      <path className="memory-tree-branch left" d="M409 422 C350 414 312 430 260 462 C238 476 224 490 210 504" />
+      <path className="memory-tree-branch right" d="M413 476 C464 470 510 488 558 516 C582 530 596 542 610 554" />
+      {[96, 150, 206, 260, 314, 368, 422, 476].map((y) => (
         <circle key={y} className="memory-tree-joint" cx="410" cy={y} r="4" />
       ))}
     </svg>
@@ -1276,7 +1287,6 @@ type MemoryBranchView = {
 };
 
 const MEMORY_BRANCH_LAYOUT = [
-  { key: "sense", label: "SENSE", labelCn: "自我意识" },
   { key: "user", label: "USER", labelCn: "用户画像" },
   { key: "relationship", label: "RELATIONSHIP", labelCn: "关系准则" },
   { key: "journey", label: "JOURNEY", labelCn: "共创旅程" },
@@ -1292,6 +1302,7 @@ function buildMemoryTreeViewModel(roots: MemoryTreeNode[]) {
   const branchLayer = roots.find((node) => node.id === "branches");
   const leavesLayer = roots.find((node) => node.id === "leaves");
   const trunk = rootLayer?.children ?? [];
+  const sense = branchLayer?.children.find((node) => node.label.toLowerCase().startsWith("sense"));
   const branches = MEMORY_BRANCH_LAYOUT.map(({ key, label, labelCn }) => {
     const rule = branchLayer?.children.find((node) => node.label.toLowerCase().startsWith(key));
     const leafFolder = leavesLayer?.children.find((node) => node.label.toLowerCase() === key);
@@ -1304,7 +1315,7 @@ function buildMemoryTreeViewModel(roots: MemoryTreeNode[]) {
       leaves: collectLeafFiles(leafFolder).slice(0, 4),
     };
   });
-  return { branches, trunk };
+  return { branches, sense, trunk };
 }
 
 function collectLeafFiles(node?: MemoryTreeNode): MemoryTreeNode[] {
@@ -1356,9 +1367,10 @@ function MemoryBranchArm({
   onSelect: (node: MemoryTreeNode) => void;
   selectedPath: string;
 }) {
-  const side = index % 2 === 0 ? "left" : "right";
+  const side = index < 4 ? "left" : "right";
+  const sideIndex = index < 4 ? index : index - 4;
   const active = branch.rule?.path === selectedPath || branch.leaves.some((leaf) => leaf.path === selectedPath);
-  const branchStyle = { "--branch-index": index } as React.CSSProperties;
+  const branchStyle = { "--branch-index": sideIndex } as React.CSSProperties;
   return (
     <div className={`memory-branch-arm ${side} ${active ? "active" : ""}`} style={branchStyle}>
       <button
