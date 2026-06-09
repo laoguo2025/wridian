@@ -1343,7 +1343,7 @@ function MemoryDrawer({
                 <button
                   type="button"
                   key={node.id}
-                  className={`memory-trunk-card ${node.path === selectedPath ? "active" : ""}`}
+                  className={`memory-trunk-card ${trunkNodeClass(node.label)} ${node.path === selectedPath ? "active" : ""}`}
                   onClick={() => node.path ? setSelectedPath(node.path) : undefined}
                 >
                   <strong>{trunkTitleCn(node.label)}</strong>
@@ -1552,6 +1552,13 @@ function trunkTitleCn(label: string) {
   if (label === "AGENTS.md") return "树根";
   if (label === "MEMORY.md") return "主干";
   return "根文件";
+}
+
+function trunkNodeClass(label: string) {
+  if (label === "SOUL.md") return "totem";
+  if (label === "AGENTS.md") return "root";
+  if (label === "MEMORY.md") return "trunk";
+  return "file";
 }
 
 function leafTitleEn(label: string) {

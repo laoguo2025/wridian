@@ -1314,23 +1314,22 @@ button {
 .memory-tree-roots {
   position: absolute;
   left: 50%;
-  top: 96px;
+  top: 0;
   z-index: 2;
-  display: grid;
-  justify-items: center;
-  gap: 5px;
-  width: 96px;
+  width: 0;
+  height: 0;
   transform: translateX(-50%);
 }
 
 .memory-sense-card {
-  position: relative;
+  position: absolute;
+  left: 0;
+  top: 96px;
   display: grid;
   justify-items: center;
   gap: 1px;
   width: 96px;
   min-height: 34px;
-  margin-bottom: 214px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: color-mix(in srgb, var(--bg-panel), transparent 6%);
@@ -1338,10 +1337,12 @@ button {
   padding: 4px 7px;
   box-shadow: 0 6px 14px color-mix(in srgb, var(--text-primary), transparent 95%);
   text-align: center;
+  transform: translateX(-50%);
 }
 
 .memory-trunk-card {
-  position: relative;
+  position: absolute;
+  left: 0;
   display: grid;
   justify-items: center;
   gap: 1px;
@@ -1354,6 +1355,19 @@ button {
   padding: 4px 7px;
   box-shadow: 0 6px 14px color-mix(in srgb, var(--text-primary), transparent 95%);
   text-align: center;
+  transform: translateX(-50%);
+}
+
+.memory-trunk-card.totem {
+  top: 374px;
+}
+
+.memory-trunk-card.root {
+  top: 520px;
+}
+
+.memory-trunk-card.trunk {
+  top: 448px;
 }
 
 .memory-trunk-card strong,
