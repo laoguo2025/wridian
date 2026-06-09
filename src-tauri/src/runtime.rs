@@ -32,14 +32,6 @@ pub(crate) fn model_accounts_path(data_dir: &Path) -> PathBuf {
     runtime_root(data_dir).join("model-accounts.json")
 }
 
-pub(crate) fn memory_tree_path(data_dir: &Path) -> PathBuf {
-    runtime_root(data_dir).join("memory-tree.json")
-}
-
-pub(crate) fn candidates_path(data_dir: &Path) -> PathBuf {
-    runtime_root(data_dir).join("candidates.json")
-}
-
 pub(crate) fn memory_folder_path(data_dir: &Path) -> PathBuf {
     runtime_root(data_dir)
 }
@@ -57,6 +49,7 @@ pub(crate) fn ensure_workspace(data_dir: &Path) -> Result<(), String> {
     let episodes = runtime.join("episodes");
     let chat = runtime.join("chat");
     let wiki = memory_wiki_root(data_dir);
+    let memory_tree = runtime.join("memory-tree");
     let wiki_sources = wiki.join("sources");
     let wiki_entities = wiki.join("entities");
     let wiki_concepts = wiki.join("concepts");
@@ -69,6 +62,7 @@ pub(crate) fn ensure_workspace(data_dir: &Path) -> Result<(), String> {
         &sessions,
         &episodes,
         &chat,
+        &memory_tree,
         &wiki,
         &wiki_sources,
         &wiki_entities,
@@ -77,6 +71,34 @@ pub(crate) fn ensure_workspace(data_dir: &Path) -> Result<(), String> {
         fs::create_dir_all(dir).map_err(|error| format!("Wridian 目录创建失败：{error}"))?;
     }
 
+    write_if_missing(
+        &memory_tree.join("global").join("AGENTS.md"),
+        "# AGENTS.md\n\n这里记录 Wridian 全局工作区规则、上下文边界和不可违反的长期协作原则。\n",
+    )?;
+    write_if_missing(
+        &memory_tree.join("global").join("MEMORY.md"),
+        "# MEMORY.md\n\n这里记录普通聊天的全局长期记忆，不归属于任何单个作品。\n",
+    )?;
+    write_if_missing(
+        &memory_tree.join("global").join("AWARENESS.md"),
+        "# AWARENESS.md\n\n这里记录长期反思、稳定变化和跨作品意识线索。\n",
+    )?;
+    write_if_missing(
+        &memory_tree.join("partner").join("soul.md"),
+        "# soul.md\n\n这里定义 Wridian 作为共创伙伴的底层人格、判断原则和表达气质。\n",
+    )?;
+    write_if_missing(
+        &memory_tree.join("partner").join("user.md"),
+        "# user.md\n\n这里记录用户画像、创作身份、工作节奏、语言偏好和审美偏好。\n",
+    )?;
+    write_if_missing(
+        &memory_tree.join("partner").join("relationship.md"),
+        "# relationship.md\n\n这里记录你和 Wridian 的关系校准。用户的关系校准优先于默认人格。\n\n## Names\n\n## Register\n\n## Drift Warnings\n\n## Canonical Anchor\n",
+    )?;
+    write_if_missing(
+        &memory_tree.join("partner").join("partnermemory.md"),
+        "# partnermemory.md\n\n这里记录 Wridian 与用户长期共创过程中形成的伙伴记忆。\n",
+    )?;
     write_if_missing(
         &vault.join("user.md"),
         "# 关于你\n\n这里记录长期稳定的用户偏好、称呼、写作方向和沟通习惯。\n",
@@ -105,22 +127,6 @@ pub(crate) fn ensure_workspace(data_dir: &Path) -> Result<(), String> {
         }))
         .map_err(|error| error.to_string())?,
     )?;
-    write_if_missing(
-        &memory_tree_path(data_dir),
-        &serde_json::to_string_pretty(&json!({
-            "schemaVersion": 1,
-            "memories": []
-        }))
-        .map_err(|error| error.to_string())?,
-    )?;
-    write_if_missing(
-        &candidates_path(data_dir),
-        &serde_json::to_string_pretty(&json!({
-            "schemaVersion": 1,
-            "items": []
-        }))
-        .map_err(|error| error.to_string())?,
-    )?;
     write_if_missing(&wiki.join("index.md"), "# Wridian 记忆索引\n\n")?;
     write_if_missing(&wiki.join("hot.md"), "# Hot Context\n\n")?;
     write_if_missing(&wiki.join("log.md"), "# 记忆同步日志\n\n")?;
@@ -134,15 +140,6 @@ pub(crate) fn iso_timestamp() -> String {
         .map(|duration| duration.as_secs())
         .unwrap_or(0);
     format!("{seconds}")
-}
-
-pub(crate) fn next_runtime_id(prefix: &str) -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    format!("{prefix}-{nanos}")
 }
 
 fn write_if_missing(path: &Path, content: &str) -> Result<(), String> {

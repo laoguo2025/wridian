@@ -41,7 +41,6 @@ export type PromptKnowledgeCardCandidate = {
   category?: string;
   id: string;
   sourcePath: string;
-  text: string;
   title: string;
 };
 
@@ -144,7 +143,7 @@ export function buildPromptSuggestions(input: PromptSuggestionInput): PromptSugg
       id: `memory:${card.id}`,
       label: card.title || card.category || "知识卡",
       detail: [card.category ?? "知识卡", card.sourcePath].filter(Boolean).join(" · "),
-      insertText: `知识卡：${card.title || card.category || "未命名"}\n分类：${card.category ?? "其他"}\n来源：${card.sourcePath}\n\n${card.text}`,
+      insertText: `path:${card.sourcePath}`,
       kind: "context",
       pillKind: "memory",
     });
@@ -196,9 +195,9 @@ const WRITING_COMMAND_SUGGESTIONS: PromptSuggestion[] = [
   },
   {
     id: "extract-memory",
-    label: "提取记忆",
-    detail: "提取人物、设定、伏笔、风格、禁区和剧本规则",
-    insertText: "请从当前稿件中提取可以进入写作记忆的人物、设定、伏笔、风格、禁区和剧本规则。",
+    label: "整理到记忆树",
+    detail: "整理人物、设定、伏笔、风格、禁区和剧本规则",
+    insertText: "请从当前稿件中整理适合写入记忆树的人物、设定、伏笔、风格、禁区和剧本规则，并说明建议写入哪个记忆树文件。",
     kind: "command",
   },
 ];

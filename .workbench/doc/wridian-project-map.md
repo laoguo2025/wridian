@@ -25,7 +25,7 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
   - `src-tauri/src/runtime.rs`：本地数据目录、默认 Vault、运行时文件路径。
   - `src-tauri/src/workspace.rs`：本地作品目录、文件树、正文读写。
   - `src-tauri/src/model_accounts.rs`：自定义 OpenAI-compatible API 配置和测试。
-  - `src-tauri/src/memory.rs`：待确认记忆和写入记忆。
+- `src-tauri/src/memory.rs`：文件化记忆树、作用域记忆和知识卡读取。
   - `src-tauri/src/cocreation.rs`：共创请求上下文组装和模型回复。
 - 本地运行：`npm run dev`
 - Rust 检查：普通 PowerShell 中可直接运行 `cargo check --manifest-path src-tauri\Cargo.toml`；项目通过 `.cargo/config.toml` 注入本机 MSVC Build Tools 路径，避免每次手工执行 `vcvars64.bat`。
@@ -38,7 +38,7 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 - 左侧文件区分为“作品库 / 知识库”标签页：作品库放作品项目、章节、剧本、分集、场景稿；知识库放人物、地点、设定、世界观、风格、禁区和资料摘录等知识卡。
 - 文件区“移到回收站”只移动到当前工作根目录 `.wridian-trash/`，不做永久删除。
 - 模型接入先支持一个 OpenAI-compatible 自定义 API。
-- 记忆 MVP 使用 `.wridian/memory-tree.json` 和 `.wridian/candidates.json`；模型只提取待确认候选，用户编辑确认后才写入长期记忆。
+- 记忆系统以 `.wridian/memory-tree/` 下的 Markdown 文件树为主入口；用户在“记忆树”抽屉直接查看和编辑全局层、伙伴层、作品层和知识层文件。
 - 暂不接入生图、生视频和复杂模型网关。
 
 ## 交互边界
@@ -52,7 +52,7 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 - 当前对齐的 `obsidian-copilot` 源码基线：
   - `ChatInput.tsx`：带边框的底部输入容器、上下文 pill 区、中间约 60px 起步输入区、24px 底部工具栏、小发送/停止动作。
   - `LexicalEditor.tsx`：输入区内部滚动，长文本不撑高右栏；Wridian 聊天输入区已从 textarea 切换为 Lexical `ContentEditable`，使用受控文本同步、历史插件和 Enter 发送；实现入口为 `src/chat/CopilotPromptEditor.tsx`。
-  - `AtMentionCommandPlugin.tsx` / `SlashCommandPlugin.tsx`：Wridian 已接入本地第一版 `@` 知识卡选择和 `/` 写作命令提示，实现在 `src/chat/CopilotPromptEditor.tsx` 内。`@` 菜单只显示已确认写作记忆生成的知识卡，选中后以 memory pill 注入上下文；`/` 可插入改对白、增强冲突、加结尾钩子、检查角色口吻、批量改角色名、提取记忆等小说和短剧共用命令。
+  - `AtMentionCommandPlugin.tsx` / `SlashCommandPlugin.tsx`：Wridian 已接入本地第一版 `@` 知识卡选择和 `/` 写作命令提示，实现在 `src/chat/CopilotPromptEditor.tsx` 内。`@` 菜单只显示知识库 Markdown 卡片，选中后读取文件内容并以 memory pill 注入上下文；`/` 可插入改对白、增强冲突、加结尾钩子、检查角色口吻、批量改角色名、整理到记忆树等小说和短剧共用命令。
     - 剧本模式：前端按 `.fountain` 扩展名、内景/外景/集/场信号和角色对白行识别短剧/剧本稿件；识别后 `/` 命令额外显示拆分分集节奏、强化场景钩子、对白口语化和场景成本检查，共创请求会把稿件类型传给后端 prompt。
   - 文件/上下文检索：右键文件或点击相关稿件仍可把文件内容作为 `file` pill 注入；`@` 菜单不再搜索作品文件，只搜索知识卡。
   - `ContextManager.ts` / `PromptContextTypes.ts`：Wridian 已开始拆出聊天上下文边界，`src/chat/promptContext.ts` 负责 prompt pill 类型、序列化、上下文建议构造和写作命令建议；消息仓库只保存消息和已绑定的上下文快照。
@@ -63,10 +63,10 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
   - pill 节点：Wridian 已按 Copilot 的 `BasePillNode` / `URLPillNode` / `ToolPillNode` / `PastePlugin` / `GenericPillSyncPlugin` 形态引入本地 `PromptPillNode`，真实注册到 Lexical 编辑树；URL、工具、文件、图片、记忆等上下文会从 Lexical 树同步回 prompt pill 状态。
   - 输入控制：Wridian 底部控制条只显示当前模型或当前项目名，不再提供 Project / Relevant / Vault 这类泛化工具按钮；文件 pill 会优先读取并缓存文件内容再注入上下文；粘贴 URL、保留的工具标记和图片会生成结构化 pill。
   - Project Mode / Relevant Notes：Wridian 的 Project Mode 已对齐作品项目，右侧下拉来自作品库顶层作品文件夹，不再提供手动“新建 Project”；打开作品文件时自动切换到所属作品项目。Relevant Notes 使用工作区本地全文词项重合 + wikilink/backlink 加权召回，点击可把相关稿件作为 file pill 注入。
-- 记忆命中、注入和上下文选择默认在后台执行，不在右侧对话区常驻展示“本次使用的记忆”等系统说明；记忆面板只由顶部“记忆”、显式“从当前正文提取”或“记住这条”动作打开。
+- 记忆命中、注入和上下文选择默认在后台执行，不在右侧对话区常驻展示“本次使用的记忆”等系统说明；记忆树只由顶部“记忆树”动作打开。
 - 右侧侧边面板应支持模式切换，第一版至少区分“共创”和“记忆”。
 - 记忆提取是显式动作；模型不得在普通共创发送时直接写长期记忆。
-- 当前已完成最小共创/记忆分离：底部输入调用共创命令并打开“共创”侧边面板，不再创建候选记忆；顶部“记忆”按钮仍打开记忆面板。
+- 当前已完成最小共创/记忆分离：底部输入调用共创命令，不再创建候选记忆；顶部“记忆树”按钮打开结构化 Markdown 记忆树。
 - 正文 inline diff 的确认链路参考 `obsidian-copilot` 的 `replaceGuard.ts`，已接入替换保护：选区触发的修改优先验证选区 start/end/text 快照；无范围快照时只有 target 在当前正文中唯一命中且不与其他修改范围重叠才渲染和确认；找不到、重复出现或重叠的建议会保持待确认状态并提示需要重新定位，禁止默认改第一处。
 
 ## 作品类型
@@ -90,21 +90,25 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 
 ## 记忆存储
 
-- 记忆文件夹：Wridian 数据目录下的 `.wridian/`。
-- 记忆作用域：普通聊天使用全局记忆；作品库顶层作品文件夹各自拥有独立作品记忆；知识库拥有独立知识卡记忆，可作为 `@` 知识卡来源但不默认混进作品记忆。
+- 记忆文件夹：Wridian 数据目录下的 `.wridian/memory-tree/`。
+- 记忆树是用户可见、可编辑的 Markdown 文件树，分为全局层、伙伴层、作品层和知识层。
+- 全局层：`.wridian/memory-tree/global/AGENTS.md`、`MEMORY.md`、`AWARENESS.md`。
+- 伙伴层：`.wridian/memory-tree/partner/soul.md`、`user.md`、`relationship.md`、`partnermemory.md`。
+- 作品层：每个作品库顶层作品文件夹会派生一组记忆文件：`projectrules.md`、`workmemory.md`、`caring-note.md`、`episodes/YYYY-MM-DD.md`、`imprints/YYYY-MM-DD.md`。
+- 知识层：知识库里的 Markdown 文件作为 `cards/*.md` 进入记忆树，可被多个作品按需引用。
+- 记忆作用域：普通聊天使用全局层和伙伴层；作品项目使用全局层、伙伴层和对应作品层；知识卡只在显式选择或召回时进入上下文，不默认混进作品记忆。
 - 聊天记录：`.wridian/chat/*.md`，每个运行会话保存为 Markdown，包含 frontmatter、来源文件、用户/助手消息和上下文 pill。
-- 长期记忆：兼容保留 `.wridian/memory-tree.json`；作品项目记忆以用户可编辑的 `memory.md` 保存在 `.wridian/memory/projects/<作品>/`；全局和知识库作用域暂存为结构化文件，后续可继续 Markdown-first 化。
-- 候选记忆：兼容保留 `.wridian/candidates.json`，新增待确认记忆跟随对应作用域保存。
-- Markdown 记忆 vault：`.wridian/wiki/` 是 JSON 记忆树的派生图谱层，包含 `sources/`、`entities/`、`concepts/`、`index.md`、`hot.md`、`log.md` 和 `.cache/index.json`。确认记忆时继续写 `.wridian/memory-tree.json`，并按 Claude-Obsidian 式 source/entity/concept 模板生成 Markdown 条目、wikilink、反链、hot context、图谱缓存和本地检索索引；记忆抽屉可重建图谱并搜索人物、设定、伏笔。
+- 旧的“提取记忆、图谱检索、待用户确认”不再作为用户界面路径；记忆树里的 Markdown 文件是主编辑面。
+- 后续上下文编译应参考 OpenHuman/holaOS/Hermes/OpenClaw：按槽位、作用域和预算加载记忆树文件，不把所有文件每轮硬塞进 prompt。
 - 记忆条目支持写作分类：人物、世界观、剧情线、风格、禁区、其他。
-- 模型提取不得直接写入长期记忆，必须经过候选、编辑、确认。
+- 模型不得直接写入记忆树；记忆树由用户在 Markdown 文件里直接编辑。
 
 ## 最小 MVP 路线
 
 目标：先完成“本地稿件编辑 + 共创回答 + 显式记忆提取/确认 + 记忆注入”的闭环。
 
 1. 修正共创/记忆交互混用。
-   - 底部输入框发送后走共创流程，不再调用候选记忆创建，不再自动打开记忆抽屉。
+   - 底部输入框发送后走共创流程，不再调用记忆写入，不再自动打开记忆树。
    - 增加“共创”侧边面板显示 AI 回复和可执行建议。
    - 保留“记忆”侧边面板，记忆提取只由显式按钮触发。
 2. 实现最小共创请求。
@@ -113,14 +117,14 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
    - 第一版只展示回复，不自动改正文。
 3. 做回复到正文的安全操作。
    - 支持用户选中正文片段并添加到输入框。
-   - 共创回复底部支持重试、复制、添加到记忆；用户消息底部支持编辑、复制、添加到记忆。
+   - 共创回复底部支持重试、复制；用户消息底部支持编辑、复制。
    - Wridian 对正文的修改以正文内联 diff 展示，红色为删除、绿色为新增。
    - 文件顶部提供全部确认和全部取消；每处修改提供确认和取消。
    - 不做自动全文覆盖。
    - 当前已完成：正文区使用纯文本编辑器承载 inline diff，确认后写入正文并继续走已有自动保存链路；inline diff 只是编辑器内的待确认建议，不是单独审阅模式。
-4. 完成记忆注入闭环。
-   - 已确认记忆按作品/文件/分类筛选，参与共创上下文。
-   - 普通共创不直接写记忆；可从回复中显式“记住这条”进入候选。
+4. 完成记忆树注入闭环。
+   - 共创上下文按记忆树槽位读取全局层、伙伴层和当前作品层文件。
+   - 普通共创不直接写记忆；用户通过“记忆树”抽屉直接编辑 Markdown 文件。
 5. 补剧本 MVP。
    - 对 `.fountain` 或剧本稿件显示剧本上下文提示。
    - 共创命令支持改对白、增强冲突、加结尾钩子、检查角色口吻、拆分分集节奏。

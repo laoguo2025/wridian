@@ -32,15 +32,8 @@ pub fn run() {
             chat_persistence::wridian_save_chat_transcript,
             memory::wridian_get_memory_state,
             memory::wridian_get_memory_state_for_source,
-            memory::wridian_ingest_memory_wiki,
-            memory::wridian_rebuild_memory_wiki_index,
-            memory::wridian_search_memory_wiki,
-            memory::wridian_get_memory_graph,
-            memory::wridian_create_memory_candidate,
-            memory::wridian_extract_memory_candidates,
-            memory::wridian_update_memory_candidate,
-            memory::wridian_accept_memory_candidate,
-            memory::wridian_ignore_memory_candidate
+            memory::wridian_get_memory_tree,
+            memory::wridian_save_memory_tree_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

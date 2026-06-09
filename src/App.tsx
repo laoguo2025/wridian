@@ -75,41 +75,18 @@ type TestCustomApiResponse = {
 
 type DraftEdit = ChatDraftEdit;
 
-type MemoryItem = {
+type MemoryTreeNode = {
   id: string;
-  category?: string;
-  text: string;
-  sourcePath: string;
-  title: string;
-  createdAt: string;
-};
-
-type MemoryCandidate = {
-  id: string;
-  category?: string;
-  text: string;
-  sourcePath: string;
-  title: string;
-  createdAt: string;
-};
-
-type MemoryState = {
-  memories: MemoryItem[];
-  candidates: MemoryCandidate[];
-  memoryFolderPath?: string;
-};
-
-type MemoryWikiSearchResult = {
   kind: string;
-  path: string;
-  score: number;
-  snippet: string;
-  title: string;
+  label: string;
+  description: string;
+  path?: string | null;
+  content?: string | null;
+  children: MemoryTreeNode[];
 };
 
-type MemoryGraphState = {
-  nodes: { id: string; kind: string; path: string; title: string }[];
-  edges: { from: string; to: string; label: string }[];
+type MemoryTreeState = {
+  roots: MemoryTreeNode[];
 };
 
 type FileContextMenu = {
@@ -144,12 +121,9 @@ function App() {
   const [lastSavedContent, setLastSavedContent] = useState("");
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [saveError, setSaveError] = useState("");
-  const [memoryState, setMemoryState] = useState<MemoryState>({ memories: [], candidates: [] });
   const [memoryError, setMemoryError] = useState("");
-  const [memoryWikiSearch, setMemoryWikiSearch] = useState("");
-  const [memoryWikiResults, setMemoryWikiResults] = useState<MemoryWikiSearchResult[]>([]);
-  const [memoryGraphState, setMemoryGraphState] = useState<MemoryGraphState>({ nodes: [], edges: [] });
-  const [extractingMemory, setExtractingMemory] = useState(false);
+  const [memoryTreeState, setMemoryTreeState] = useState<MemoryTreeState>({ roots: [] });
+  const [savingMemoryTree, setSavingMemoryTree] = useState(false);
   const [fileMenu, setFileMenu] = useState<FileContextMenu | null>(null);
   const [libraryTab, setLibraryTab] = useState<"works" | "knowledge">("works");
   const draftEditorRef = useRef<HTMLDivElement | null>(null);
@@ -160,32 +134,10 @@ function App() {
   const chatManager = useChatManager({ onDraftEdits: appendDraftEdits });
   const draftKind = useMemo(() => detectDraftKind(selectedPath, editorContent), [editorContent, selectedPath]);
 
-  const loadMemoryState = useCallback(async () => {
+  const loadMemoryTree = useCallback(async () => {
     try {
-      const response = await invoke<MemoryState>("wridian_get_memory_state");
-      setMemoryState(response.memories.length || response.candidates.length ? response : { memories: [], candidates: [] });
-      setMemoryError("");
-    } catch (error) {
-      setMemoryError(error instanceof Error ? error.message : String(error));
-    }
-  }, []);
-
-  const loadMemoryStateForSource = useCallback(async (sourcePath: string) => {
-    try {
-      const response = await invoke<MemoryState>("wridian_get_memory_state_for_source", {
-        input: { sourcePath },
-      });
-      setMemoryState(response.memories.length || response.candidates.length ? response : { memories: [], candidates: [] });
-      setMemoryError("");
-    } catch (error) {
-      setMemoryError(error instanceof Error ? error.message : String(error));
-    }
-  }, []);
-
-  const loadMemoryGraph = useCallback(async () => {
-    try {
-      const response = await invoke<MemoryGraphState>("wridian_get_memory_graph");
-      setMemoryGraphState(response);
+      const response = await invoke<MemoryTreeState>("wridian_get_memory_tree");
+      setMemoryTreeState(response);
       setMemoryError("");
     } catch (error) {
       setMemoryError(error instanceof Error ? error.message : String(error));
@@ -246,23 +198,9 @@ function App() {
   }, []);
 
   useEffect(() => {
-    void loadMemoryState();
-  }, [loadMemoryState]);
-
-  useEffect(() => {
-    if (selectedPath) {
-      void loadMemoryStateForSource(selectedPath);
-    } else if (libraryTab === "knowledge" && workspace?.knowledgeRootPath) {
-      void loadMemoryStateForSource(workspace.knowledgeRootPath);
-    } else {
-      void loadMemoryState();
-    }
-  }, [libraryTab, loadMemoryState, loadMemoryStateForSource, selectedPath, workspace?.knowledgeRootPath]);
-
-  useEffect(() => {
     if (!memoryOpen) return;
-    void loadMemoryGraph();
-  }, [loadMemoryGraph, memoryOpen]);
+    void loadMemoryTree();
+  }, [loadMemoryTree, memoryOpen]);
 
   useEffect(() => {
     void invoke<CustomApiSettingsStatus>("wridian_get_custom_api_settings")
@@ -486,24 +424,6 @@ function App() {
     }
   };
 
-  const addTextToMemory = async (text: string) => {
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    try {
-      const response = await invoke<MemoryState>("wridian_create_memory_candidate", {
-        input: {
-          sourcePath: selectedPath,
-          title: editorTitle,
-          content: editorContent,
-          userIntent: trimmed,
-        },
-      });
-      setMemoryState(response);
-    } catch (error) {
-      setMemoryError(error instanceof Error ? error.message : String(error));
-    }
-  };
-
   const editUserMessage = (message: ChatMessage) => {
     setPrompt(message.text);
     setPromptPills(restorePromptPillsFromMessage(message));
@@ -567,10 +487,11 @@ function App() {
     [editorContent, pendingDraftEdits],
   );
   const blockedDraftEditCount = draftReplaceGuardReport.skipped.length;
+  const knowledgeCardSuggestions = useMemo(() => flattenKnowledgeCards(knowledgeFiles), [knowledgeFiles]);
   const promptSuggestions = useMemo(() => buildPromptSuggestions({
     draftKind,
-    knowledgeCards: memoryState.memories,
-  }), [draftKind, memoryState.memories]);
+    knowledgeCards: knowledgeCardSuggestions,
+  }), [draftKind, knowledgeCardSuggestions]);
 
   const statusLabel = useMemo(() => {
     if (saveStatus === "idle") return "读取中";
@@ -580,110 +501,29 @@ function App() {
     return "已保存";
   }, [saveStatus]);
 
-  const acceptMemoryCandidate = async (id: string) => {
+  const saveMemoryTreeFile = async (path: string, content: string) => {
+    setSavingMemoryTree(true);
     try {
-      const response = await invoke<MemoryState>("wridian_accept_memory_candidate", { input: { id } });
-      setMemoryState(response);
-      setMemoryError("");
-      void loadMemoryGraph();
-    } catch (error) {
-      setMemoryState((current) => {
-        const candidate = current.candidates.find((item) => item.id === id);
-        if (!candidate) return current;
-        return {
-          memories: [...current.memories, { ...candidate, id: `local-memory-${Date.now()}` }],
-          candidates: current.candidates.filter((item) => item.id !== id),
-        };
+      const response = await invoke<MemoryTreeState>("wridian_save_memory_tree_file", {
+        input: { path, content },
       });
-      setMemoryError(error instanceof Error ? error.message : String(error));
-    }
-  };
-
-  const ignoreMemoryCandidate = async (id: string) => {
-    try {
-      const response = await invoke<MemoryState>("wridian_ignore_memory_candidate", { input: { id } });
-      setMemoryState(response);
+      setMemoryTreeState(response);
       setMemoryError("");
-    } catch (error) {
-      setMemoryState((current) => ({
-        ...current,
-        candidates: current.candidates.filter((item) => item.id !== id),
-      }));
-      setMemoryError(error instanceof Error ? error.message : String(error));
-    }
-  };
-
-  const updateMemoryCandidate = async (id: string, text: string) => {
-    try {
-      const response = await invoke<MemoryState>("wridian_update_memory_candidate", { input: { id, text } });
-      setMemoryState(response);
-      setMemoryError("");
-    } catch (error) {
-      setMemoryState((current) => ({
-        ...current,
-        candidates: current.candidates.map((candidate) => (candidate.id === id ? { ...candidate, text } : candidate)),
-      }));
-      setMemoryError(error instanceof Error ? error.message : String(error));
-    }
-  };
-
-  const extractMemoryCandidates = async () => {
-    setExtractingMemory(true);
-    setMemoryError("");
-    try {
-      if (!("__TAURI_INTERNALS__" in window)) {
-        throw new Error("请在 Wridian 桌面端使用正文记忆提取。");
-      }
-      const response = await invoke<MemoryState>("wridian_extract_memory_candidates", {
-        input: {
-          sourcePath: selectedPath,
-          title: editorTitle,
-          content: editorContent,
-        },
-      });
-      setMemoryState(response);
     } catch (error) {
       setMemoryError(error instanceof Error ? error.message : String(error));
     } finally {
-      setExtractingMemory(false);
+      setSavingMemoryTree(false);
     }
   };
 
   const openMemoryFolder = async () => {
-    if (!memoryState.memoryFolderPath) {
+    if (!workspace?.runtimePath) {
       setMemoryError("请在 Wridian 桌面端打开记忆文件夹。");
       return;
     }
     try {
       const { openPath } = await import("@tauri-apps/plugin-opener");
-      await openPath(memoryState.memoryFolderPath);
-      setMemoryError("");
-    } catch (error) {
-      setMemoryError(error instanceof Error ? error.message : String(error));
-    }
-  };
-
-  const rebuildMemoryWiki = async () => {
-    try {
-      const response = await invoke<MemoryGraphState>("wridian_rebuild_memory_wiki_index");
-      setMemoryGraphState(response);
-      setMemoryError("");
-    } catch (error) {
-      setMemoryError(error instanceof Error ? error.message : String(error));
-    }
-  };
-
-  const searchMemoryWiki = async (query: string) => {
-    setMemoryWikiSearch(query);
-    if (!query.trim()) {
-      setMemoryWikiResults([]);
-      return;
-    }
-    try {
-      const response = await invoke<MemoryWikiSearchResult[]>("wridian_search_memory_wiki", {
-        input: { query, limit: 6 },
-      });
-      setMemoryWikiResults(response);
+      await openPath(`${workspace.runtimePath}\\memory-tree`);
       setMemoryError("");
     } catch (error) {
       setMemoryError(error instanceof Error ? error.message : String(error));
@@ -701,7 +541,7 @@ function App() {
           <button type="button" onClick={() => {
             setMemoryOpen(true);
           }}>
-            记忆
+            记忆树
           </button>
           <button type="button" onClick={() => setSettingsOpen(true)}>
             模型
@@ -766,12 +606,6 @@ function App() {
                   <button type="button" className="paper-action" onClick={attachCurrentSelectionToPrompt} disabled={!hasDraftSelection}>
                     添加选区到输入框
                   </button>
-                  <button type="button" className="paper-action" onClick={() => {
-                    setMemoryOpen(true);
-                    void extractMemoryCandidates();
-                  }} disabled={!editorContent.trim()}>
-                    提取当前内容到记忆
-                  </button>
                   <div className={`save-state ${saveStatus}`} title={saveError || undefined}>
                     {statusLabel}
                   </div>
@@ -808,7 +642,6 @@ function App() {
         <ChatPanel
           error={chatManager.error}
           messages={chatManager.messages}
-          onAddToMemory={addTextToMemory}
           onCopy={copyText}
           onEditUserMessage={editUserMessage}
           onRetry={retryLastUserMessage}
@@ -834,6 +667,11 @@ function App() {
           onRemovePill={(id) => setPromptPills((current) => current.filter((pill) => pill.id !== id))}
           onSelectSuggestion={(suggestion) => {
             if (suggestion.kind !== "context") return;
+            if (suggestion.pillKind === "memory" && suggestion.insertText.startsWith("path:")) {
+              const path = suggestion.insertText.slice("path:".length);
+              void addFileToPrompt(suggestion.label, path);
+              return;
+            }
             setPromptPills((current) => upsertPromptContextPill(current, createPromptPillFromSuggestion(suggestion)));
           }}
           onSubmit={() => void sendPrompt()}
@@ -844,19 +682,11 @@ function App() {
         <MemoryDrawer
           currentTitle={editorTitle}
           memoryError={memoryError}
-          memoryState={memoryState}
-          graphState={memoryGraphState}
-          onAcceptCandidate={acceptMemoryCandidate}
+          memoryTree={memoryTreeState}
           onClose={() => setMemoryOpen(false)}
-          onExtractCandidates={extractMemoryCandidates}
-          onIgnoreCandidate={ignoreMemoryCandidate}
           onOpenMemoryFolder={openMemoryFolder}
-          onRebuildWiki={rebuildMemoryWiki}
-          onSearchWiki={searchMemoryWiki}
-          onUpdateCandidate={updateMemoryCandidate}
-          searchQuery={memoryWikiSearch}
-          searchResults={memoryWikiResults}
-          extracting={extractingMemory}
+          onSaveFile={saveMemoryTreeFile}
+          saving={savingMemoryTree}
           workspace={workspace}
         />
       ) : null}
@@ -1208,53 +1038,54 @@ function buildDraftSuggestionChunks(content: string, edits: DraftEdit[]): DraftS
 
 function MemoryDrawer({
   currentTitle,
-  extracting,
-  graphState,
   memoryError,
-  memoryState,
-  onAcceptCandidate,
+  memoryTree,
   onClose,
-  onExtractCandidates,
-  onIgnoreCandidate,
   onOpenMemoryFolder,
-  onRebuildWiki,
-  onSearchWiki,
-  onUpdateCandidate,
-  searchQuery,
-  searchResults,
+  onSaveFile,
+  saving,
   workspace,
 }: {
   currentTitle: string;
-  extracting: boolean;
-  graphState: MemoryGraphState;
   memoryError: string;
-  memoryState: MemoryState;
-  onAcceptCandidate: (id: string) => void;
+  memoryTree: MemoryTreeState;
   onClose: () => void;
-  onExtractCandidates: () => void;
-  onIgnoreCandidate: (id: string) => void;
   onOpenMemoryFolder: () => void;
-  onRebuildWiki: () => void;
-  onSearchWiki: (query: string) => void;
-  onUpdateCandidate: (id: string, text: string) => void;
-  searchQuery: string;
-  searchResults: MemoryWikiSearchResult[];
+  onSaveFile: (path: string, content: string) => void;
+  saving: boolean;
   workspace: WorkspaceInfo | null;
 }) {
+  const firstFile = useMemo(() => findFirstMemoryFile(memoryTree.roots), [memoryTree.roots]);
+  const [selectedPath, setSelectedPath] = useState(firstFile?.path ?? "");
+  const selectedNode = useMemo(() => findMemoryNodeByPath(memoryTree.roots, selectedPath) ?? firstFile, [firstFile, memoryTree.roots, selectedPath]);
+  const [draft, setDraft] = useState(selectedNode?.content ?? "");
+
+  useEffect(() => {
+    if (!selectedPath && firstFile?.path) {
+      setSelectedPath(firstFile.path);
+    }
+  }, [firstFile, selectedPath]);
+
+  useEffect(() => {
+    setDraft(selectedNode?.content ?? "");
+  }, [selectedNode?.content, selectedNode?.path]);
+
+  const save = () => {
+    if (!selectedNode?.path) return;
+    onSaveFile(selectedNode.path, draft);
+  };
+
   return (
     <div className="drawer-backdrop" onMouseDown={onClose} role="presentation">
-      <aside className="memory-drawer" role="dialog" aria-modal="true" aria-label="记忆" onMouseDown={(event) => event.stopPropagation()}>
+      <aside className="memory-drawer memory-tree-drawer" role="dialog" aria-modal="true" aria-label="记忆树" onMouseDown={(event) => event.stopPropagation()}>
         <div className="drawer-header">
           <div>
-            <div className="drawer-title">记忆</div>
+            <div className="drawer-title">记忆树</div>
             <div className="drawer-subtitle">当前文件：{currentTitle}</div>
           </div>
           <div className="drawer-header-actions">
             <button type="button" className="small-action" onClick={onOpenMemoryFolder}>
               文件夹
-            </button>
-            <button type="button" className="small-action" onClick={onRebuildWiki}>
-              重建图谱
             </button>
             <button type="button" className="icon-button" onClick={onClose} aria-label="关闭">
               ×
@@ -1264,142 +1095,125 @@ function MemoryDrawer({
 
         {memoryError ? <div className="rail-error">{memoryError}</div> : null}
 
-        <section className="memory-card">
-          <h2>当前现场</h2>
-          <p>{currentTitle}</p>
-          <p>图谱：{graphState.nodes.length} 节点 / {graphState.edges.length} 关系</p>
-          <p>正文提取只会生成待确认记忆，由你决定是否写入。</p>
-          <button type="button" className="extract-action" onClick={onExtractCandidates} disabled={extracting}>
-            {extracting ? "提取中" : "从当前正文提取"}
-          </button>
-        </section>
-
-        <section className="memory-card">
-          <h2>图谱检索</h2>
-          <input
-            className="memory-search"
-            value={searchQuery}
-            onChange={(event) => onSearchWiki(event.currentTarget.value)}
-            placeholder="搜索人物、设定、伏笔"
-            aria-label="搜索 Markdown 记忆图谱"
-          />
-          {searchResults.length ? (
-            <ul>
-              {searchResults.map((result) => (
-                <li key={result.path}>
-                  <span className="memory-category">{result.kind}</span>
-                  {result.title}：{result.snippet}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p>输入关键词检索 Markdown 图谱。</p>
-          )}
-        </section>
-
-        <section className="memory-card">
-          <h2>相关记忆</h2>
-          {memoryState.memories.length ? (
-            <ul>
-              {memoryState.memories.map((item) => (
-                <li key={item.id}>
-                  <span className="memory-category">{item.category ?? "其他"}</span>
-                  {item.text}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p>还没有写入的记忆。</p>
-          )}
-        </section>
-
-        {memoryState.candidates.length ? (
-          memoryState.candidates.map((candidate) => (
-            <MemoryCandidateCard
-              candidate={candidate}
-              key={candidate.id}
-              onAccept={onAcceptCandidate}
-              onIgnore={onIgnoreCandidate}
-              onUpdate={onUpdateCandidate}
-            />
-          ))
-        ) : (
-          <section className="memory-card pending">
-            <h2>待确认</h2>
-            <p>暂无待确认记忆。</p>
+        <div className="memory-tree-layout">
+          <div className="memory-tree-list" aria-label="记忆树文件">
+            {memoryTree.roots.map((node) => (
+              <MemoryTreeNodeView
+                key={node.id}
+                node={node}
+                selectedPath={selectedNode?.path ?? ""}
+                onSelect={(node) => node.path && node.content != null ? setSelectedPath(node.path) : undefined}
+              />
+            ))}
+          </div>
+          <section className="memory-tree-editor">
+            {selectedNode?.path ? (
+              <>
+                <div className="memory-tree-editor-header">
+                  <div>
+                    <h2>{selectedNode.label}</h2>
+                    <p>{selectedNode.description}</p>
+                  </div>
+                  <button type="button" onClick={save} disabled={saving || draft === (selectedNode.content ?? "")}>
+                    {saving ? "保存中" : "保存"}
+                  </button>
+                </div>
+                <textarea
+                  className="memory-tree-textarea"
+                  value={draft}
+                  onChange={(event) => setDraft(event.currentTarget.value)}
+                  spellCheck={false}
+                  aria-label={`编辑 ${selectedNode.label}`}
+                />
+              </>
+            ) : (
+              <div className="memory-tree-empty">选择左侧 Markdown 文件。</div>
+            )}
           </section>
-        )}
+        </div>
 
         <footer className="drawer-footer">
-          {memoryState.memoryFolderPath || (workspace?.runtimePath ? `${workspace.runtimePath}` : "本地记忆目录初始化中")}
+          {workspace?.runtimePath ? `${workspace.runtimePath}\\memory-tree` : "本地记忆树初始化中"}
         </footer>
       </aside>
     </div>
   );
 }
 
-function MemoryCandidateCard({
-  candidate,
-  onAccept,
-  onIgnore,
-  onUpdate,
+function MemoryTreeNodeView({
+  node,
+  onSelect,
+  selectedPath,
 }: {
-  candidate: MemoryCandidate;
-  onAccept: (id: string) => void;
-  onIgnore: (id: string) => void;
-  onUpdate: (id: string, text: string) => void;
+  node: MemoryTreeNode;
+  onSelect: (node: MemoryTreeNode) => void;
+  selectedPath: string;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(candidate.text);
-
-  useEffect(() => {
-    setDraft(candidate.text);
-  }, [candidate.text]);
-
-  const saveEdit = () => {
-    const text = draft.trim();
-    if (!text) return;
-    onUpdate(candidate.id, text);
-    setEditing(false);
-  };
-
+  const [expanded, setExpanded] = useState(true);
+  const selectable = Boolean(node.path && node.content != null);
+  const active = selectable && node.path === selectedPath;
   return (
-    <section className="memory-card pending">
-      <h2>
-        待确认
-        <span className="memory-category">{candidate.category ?? "其他"}</span>
-      </h2>
-      {editing ? (
-        <textarea className="candidate-editor" value={draft} onChange={(event) => setDraft(event.currentTarget.value)} aria-label="编辑候选记忆" />
-      ) : (
-        <p>{candidate.text}</p>
-      )}
-      <div className="drawer-actions">
-        {editing ? (
-          <>
-            <button type="button" onClick={saveEdit}>
-              保存
-            </button>
-            <button type="button" className="secondary" onClick={() => setEditing(false)}>
-              取消
-            </button>
-          </>
-        ) : (
-          <>
-            <button type="button" onClick={() => onAccept(candidate.id)}>
-              记住
-            </button>
-            <button type="button" className="secondary" onClick={() => setEditing(true)}>
-              编辑
-            </button>
-            <button type="button" className="secondary" onClick={() => onIgnore(candidate.id)}>
-              忽略
-            </button>
-          </>
-        )}
-      </div>
-    </section>
+    <div className="memory-tree-node">
+      <button
+        type="button"
+        className={`memory-tree-row ${node.kind} ${active ? "active" : ""}`}
+        onClick={() => {
+          if (selectable) {
+            onSelect(node);
+          } else {
+            setExpanded((current) => !current);
+          }
+        }}
+      >
+        <span>{node.children.length ? (expanded ? "▾" : "▸") : " "}</span>
+        <strong>{node.label}</strong>
+      </button>
+      {expanded && node.children.length ? (
+        <div className="memory-tree-children">
+          {node.children.map((child) => (
+            <MemoryTreeNodeView key={child.id} node={child} onSelect={onSelect} selectedPath={selectedPath} />
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
+}
+
+function findFirstMemoryFile(nodes: MemoryTreeNode[]): MemoryTreeNode | undefined {
+  for (const node of nodes) {
+    if (node.path && node.content != null) return node;
+    const child = findFirstMemoryFile(node.children);
+    if (child) return child;
+  }
+  return undefined;
+}
+
+function findMemoryNodeByPath(nodes: MemoryTreeNode[], path: string): MemoryTreeNode | undefined {
+  for (const node of nodes) {
+    if (node.path === path) return node;
+    const child = findMemoryNodeByPath(node.children, path);
+    if (child) return child;
+  }
+  return undefined;
+}
+
+function flattenKnowledgeCards(nodes: WorkFileNode[]) {
+  const cards: { id: string; category: string; sourcePath: string; title: string }[] = [];
+  const visit = (node: WorkFileNode) => {
+    if (node.folder) {
+      node.children.forEach(visit);
+      return;
+    }
+    if (!/\.(md|markdown)$/i.test(node.name)) return;
+    cards.push({
+      id: node.path,
+      category: "知识卡",
+      sourcePath: node.path,
+      title: node.name.replace(/\.(md|markdown)$/i, ""),
+    });
+  };
+  nodes.forEach(visit);
+  return cards;
 }
 
 function ModelSettingsDialog({ onClose }: { onClose: () => void }) {

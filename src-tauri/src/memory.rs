@@ -1,76 +1,13 @@
-use crate::model_accounts::{read_custom_api_settings, StoredCustomApiSettings};
-use crate::runtime::{
-    candidates_path, ensure_workspace, iso_timestamp, knowledge_root, memory_folder_path, memory_tree_path,
-    memory_wiki_root, next_runtime_id, vault_root, wridian_data_dir,
-};
+use crate::runtime::{ensure_workspace, knowledge_root, memory_folder_path, wridian_data_dir};
 use crate::workspace::works_root;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
-use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::Path;
-use std::time::Duration;
-
-const MEMORY_CATEGORIES: [&str; 6] = ["人物", "世界观", "剧情线", "风格", "禁区", "其他"];
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct CreateMemoryCandidateInput {
-    source_path: String,
-    title: String,
-    content: String,
-    user_intent: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct MemoryCandidateActionInput {
-    id: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct UpdateMemoryCandidateInput {
-    id: String,
-    text: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ExtractMemoryCandidatesInput {
-    source_path: String,
-    title: String,
-    content: String,
-}
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MemoryScopeInput {
     source_path: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct MemoryItem {
-    id: String,
-    #[serde(default = "default_memory_category")]
-    category: String,
-    text: String,
-    source_path: String,
-    title: String,
-    created_at: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct MemoryCandidate {
-    id: String,
-    #[serde(default = "default_memory_category")]
-    category: String,
-    text: String,
-    source_path: String,
-    title: String,
-    created_at: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -81,52 +18,58 @@ pub(crate) struct MemoryStateResponse {
     memory_folder_path: String,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct SearchMemoryWikiInput {
-    query: String,
-    limit: Option<usize>,
-}
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct MemoryWikiSearchResult {
-    kind: String,
-    path: String,
-    score: f64,
-    snippet: String,
+pub(crate) struct MemoryItem {
+    id: String,
+    category: String,
+    text: String,
+    source_path: String,
     title: String,
+    created_at: String,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct MemoryGraphResponse {
-    nodes: Vec<MemoryGraphNode>,
-    edges: Vec<MemoryGraphEdge>,
+pub(crate) struct MemoryCandidate {
+    id: String,
+    category: String,
+    text: String,
+    source_path: String,
+    title: String,
+    created_at: String,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct MemoryGraphNode {
+pub(crate) struct MemoryTreeResponse {
+    roots: Vec<MemoryTreeNode>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MemoryTreeNode {
     id: String,
     kind: String,
-    path: String,
-    title: String,
+    label: String,
+    description: String,
+    path: Option<String>,
+    content: Option<String>,
+    children: Vec<MemoryTreeNode>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct MemoryGraphEdge {
-    from: String,
-    to: String,
-    label: String,
+pub(crate) struct SaveMemoryTreeFileInput {
+    path: String,
+    content: String,
 }
 
 #[tauri::command]
 pub(crate) fn wridian_get_memory_state() -> Result<MemoryStateResponse, String> {
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
-    memory_state_for_scope(&data_dir, &MemoryScope::Global)
+    read_memory_state_for_source(&data_dir, "")
 }
 
 #[tauri::command]
@@ -135,547 +78,173 @@ pub(crate) fn wridian_get_memory_state_for_source(
 ) -> Result<MemoryStateResponse, String> {
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
-    let source_path = input.source_path.unwrap_or_default();
-    let scope = memory_scope_for_source(&data_dir, &source_path)?;
-    memory_state_for_scope(&data_dir, &scope)
+    read_memory_state_for_source(&data_dir, input.source_path.as_deref().unwrap_or_default())
 }
 
 #[tauri::command]
-pub(crate) fn wridian_ingest_memory_wiki() -> Result<MemoryGraphResponse, String> {
+pub(crate) fn wridian_get_memory_tree() -> Result<MemoryTreeResponse, String> {
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
-    let memories = read_all_memory_items(&data_dir)?;
-    write_memory_wiki(&data_dir, &memories)?;
-    read_memory_graph(&data_dir)
+    read_memory_tree_files(&data_dir)
 }
 
 #[tauri::command]
-pub(crate) fn wridian_rebuild_memory_wiki_index() -> Result<MemoryGraphResponse, String> {
-    wridian_ingest_memory_wiki()
-}
-
-#[tauri::command]
-pub(crate) fn wridian_search_memory_wiki(input: SearchMemoryWikiInput) -> Result<Vec<MemoryWikiSearchResult>, String> {
+pub(crate) fn wridian_save_memory_tree_file(
+    input: SaveMemoryTreeFileInput,
+) -> Result<MemoryTreeResponse, String> {
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
-    search_memory_wiki(&data_dir, &input.query, input.limit.unwrap_or(8).min(30))
-}
-
-#[tauri::command]
-pub(crate) fn wridian_get_memory_graph() -> Result<MemoryGraphResponse, String> {
-    let data_dir = wridian_data_dir()?;
-    ensure_workspace(&data_dir)?;
-    read_memory_graph(&data_dir)
-}
-
-#[tauri::command]
-pub(crate) fn wridian_create_memory_candidate(
-    input: CreateMemoryCandidateInput,
-) -> Result<MemoryStateResponse, String> {
-    let data_dir = wridian_data_dir()?;
-    ensure_workspace(&data_dir)?;
-    let scope = memory_scope_for_source(&data_dir, &input.source_path)?;
-    let scope_paths = MemoryScopePaths::new(&data_dir, &scope)?;
-    let mut candidates = read_memory_candidates_at(&scope_paths.candidates_path)?;
-    let created_at = iso_timestamp();
-    for text in propose_memory_texts(&input) {
-        if candidates.iter().any(|candidate| candidate.text == text) {
-            continue;
-        }
-        candidates.push(MemoryCandidate {
-            id: next_runtime_id("candidate"),
-            category: "其他".to_string(),
-            text,
-            source_path: input.source_path.clone(),
-            title: input.title.clone(),
-            created_at: created_at.clone(),
-        });
-    }
-    write_memory_candidates_at(&scope_paths.candidates_path, &candidates)?;
-    memory_state_for_scope_paths(&scope_paths)
-}
-
-#[tauri::command]
-pub(crate) async fn wridian_extract_memory_candidates(
-    input: ExtractMemoryCandidatesInput,
-) -> Result<MemoryStateResponse, String> {
-    let data_dir = wridian_data_dir()?;
-    ensure_workspace(&data_dir)?;
-    let scope = memory_scope_for_source(&data_dir, &input.source_path)?;
-    let scope_paths = MemoryScopePaths::new(&data_dir, &scope)?;
-    let content = input.content.trim();
-    if content.is_empty() {
-        return Err("当前正文为空，无法提取记忆。".to_string());
-    }
-    let settings = read_custom_api_settings(&data_dir)?
-        .ok_or_else(|| "请先在模型设置里保存第三方 API。".to_string())?;
-    let extracted = extract_candidates_with_model(&settings, &input).await?;
-    if extracted.is_empty() {
-        return Err("模型没有提取到可用的候选记忆。".to_string());
-    }
-
-    let mut candidates = read_memory_candidates_at(&scope_paths.candidates_path)?;
-    let created_at = iso_timestamp();
-    for extracted_candidate in extracted {
-        if candidates
-            .iter()
-            .any(|candidate| candidate.text == extracted_candidate.text)
-        {
-            continue;
-        }
-        candidates.push(MemoryCandidate {
-            id: next_runtime_id("candidate"),
-            category: extracted_candidate.category,
-            text: extracted_candidate.text,
-            source_path: input.source_path.clone(),
-            title: input.title.clone(),
-            created_at: created_at.clone(),
-        });
-    }
-
-    write_memory_candidates_at(&scope_paths.candidates_path, &candidates)?;
-    memory_state_for_scope_paths(&scope_paths)
-}
-
-#[tauri::command]
-pub(crate) fn wridian_update_memory_candidate(
-    input: UpdateMemoryCandidateInput,
-) -> Result<MemoryStateResponse, String> {
-    let data_dir = wridian_data_dir()?;
-    ensure_workspace(&data_dir)?;
-    let text = input.text.trim().to_string();
-    if text.is_empty() {
-        return Err("候选记忆不能为空。".to_string());
-    }
-    let mut candidates = read_all_memory_candidates(&data_dir)?;
-    let candidate = candidates
-        .iter_mut()
-        .find(|candidate| candidate.id == input.id)
-        .ok_or_else(|| "待确认记忆不存在。".to_string())?;
-    candidate.text = text;
-    write_candidate_back_to_scope(&data_dir, &input.id, &candidates)?;
-    let scope = candidates
-        .iter()
-        .find(|candidate| candidate.id == input.id)
-        .map(|candidate| memory_scope_for_source(&data_dir, &candidate.source_path))
-        .transpose()?
-        .unwrap_or(MemoryScope::Global);
-    memory_state_for_scope(&data_dir, &scope)
-}
-
-#[tauri::command]
-pub(crate) fn wridian_accept_memory_candidate(
-    input: MemoryCandidateActionInput,
-) -> Result<MemoryStateResponse, String> {
-    let data_dir = wridian_data_dir()?;
-    ensure_workspace(&data_dir)?;
-    let mut candidates = read_all_memory_candidates(&data_dir)?;
-    let index = candidates
-        .iter()
-        .position(|candidate| candidate.id == input.id)
-        .ok_or_else(|| "待确认记忆不存在。".to_string())?;
-    let candidate = candidates.remove(index);
-    let scope = memory_scope_for_source(&data_dir, &candidate.source_path)?;
-    let scope_paths = MemoryScopePaths::new(&data_dir, &scope)?;
-    let mut memories = read_memory_items_at(&scope_paths.memory_tree_path)?;
-    if !memories.iter().any(|memory| memory.text == candidate.text) {
-        memories.push(MemoryItem {
-            id: next_runtime_id("memory"),
-            category: candidate.category,
-            text: candidate.text,
-            source_path: candidate.source_path,
-            title: candidate.title,
-            created_at: candidate.created_at,
-        });
-    }
-    write_memory_items_at(&scope_paths.memory_tree_path, &memories)?;
-    write_memory_wiki(&data_dir, &read_all_memory_items(&data_dir)?)?;
-    remove_candidate_from_all_scopes(&data_dir, &input.id)?;
-    memory_state_for_scope_paths(&scope_paths)
-}
-
-#[tauri::command]
-pub(crate) fn wridian_ignore_memory_candidate(
-    input: MemoryCandidateActionInput,
-) -> Result<MemoryStateResponse, String> {
-    let data_dir = wridian_data_dir()?;
-    ensure_workspace(&data_dir)?;
-    let scope = find_candidate_scope(&data_dir, &input.id)?.unwrap_or(MemoryScope::Global);
-    remove_candidate_from_all_scopes(&data_dir, &input.id)?;
-    memory_state_for_scope(&data_dir, &scope)
-}
-
-fn read_memory_items(data_dir: &Path) -> Result<Vec<MemoryItem>, String> {
-    read_memory_items_at(&memory_tree_path(data_dir))
-}
-
-fn read_memory_items_at(path: &Path) -> Result<Vec<MemoryItem>, String> {
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    if path.extension().and_then(|extension| extension.to_str()) == Some("md") {
-        return read_memory_markdown_items_at(path);
-    }
-    let content = fs::read_to_string(&path).map_err(|error| format!("记忆树读取失败：{error}"))?;
-    let value: serde_json::Value =
-        serde_json::from_str(&content).map_err(|error| format!("记忆树格式损坏：{error}"))?;
-    if let Some(items) = value.get("memories") {
-        serde_json::from_value(items.clone())
-            .map_err(|error| format!("记忆树条目格式损坏：{error}"))
-    } else {
-        Ok(Vec::new())
-    }
+    save_memory_tree_file(&data_dir, &input.path, &input.content)?;
+    read_memory_tree_files(&data_dir)
 }
 
 pub(crate) fn read_relevant_memory_snippets(
     data_dir: &Path,
     source_path: &str,
-    title: &str,
+    _title: &str,
     limit: usize,
 ) -> Result<Vec<String>, String> {
-    let mut memories = read_memory_items(data_dir)?;
-    memories.extend(read_memory_items_at(&MemoryScopePaths::new(data_dir, &MemoryScope::Global)?.memory_tree_path)?);
-    let source_scope = memory_scope_for_source(data_dir, source_path)?;
-    if !matches!(source_scope, MemoryScope::Global) {
-        let paths = MemoryScopePaths::new(data_dir, &source_scope)?;
-        migrate_project_memory_json_to_markdown(&paths)?;
-        memories.extend(read_memory_items_at(&paths.memory_tree_path)?);
-    }
-    memories.extend(read_memory_items_at(&MemoryScopePaths::new(data_dir, &MemoryScope::Knowledge)?.memory_tree_path)?);
-    let mut matched = Vec::new();
-    let mut fallback = Vec::new();
-
-    for memory in memories {
-        let snippet = format!("【{}】{}", memory.category, memory.text);
-        if memory.source_path == source_path || memory.title == title {
-            matched.push(snippet);
-        } else {
-            fallback.push(snippet);
+    ensure_memory_tree_files(data_dir)?;
+    let mut snippets = Vec::new();
+    for file in context_files_for_source(data_dir, source_path)? {
+        let content = fs::read_to_string(&file).unwrap_or_default();
+        let trimmed = content.trim();
+        if trimmed.is_empty() {
+            continue;
         }
+        let label = file.file_name().map(|name| name.to_string_lossy()).unwrap_or_default();
+        snippets.push(format!("【{}】{}", label, compact_markdown(trimmed, 900)));
     }
-
-    matched.extend(fallback);
-    matched.truncate(limit);
-    Ok(matched)
+    snippets.truncate(limit);
+    Ok(snippets)
 }
 
-fn write_memory_items_at(path: &Path, memories: &[MemoryItem]) -> Result<(), String> {
-    if path.extension().and_then(|extension| extension.to_str()) == Some("md") {
-        return write_memory_markdown_items_at(path, memories);
-    }
-    let content = serde_json::to_string_pretty(&json!({
-        "schemaVersion": 1,
-        "memories": memories
-    }))
-    .map_err(|error| error.to_string())?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| format!("记忆目录创建失败：{error}"))?;
-    }
-    fs::write(path, content).map_err(|error| format!("记忆树写入失败：{error}"))
-}
-
-fn read_memory_markdown_items_at(path: &Path) -> Result<Vec<MemoryItem>, String> {
-    let content = fs::read_to_string(path).map_err(|error| format!("作品记忆读取失败：{error}"))?;
-    let mut items = Vec::new();
-    let mut current_frontmatter = HashMap::new();
-    let mut current_body = Vec::new();
-    let mut in_item = false;
-    let mut in_frontmatter = false;
-    for line in content.lines() {
-        if line.trim() == "---" {
-            if !in_item {
-                in_item = true;
-                in_frontmatter = true;
-                current_frontmatter.clear();
-                current_body.clear();
-                continue;
+fn read_memory_state_for_source(data_dir: &Path, source_path: &str) -> Result<MemoryStateResponse, String> {
+    ensure_memory_tree_files(data_dir)?;
+    let root = memory_tree_files_root(data_dir);
+    let memories = context_files_for_source(data_dir, source_path)?
+        .into_iter()
+        .filter_map(|path| {
+            let text = fs::read_to_string(&path).ok()?.trim().to_string();
+            if text.is_empty() {
+                return None;
             }
-            if in_frontmatter {
-                in_frontmatter = false;
-                continue;
-            }
-        }
-        if !in_item {
-            continue;
-        }
-        if in_frontmatter {
-            if let Some((key, value)) = line.split_once(':') {
-                current_frontmatter.insert(key.trim().to_string(), unquote_yaml(value.trim()));
-            }
-            continue;
-        }
-        if line.trim() == "<!-- wridian-memory-end -->" {
-            let text = current_body.join("\n").trim().to_string();
-            if !text.is_empty() {
-                items.push(MemoryItem {
-                    id: current_frontmatter
-                        .get("id")
-                        .cloned()
-                        .unwrap_or_else(|| next_runtime_id("memory")),
-                    category: current_frontmatter
-                        .get("category")
-                        .cloned()
-                        .unwrap_or_else(default_memory_category),
-                    text,
-                    source_path: current_frontmatter.get("source_path").cloned().unwrap_or_default(),
-                    title: current_frontmatter.get("title").cloned().unwrap_or_default(),
-                    created_at: current_frontmatter
-                        .get("created_at")
-                        .cloned()
-                        .unwrap_or_else(iso_timestamp),
-                });
-            }
-            in_item = false;
-            current_frontmatter.clear();
-            current_body.clear();
-            continue;
-        }
-        current_body.push(line.to_string());
-    }
-    if in_item && !in_frontmatter {
-        let text = current_body.join("\n").trim().to_string();
-        if !text.is_empty() {
-            items.push(MemoryItem {
-                id: current_frontmatter
-                    .get("id")
-                    .cloned()
-                    .unwrap_or_else(|| next_runtime_id("memory")),
-                category: current_frontmatter
-                    .get("category")
-                    .cloned()
-                    .unwrap_or_else(default_memory_category),
+            let title = path.file_name()?.to_string_lossy().into_owned();
+            Some(MemoryItem {
+                id: path.to_string_lossy().into_owned(),
+                category: "记忆树".to_string(),
                 text,
-                source_path: current_frontmatter.get("source_path").cloned().unwrap_or_default(),
-                title: current_frontmatter.get("title").cloned().unwrap_or_default(),
-                created_at: current_frontmatter
-                    .get("created_at")
-                    .cloned()
-                    .unwrap_or_else(iso_timestamp),
-            });
-        }
-    }
-    Ok(items)
-}
-
-fn write_memory_markdown_items_at(path: &Path, memories: &[MemoryItem]) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| format!("作品记忆目录创建失败：{error}"))?;
-    }
-    let mut content = String::from("# 作品记忆\n\n这里的每一段记忆都可以直接编辑。请保留每条记忆之间的 `---` frontmatter 和结束标记。\n\n");
-    for memory in memories {
-        content.push_str("---\n");
-        content.push_str(&format!("id: {}\n", escape_yaml(&memory.id)));
-        content.push_str(&format!("category: {}\n", escape_yaml(&memory.category)));
-        content.push_str(&format!("source_path: {}\n", escape_yaml(&memory.source_path)));
-        content.push_str(&format!("title: {}\n", escape_yaml(&memory.title)));
-        content.push_str(&format!("created_at: {}\n", escape_yaml(&memory.created_at)));
-        content.push_str("---\n\n");
-        content.push_str(memory.text.trim());
-        content.push_str("\n\n<!-- wridian-memory-end -->\n\n");
-    }
-    fs::write(path, content).map_err(|error| format!("作品记忆写入失败：{error}"))
-}
-
-fn unquote_yaml(value: &str) -> String {
-    value
-        .trim()
-        .trim_matches('"')
-        .replace("\\\"", "\"")
-        .replace("\\\\", "\\")
-}
-
-fn write_memory_wiki(data_dir: &Path, memories: &[MemoryItem]) -> Result<(), String> {
-    let wiki = memory_wiki_root(data_dir);
-    let sources = wiki.join("sources");
-    let entities = wiki.join("entities");
-    let concepts = wiki.join("concepts");
-    let cache = wiki.join(".cache");
-    for dir in [&wiki, &sources, &entities, &concepts, &cache] {
-        fs::create_dir_all(dir).map_err(|error| format!("记忆 wiki 目录创建失败：{error}"))?;
-    }
-
-    let pages = build_wiki_pages(memories);
-    let graph = build_wiki_graph(&pages);
-    let mut index = String::from("# Wridian 记忆索引\n\n");
-    let mut hot = String::from("# Hot Context\n\n");
-    for memory in memories {
-        let page = pages
-            .iter()
-            .find(|page| page.memory_id == memory.id)
-            .ok_or_else(|| "记忆 wiki 页面生成失败。".to_string())?;
-        let folder = match page.kind.as_str() {
-            "entity" => &entities,
-            "concept" => &concepts,
-            _ => &sources,
-        };
-        let path = folder.join(&page.file_name);
-        fs::write(&path, render_wiki_page(page, &graph))
-            .map_err(|error| format!("记忆 wiki 写入失败：{error}"))?;
-        index.push_str(&format!(
-            "- [[{}]] `{}：{}`\n",
-            page.title,
-            page.kind,
-            compact_text(&page.summary, 90)
-        ));
-    }
-
-    for page in pages.iter().rev().take(12) {
-        hot.push_str(&format!("- [[{}]]：{}\n", page.title, page.summary.trim()));
-    }
-
-    fs::write(wiki.join("index.md"), index).map_err(|error| format!("记忆索引写入失败：{error}"))?;
-    fs::write(wiki.join("hot.md"), hot).map_err(|error| format!("Hot Context 写入失败：{error}"))?;
-    fs::write(
-        wiki.join("log.md"),
-        format!(
-            "# 记忆同步日志\n\n## {} ingest | confirmed memories\n- Pages: {}\n- Edges: {}\n- Strategy: sources/entities/concepts + wikilink graph + local BM25 cache.\n",
-            iso_timestamp(),
-            pages.len(),
-            graph.edges.len()
-        ),
-    )
-    .map_err(|error| format!("记忆日志写入失败：{error}"))?;
-    fs::write(cache.join("index.json"), render_wiki_cache(&pages, &graph)?)
-        .map_err(|error| format!("记忆检索缓存写入失败：{error}"))?;
-    Ok(())
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum MemoryScope {
-    Global,
-    Knowledge,
-    Project { id: String, name: String },
-}
-
-struct MemoryScopePaths {
-    candidates_path: std::path::PathBuf,
-    folder_path: std::path::PathBuf,
-    memory_tree_path: std::path::PathBuf,
-}
-
-impl MemoryScopePaths {
-    fn new(data_dir: &Path, scope: &MemoryScope) -> Result<Self, String> {
-        let folder_path = match scope {
-            MemoryScope::Global => memory_folder_path(data_dir).join("memory").join("global"),
-            MemoryScope::Knowledge => memory_folder_path(data_dir).join("memory").join("knowledge"),
-            MemoryScope::Project { id, name } => memory_folder_path(data_dir)
-                .join("memory")
-                .join("projects")
-                .join(format!("{}-{}", sanitize_markdown_file_name(name), stable_scope_id(id))),
-        };
-        Ok(Self {
-            candidates_path: folder_path.join("candidates.json"),
-            memory_tree_path: match scope {
-                MemoryScope::Project { .. } => folder_path.join("memory.md"),
-                _ => folder_path.join("memory-tree.json"),
-            },
-            folder_path,
+                source_path: path.to_string_lossy().into_owned(),
+                title,
+                created_at: String::new(),
+            })
         })
-    }
-}
-
-fn memory_state_for_scope(data_dir: &Path, scope: &MemoryScope) -> Result<MemoryStateResponse, String> {
-    let paths = MemoryScopePaths::new(data_dir, scope)?;
-    if matches!(scope, MemoryScope::Global) {
-        let mut memories = read_memory_items(data_dir)?;
-        memories.extend(read_memory_items_at(&paths.memory_tree_path)?);
-        let mut candidates = read_memory_candidates(data_dir)?;
-        candidates.extend(read_memory_candidates_at(&paths.candidates_path)?);
-        return Ok(MemoryStateResponse {
-            memories,
-            candidates,
-            memory_folder_path: paths.folder_path.to_string_lossy().into_owned(),
-        });
-    }
-    memory_state_for_scope_paths(&paths)
-}
-
-fn memory_state_for_scope_paths(paths: &MemoryScopePaths) -> Result<MemoryStateResponse, String> {
-    migrate_project_memory_json_to_markdown(paths)?;
+        .collect();
     Ok(MemoryStateResponse {
-        memories: read_memory_items_at(&paths.memory_tree_path)?,
-        candidates: read_memory_candidates_at(&paths.candidates_path)?,
-        memory_folder_path: paths.folder_path.to_string_lossy().into_owned(),
+        memories,
+        candidates: Vec::new(),
+        memory_folder_path: root.to_string_lossy().into_owned(),
     })
 }
 
-fn migrate_project_memory_json_to_markdown(paths: &MemoryScopePaths) -> Result<(), String> {
-    if paths.memory_tree_path.extension().and_then(|extension| extension.to_str()) != Some("md") {
-        return Ok(());
-    }
-    if paths.memory_tree_path.exists() {
-        return Ok(());
-    }
-    let legacy_path = paths.folder_path.join("memory-tree.json");
-    if !legacy_path.exists() {
-        return Ok(());
-    }
-    let memories = read_memory_items_at(&legacy_path)?;
-    if memories.is_empty() {
-        return Ok(());
-    }
-    write_memory_markdown_items_at(&paths.memory_tree_path, &memories)
-}
-
-fn memory_scope_for_source(data_dir: &Path, source_path: &str) -> Result<MemoryScope, String> {
-    let trimmed = source_path.trim();
-    if trimmed.is_empty() {
-        return Ok(MemoryScope::Global);
-    }
-    let path = std::path::PathBuf::from(trimmed);
-    let canonical = path.canonicalize().unwrap_or(path);
-    let knowledge = knowledge_root(data_dir).canonicalize().unwrap_or_else(|_| knowledge_root(data_dir));
-    if canonical.starts_with(&knowledge) {
-        return Ok(MemoryScope::Knowledge);
-    }
-    let works = works_root(data_dir)?.canonicalize().unwrap_or(works_root(data_dir)?);
-    if canonical.starts_with(&works) {
-        if let Ok(relative) = canonical.strip_prefix(&works) {
-            if let Some(first) = relative.components().next() {
-                let name = first.as_os_str().to_string_lossy().into_owned();
-                let project_path = works.join(&name);
-                if project_path.is_dir() {
-                    return Ok(MemoryScope::Project {
-                        id: project_path.to_string_lossy().into_owned(),
-                        name,
-                    });
-                }
-            }
-        }
-    }
-    let vault = vault_root(data_dir).canonicalize().unwrap_or_else(|_| vault_root(data_dir));
-    if canonical.starts_with(&vault) {
-        return Ok(MemoryScope::Knowledge);
-    }
-    Ok(MemoryScope::Global)
-}
-
-fn read_all_memory_items(data_dir: &Path) -> Result<Vec<MemoryItem>, String> {
-    let mut items = read_memory_items(data_dir)?;
-    for paths in all_scope_paths(data_dir)? {
-        migrate_project_memory_json_to_markdown(&paths)?;
-        items.extend(read_memory_items_at(&paths.memory_tree_path)?);
-    }
-    Ok(items)
-}
-
-fn read_all_memory_candidates(data_dir: &Path) -> Result<Vec<MemoryCandidate>, String> {
-    let mut items = read_memory_candidates(data_dir)?;
-    for paths in all_scope_paths(data_dir)? {
-        items.extend(read_memory_candidates_at(&paths.candidates_path)?);
-    }
-    Ok(items)
-}
-
-fn all_scope_paths(data_dir: &Path) -> Result<Vec<MemoryScopePaths>, String> {
-    let mut paths = vec![
-        MemoryScopePaths::new(data_dir, &MemoryScope::Global)?,
-        MemoryScopePaths::new(data_dir, &MemoryScope::Knowledge)?,
+fn read_memory_tree_files(data_dir: &Path) -> Result<MemoryTreeResponse, String> {
+    ensure_memory_tree_files(data_dir)?;
+    let root = memory_tree_files_root(data_dir);
+    let works = works_root(data_dir)?;
+    let knowledge = knowledge_root(data_dir);
+    let mut roots = vec![
+        MemoryTreeNode {
+            id: "global".to_string(),
+            kind: "layer".to_string(),
+            label: "全局层".to_string(),
+            description: "工作区规则、全局记忆和长期 awareness。".to_string(),
+            path: None,
+            content: None,
+            children: vec![
+                memory_file_node(&root, "global/AGENTS.md", "AGENTS.md", "长期工作区规则")?,
+                memory_file_node(&root, "global/MEMORY.md", "MEMORY.md", "普通聊天全局记忆")?,
+                memory_file_node(&root, "global/AWARENESS.md", "AWARENESS.md", "长期反思和意识记录")?,
+            ],
+        },
+        MemoryTreeNode {
+            id: "partner".to_string(),
+            kind: "layer".to_string(),
+            label: "伙伴层".to_string(),
+            description: "共创伙伴的灵魂、用户画像、关系和伙伴记忆。".to_string(),
+            path: None,
+            content: None,
+            children: vec![
+                memory_file_node(&root, "partner/soul.md", "soul.md", "共创伙伴底层人格")?,
+                memory_file_node(&root, "partner/user.md", "user.md", "用户画像和创作偏好")?,
+                memory_file_node(&root, "partner/relationship.md", "relationship.md", "关系语气覆盖层")?,
+                memory_file_node(&root, "partner/partnermemory.md", "partnermemory.md", "伙伴长期相处记忆")?,
+            ],
+        },
+        MemoryTreeNode {
+            id: "works".to_string(),
+            kind: "layer".to_string(),
+            label: "作品层".to_string(),
+            description: "每个作品项目的规则、作品记忆、续接便签、episode 和 imprint。".to_string(),
+            path: None,
+            content: None,
+            children: work_memory_tree_nodes(&root, &works)?,
+        },
+        MemoryTreeNode {
+            id: "knowledge".to_string(),
+            kind: "layer".to_string(),
+            label: "知识层".to_string(),
+            description: "知识库 cards/*.md，可被多个作品按需引用。".to_string(),
+            path: Some(knowledge.to_string_lossy().into_owned()),
+            content: None,
+            children: knowledge_card_nodes(&knowledge)?,
+        },
     ];
+    if roots[2].children.is_empty() {
+        roots[2].children.push(MemoryTreeNode {
+            id: "works-empty".to_string(),
+            kind: "empty".to_string(),
+            label: "暂无作品项目".to_string(),
+            description: "在作品库创建作品文件夹后，这里会出现对应的作品记忆文件。".to_string(),
+            path: None,
+            content: None,
+            children: Vec::new(),
+        });
+    }
+    Ok(MemoryTreeResponse { roots })
+}
+
+fn save_memory_tree_file(data_dir: &Path, path: &str, content: &str) -> Result<(), String> {
+    ensure_memory_tree_files(data_dir)?;
+    let target = PathBuf::from(path);
+    let canonical_parent = target
+        .parent()
+        .ok_or_else(|| "记忆树文件路径无效。".to_string())?
+        .canonicalize()
+        .map_err(|error| format!("记忆树文件目录不存在：{error}"))?;
+    let memory_root = memory_tree_files_root(data_dir)
+        .canonicalize()
+        .map_err(|error| format!("记忆树目录不存在：{error}"))?;
+    let knowledge = knowledge_root(data_dir)
+        .canonicalize()
+        .map_err(|error| format!("知识库目录不存在：{error}"))?;
+    if !canonical_parent.starts_with(&memory_root) && !canonical_parent.starts_with(&knowledge) {
+        return Err("只能编辑记忆树或知识库里的 Markdown 文件。".to_string());
+    }
+    if target.extension().and_then(|extension| extension.to_str()) != Some("md") {
+        return Err("记忆树只允许编辑 Markdown 文件。".to_string());
+    }
+    fs::write(target, content).map_err(|error| format!("记忆树文件写入失败：{error}"))
+}
+
+fn ensure_memory_tree_files(data_dir: &Path) -> Result<(), String> {
+    let root = memory_tree_files_root(data_dir);
+    for (relative, content) in default_memory_tree_files() {
+        write_memory_tree_file_if_missing(&root.join(relative), content)?;
+    }
     let works = works_root(data_dir)?;
     if works.is_dir() {
-        for entry in fs::read_dir(works).map_err(|error| format!("作品记忆目录读取失败：{error}"))? {
-            let entry = entry.map_err(|error| format!("作品记忆目录读取失败：{error}"))?;
+        for entry in fs::read_dir(&works).map_err(|error| format!("作品记忆树读取失败：{error}"))? {
+            let entry = entry.map_err(|error| format!("作品记忆树读取失败：{error}"))?;
             let path = entry.path();
             if !path.is_dir() {
                 continue;
@@ -684,219 +253,223 @@ fn all_scope_paths(data_dir: &Path) -> Result<Vec<MemoryScopePaths>, String> {
             if name.starts_with('.') {
                 continue;
             }
-            paths.push(MemoryScopePaths::new(data_dir, &MemoryScope::Project {
-                id: path.to_string_lossy().into_owned(),
-                name,
-            })?);
+            ensure_project_memory_files(&root, &path, &name)?;
         }
-    }
-    Ok(paths)
-}
-
-fn find_candidate_scope(data_dir: &Path, candidate_id: &str) -> Result<Option<MemoryScope>, String> {
-    for candidate in read_all_memory_candidates(data_dir)? {
-        if candidate.id == candidate_id {
-            return memory_scope_for_source(data_dir, &candidate.source_path).map(Some);
-        }
-    }
-    Ok(None)
-}
-
-fn remove_candidate_from_all_scopes(data_dir: &Path, candidate_id: &str) -> Result<(), String> {
-    for paths in all_scope_paths(data_dir)? {
-        let mut candidates = read_memory_candidates_at(&paths.candidates_path)?;
-        let original_len = candidates.len();
-        candidates.retain(|candidate| candidate.id != candidate_id);
-        if candidates.len() != original_len {
-            write_memory_candidates_at(&paths.candidates_path, &candidates)?;
-        }
-    }
-    let mut legacy = read_memory_candidates(data_dir)?;
-    let original_len = legacy.len();
-    legacy.retain(|candidate| candidate.id != candidate_id);
-    if legacy.len() != original_len {
-        write_memory_candidates(data_dir, &legacy)?;
     }
     Ok(())
 }
 
-fn write_candidate_back_to_scope(
-    data_dir: &Path,
-    candidate_id: &str,
-    all_candidates: &[MemoryCandidate],
-) -> Result<(), String> {
-    let Some(candidate) = all_candidates.iter().find(|candidate| candidate.id == candidate_id) else {
-        return Ok(());
-    };
-    let scope = memory_scope_for_source(data_dir, &candidate.source_path)?;
-    let paths = MemoryScopePaths::new(data_dir, &scope)?;
-    let mut scoped = read_memory_candidates_at(&paths.candidates_path)?;
-    for item in &mut scoped {
-        if item.id == candidate_id {
-            *item = candidate.clone();
-        }
+fn default_memory_tree_files() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("global/AGENTS.md", "# AGENTS.md\n\n这里记录 Wridian 全局工作区规则、上下文边界和不可违反的长期协作原则。\n"),
+        ("global/MEMORY.md", "# MEMORY.md\n\n这里记录普通聊天的全局长期记忆，不归属于任何单个作品。\n"),
+        ("global/AWARENESS.md", "# AWARENESS.md\n\n这里记录长期反思、稳定变化和跨作品意识线索。\n"),
+        ("partner/soul.md", "# soul.md\n\n这里定义 Wridian 作为共创伙伴的底层人格、判断原则和表达气质。\n"),
+        ("partner/user.md", "# user.md\n\n这里记录用户画像、创作身份、工作节奏、语言偏好和审美偏好。\n"),
+        ("partner/relationship.md", "# relationship.md\n\n这里记录你和 Wridian 的关系校准。用户的关系校准优先于默认人格。\n\n## Names\n\n## Register\n\n## Drift Warnings\n\n## Canonical Anchor\n"),
+        ("partner/partnermemory.md", "# partnermemory.md\n\n这里记录 Wridian 与用户长期共创过程中形成的伙伴记忆。\n"),
+    ]
+}
+
+fn ensure_project_memory_files(root: &Path, project_path: &Path, project_name: &str) -> Result<(), String> {
+    let folder = project_memory_folder(root, project_path, project_name);
+    let today = chrono_like_date();
+    for (name, content) in [
+        ("projectrules.md", format!("# projectrules.md\n\n作品：{}\n\n这里记录题材、风格、禁区、人物边界、世界观硬设定和分集/章节规则。\n", project_name)),
+        ("workmemory.md", format!("# workmemory.md\n\n作品：{}\n\n这里记录只属于这个作品的长期记忆。\n", project_name)),
+        ("caring-note.md", format!("# caring-note.md\n\n作品：{}\n\n这里记录下一轮创作要接住的短期续接便签。\n", project_name)),
+    ] {
+        write_memory_tree_file_if_missing(&folder.join(name), &content)?;
     }
-    write_memory_candidates_at(&paths.candidates_path, &scoped)
-}
-
-fn stable_scope_id(value: &str) -> String {
-    let mut hash: u64 = 1469598103934665603;
-    for byte in value.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(1099511628211);
-    }
-    format!("{hash:x}")
-}
-
-#[derive(Debug, Clone)]
-struct WikiPage {
-    category: String,
-    file_name: String,
-    kind: String,
-    memory_id: String,
-    path: String,
-    source_path: String,
-    summary: String,
-    title: String,
-    wikilinks: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
-struct WikiGraph {
-    edges: Vec<(String, String, String)>,
-    links_in: HashMap<String, Vec<String>>,
-    links_out: HashMap<String, Vec<String>>,
-}
-
-fn build_wiki_pages(memories: &[MemoryItem]) -> Vec<WikiPage> {
-    let title_by_id: HashMap<String, String> = memories
-        .iter()
-        .map(|memory| (memory.id.clone(), wiki_title(memory)))
-        .collect();
-    memories
-        .iter()
-        .map(|memory| {
-            let kind = match memory.category.as_str() {
-                "人物" => "entity",
-                "其他" => "source",
-                _ => "concept",
-            }
-            .to_string();
-            let title = wiki_title(memory);
-            let folder = match kind.as_str() {
-                "entity" => "entities",
-                "concept" => "concepts",
-                _ => "sources",
-            };
-            let wikilinks = memories
-                .iter()
-                .filter(|other| other.id != memory.id)
-                .filter(|other| memory.text.contains(&other.title) || other.text.contains(&memory.title))
-                .filter_map(|other| title_by_id.get(&other.id).cloned())
-                .take(8)
-                .collect::<Vec<_>>();
-            let file_name = format!("{}.md", sanitize_markdown_file_name(&title));
-            WikiPage {
-                category: memory.category.clone(),
-                file_name: file_name.clone(),
-                kind,
-                memory_id: memory.id.clone(),
-                path: format!("{folder}/{file_name}"),
-                source_path: memory.source_path.clone(),
-                summary: memory.text.trim().to_string(),
-                title,
-                wikilinks,
-            }
-        })
-        .collect()
-}
-
-fn build_wiki_graph(pages: &[WikiPage]) -> WikiGraph {
-    let titles: HashSet<String> = pages.iter().map(|page| page.title.clone()).collect();
-    let mut edges = Vec::new();
-    let mut links_in: HashMap<String, Vec<String>> = HashMap::new();
-    let mut links_out: HashMap<String, Vec<String>> = HashMap::new();
-    for page in pages {
-        for target in &page.wikilinks {
-            if !titles.contains(target) {
-                continue;
-            }
-            edges.push((page.title.clone(), target.clone(), "related".to_string()));
-            links_out.entry(page.title.clone()).or_default().push(target.clone());
-            links_in.entry(target.clone()).or_default().push(page.title.clone());
-        }
-    }
-    WikiGraph {
-        edges,
-        links_in,
-        links_out,
-    }
-}
-
-fn render_wiki_page(page: &WikiPage, graph: &WikiGraph) -> String {
-    let related = page
-        .wikilinks
-        .iter()
-        .map(|title| format!("  - \"[[{}]]\"", title))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let backlinks = graph
-        .links_in
-        .get(&page.title)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|title| format!("- [[{}]]", title))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let outgoing = graph
-        .links_out
-        .get(&page.title)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|title| format!("- [[{}]]", title))
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!(
-        "---\ntype: {}\nid: {}\ntitle: {}\ncategory: {}\nsource_path: {}\nstatus: seed\ncreated: {}\nupdated: {}\nrelated:\n{}\nsources:\n  - {}\n---\n\n# {}\n\n## Summary\n\n{}\n\n## Connections\n\n{}\n\n## Backlinks\n\n{}\n\n## Source\n\n- `{}`\n",
-        page.kind,
-        escape_yaml(&page.memory_id),
-        escape_yaml(&page.title),
-        escape_yaml(&page.category),
-        escape_yaml(&page.source_path),
-        iso_timestamp(),
-        iso_timestamp(),
-        if related.is_empty() { "  []".to_string() } else { related },
-        escape_yaml(&page.source_path),
-        page.title,
-        page.summary,
-        if outgoing.is_empty() { "- 暂无。".to_string() } else { outgoing },
-        if backlinks.is_empty() { "- 暂无。".to_string() } else { backlinks },
-        page.source_path
+    write_memory_tree_file_if_missing(
+        &folder.join("episodes").join(format!("{today}.md")),
+        &format!("# Episode - {today}\n\n## Key Moments\n\n## Behavior Signals\n\n## Candidate Memory Updates\n\n## Open Threads\n"),
+    )?;
+    write_memory_tree_file_if_missing(
+        &folder.join("imprints").join(format!("{today}.md")),
+        &format!("# Imprint - {today}\n\n这里记录真正值得留下的共创心迹；沉默是正常态。\n"),
     )
 }
 
-fn render_wiki_cache(pages: &[WikiPage], graph: &WikiGraph) -> Result<String, String> {
-    serde_json::to_string_pretty(&json!({
-        "schemaVersion": 1,
-        "updatedAt": iso_timestamp(),
-        "pages": pages.iter().map(|page| json!({
-            "id": page.memory_id,
-            "kind": page.kind,
-            "title": page.title,
-            "path": page.path,
-            "summary": page.summary,
-            "sourcePath": page.source_path,
-            "tokens": tokenize_for_search(&format!("{} {} {}", page.title, page.category, page.summary)),
-        })).collect::<Vec<_>>(),
-        "edges": graph.edges.iter().map(|(from, to, label)| json!({
-            "from": from,
-            "to": to,
-            "label": label,
-        })).collect::<Vec<_>>()
-    }))
-    .map_err(|error| error.to_string())
+fn write_memory_tree_file_if_missing(path: &Path, content: &str) -> Result<(), String> {
+    if path.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("记忆树目录创建失败：{error}"))?;
+    }
+    fs::write(path, content).map_err(|error| format!("记忆树文件创建失败：{error}"))
+}
+
+fn memory_tree_files_root(data_dir: &Path) -> PathBuf {
+    memory_folder_path(data_dir).join("memory-tree")
+}
+
+fn memory_file_node(root: &Path, relative: &str, label: &str, description: &str) -> Result<MemoryTreeNode, String> {
+    let path = root.join(relative);
+    arbitrary_file_node(&path, label.to_string(), description.to_string())
+}
+
+fn arbitrary_file_node(path: &Path, label: String, description: String) -> Result<MemoryTreeNode, String> {
+    Ok(MemoryTreeNode {
+        id: path.to_string_lossy().into_owned(),
+        kind: "file".to_string(),
+        label,
+        description,
+        path: Some(path.to_string_lossy().into_owned()),
+        content: Some(fs::read_to_string(path).map_err(|error| format!("记忆树文件读取失败：{error}"))?),
+        children: Vec::new(),
+    })
+}
+
+fn work_memory_tree_nodes(root: &Path, works: &Path) -> Result<Vec<MemoryTreeNode>, String> {
+    let mut nodes = Vec::new();
+    if !works.is_dir() {
+        return Ok(nodes);
+    }
+    for entry in fs::read_dir(works).map_err(|error| format!("作品记忆树读取失败：{error}"))? {
+        let entry = entry.map_err(|error| format!("作品记忆树读取失败：{error}"))?;
+        let project_path = entry.path();
+        if !project_path.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        let folder = project_memory_folder(root, &project_path, &name);
+        nodes.push(MemoryTreeNode {
+            id: project_path.to_string_lossy().into_owned(),
+            kind: "project".to_string(),
+            label: name,
+            description: "作品项目".to_string(),
+            path: Some(project_path.to_string_lossy().into_owned()),
+            content: None,
+            children: vec![
+                arbitrary_file_node(&folder.join("projectrules.md"), "projectrules.md".to_string(), "作品规则".to_string())?,
+                arbitrary_file_node(&folder.join("workmemory.md"), "workmemory.md".to_string(), "作品长期记忆".to_string())?,
+                arbitrary_file_node(&folder.join("caring-note.md"), "caring-note.md".to_string(), "短期续接便签".to_string())?,
+                folder_node(&folder.join("episodes"), "episodes".to_string(), "日级内部 digest".to_string())?,
+                folder_node(&folder.join("imprints"), "imprints".to_string(), "用户可见共创心迹".to_string())?,
+            ],
+        });
+    }
+    nodes.sort_by(|left, right| left.label.to_lowercase().cmp(&right.label.to_lowercase()));
+    Ok(nodes)
+}
+
+fn folder_node(path: &Path, label: String, description: String) -> Result<MemoryTreeNode, String> {
+    let mut children = Vec::new();
+    if path.is_dir() {
+        for entry in fs::read_dir(path).map_err(|error| format!("记忆树目录读取失败：{error}"))? {
+            let entry = entry.map_err(|error| format!("记忆树目录读取失败：{error}"))?;
+            let child = entry.path();
+            if child.extension().and_then(|extension| extension.to_str()) == Some("md") {
+                children.push(arbitrary_file_node(
+                    &child,
+                    entry.file_name().to_string_lossy().into_owned(),
+                    "Markdown 记忆文件".to_string(),
+                )?);
+            }
+        }
+    }
+    children.sort_by(|left, right| left.label.cmp(&right.label));
+    Ok(MemoryTreeNode {
+        id: path.to_string_lossy().into_owned(),
+        kind: "folder".to_string(),
+        label,
+        description,
+        path: Some(path.to_string_lossy().into_owned()),
+        content: None,
+        children,
+    })
+}
+
+fn knowledge_card_nodes(knowledge: &Path) -> Result<Vec<MemoryTreeNode>, String> {
+    let mut nodes = Vec::new();
+    collect_markdown_nodes(knowledge, &mut nodes)?;
+    nodes.sort_by(|left, right| left.label.to_lowercase().cmp(&right.label.to_lowercase()));
+    Ok(nodes)
+}
+
+fn collect_markdown_nodes(root: &Path, nodes: &mut Vec<MemoryTreeNode>) -> Result<(), String> {
+    if !root.is_dir() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(root).map_err(|error| format!("知识卡目录读取失败：{error}"))? {
+        let entry = entry.map_err(|error| format!("知识卡目录读取失败：{error}"))?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_markdown_nodes(&path, nodes)?;
+        } else if path.extension().and_then(|extension| extension.to_str()) == Some("md") {
+            nodes.push(arbitrary_file_node(
+                &path,
+                entry.file_name().to_string_lossy().into_owned(),
+                "知识卡".to_string(),
+            )?);
+        }
+    }
+    Ok(())
+}
+
+fn context_files_for_source(data_dir: &Path, source_path: &str) -> Result<Vec<PathBuf>, String> {
+    let root = memory_tree_files_root(data_dir);
+    let mut files = vec![
+        root.join("global").join("AGENTS.md"),
+        root.join("global").join("MEMORY.md"),
+        root.join("global").join("AWARENESS.md"),
+        root.join("partner").join("soul.md"),
+        root.join("partner").join("user.md"),
+        root.join("partner").join("relationship.md"),
+        root.join("partner").join("partnermemory.md"),
+    ];
+    if let Some((project_path, name)) = project_for_source(data_dir, source_path)? {
+        let folder = project_memory_folder(&root, &project_path, &name);
+        files.extend([
+            folder.join("projectrules.md"),
+            folder.join("workmemory.md"),
+            folder.join("caring-note.md"),
+        ]);
+    }
+    Ok(files)
+}
+
+fn project_for_source(data_dir: &Path, source_path: &str) -> Result<Option<(PathBuf, String)>, String> {
+    let trimmed = source_path.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let path = PathBuf::from(trimmed);
+    let canonical = path.canonicalize().unwrap_or(path);
+    let works = works_root(data_dir)?.canonicalize().unwrap_or(works_root(data_dir)?);
+    if !canonical.starts_with(&works) {
+        return Ok(None);
+    }
+    let Ok(relative) = canonical.strip_prefix(&works) else {
+        return Ok(None);
+    };
+    let Some(first) = relative.components().next() else {
+        return Ok(None);
+    };
+    let name = first.as_os_str().to_string_lossy().into_owned();
+    let project_path = works.join(&name);
+    if project_path.is_dir() {
+        Ok(Some((project_path, name)))
+    } else {
+        Ok(None)
+    }
+}
+
+fn project_memory_folder(root: &Path, project_path: &Path, project_name: &str) -> PathBuf {
+    root.join("works").join(format!(
+        "{}-{}",
+        sanitize_markdown_file_name(project_name),
+        stable_scope_id(&project_path.to_string_lossy())
+    ))
+}
+
+fn compact_markdown(text: &str, max_chars: usize) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(max_chars).collect()
 }
 
 fn sanitize_markdown_file_name(value: &str) -> String {
@@ -915,358 +488,31 @@ fn sanitize_markdown_file_name(value: &str) -> String {
     }
 }
 
-fn wiki_title(memory: &MemoryItem) -> String {
-    let signal = compact_text(&memory.text, 34);
-    sanitize_markdown_file_name(&format!("{}-{}-{}", memory.category, memory.title, signal))
-}
-
-fn search_memory_wiki(
-    data_dir: &Path,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<MemoryWikiSearchResult>, String> {
-    let cache_path = memory_wiki_root(data_dir).join(".cache").join("index.json");
-    if !cache_path.exists() {
-        write_memory_wiki(data_dir, &read_all_memory_items(data_dir)?)?;
+fn stable_scope_id(value: &str) -> String {
+    let mut hash: u64 = 1469598103934665603;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(1099511628211);
     }
-    let content = fs::read_to_string(&cache_path).map_err(|error| format!("记忆检索缓存读取失败：{error}"))?;
-    let value: serde_json::Value =
-        serde_json::from_str(&content).map_err(|error| format!("记忆检索缓存格式损坏：{error}"))?;
-    let query_tokens = tokenize_for_search(query);
-    if query_tokens.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut results = Vec::new();
-    if let Some(pages) = value.get("pages").and_then(serde_json::Value::as_array) {
-        for page in pages {
-            let tokens = page
-                .get("tokens")
-                .and_then(serde_json::Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(serde_json::Value::as_str)
-                        .map(ToOwned::to_owned)
-                        .collect::<HashSet<_>>()
-                })
-                .unwrap_or_default();
-            let overlap = query_tokens.iter().filter(|token| tokens.contains(*token)).count();
-            if overlap == 0 {
-                continue;
-            }
-            let score = (overlap as f64) / (query_tokens.len() as f64).sqrt().max(1.0);
-            results.push(MemoryWikiSearchResult {
-                kind: page.get("kind").and_then(serde_json::Value::as_str).unwrap_or("source").to_string(),
-                path: page.get("path").and_then(serde_json::Value::as_str).unwrap_or_default().to_string(),
-                score,
-                snippet: page.get("summary").and_then(serde_json::Value::as_str).unwrap_or_default().chars().take(180).collect(),
-                title: page.get("title").and_then(serde_json::Value::as_str).unwrap_or_default().to_string(),
-            });
-        }
-    }
-    results.sort_by(|left, right| right.score.partial_cmp(&left.score).unwrap_or(std::cmp::Ordering::Equal));
-    results.truncate(limit);
-    Ok(results)
+    format!("{hash:x}")
 }
 
-fn read_memory_graph(data_dir: &Path) -> Result<MemoryGraphResponse, String> {
-    let cache_path = memory_wiki_root(data_dir).join(".cache").join("index.json");
-    if !cache_path.exists() {
-        write_memory_wiki(data_dir, &read_all_memory_items(data_dir)?)?;
-    }
-    let content = fs::read_to_string(&cache_path).map_err(|error| format!("记忆图谱缓存读取失败：{error}"))?;
-    let value: serde_json::Value =
-        serde_json::from_str(&content).map_err(|error| format!("记忆图谱缓存格式损坏：{error}"))?;
-    let mut nodes = Vec::new();
-    if let Some(pages) = value.get("pages").and_then(serde_json::Value::as_array) {
-        for page in pages {
-            nodes.push(MemoryGraphNode {
-                id: page.get("title").and_then(serde_json::Value::as_str).unwrap_or_default().to_string(),
-                kind: page.get("kind").and_then(serde_json::Value::as_str).unwrap_or("source").to_string(),
-                path: page.get("path").and_then(serde_json::Value::as_str).unwrap_or_default().to_string(),
-                title: page.get("title").and_then(serde_json::Value::as_str).unwrap_or_default().to_string(),
-            });
-        }
-    }
-    let mut edges = Vec::new();
-    if let Some(cached_edges) = value.get("edges").and_then(serde_json::Value::as_array) {
-        for edge in cached_edges {
-            edges.push(MemoryGraphEdge {
-                from: edge.get("from").and_then(serde_json::Value::as_str).unwrap_or_default().to_string(),
-                to: edge.get("to").and_then(serde_json::Value::as_str).unwrap_or_default().to_string(),
-                label: edge.get("label").and_then(serde_json::Value::as_str).unwrap_or("related").to_string(),
-            });
-        }
-    }
-    Ok(MemoryGraphResponse { nodes, edges })
+fn chrono_like_date() -> String {
+    let seconds = crate::runtime::iso_timestamp().parse::<i64>().unwrap_or(0);
+    let days = seconds.div_euclid(86_400);
+    civil_date_from_days(days)
 }
 
-fn tokenize_for_search(text: &str) -> HashSet<String> {
-    let lower = text.to_lowercase();
-    let mut tokens = HashSet::new();
-    for token in lower.split(|ch: char| !ch.is_alphanumeric() && ch != '_') {
-        if token.chars().count() > 1 {
-            tokens.insert(token.to_string());
-        }
-    }
-    let cjk: Vec<char> = text.chars().filter(|ch| ('\u{4e00}'..='\u{9fff}').contains(ch)).collect();
-    for window in cjk.windows(2) {
-        tokens.insert(window.iter().collect());
-    }
-    tokens
-}
-
-fn escape_yaml(value: &str) -> String {
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
-}
-
-fn read_memory_candidates(data_dir: &Path) -> Result<Vec<MemoryCandidate>, String> {
-    read_memory_candidates_at(&candidates_path(data_dir))
-}
-
-fn read_memory_candidates_at(path: &Path) -> Result<Vec<MemoryCandidate>, String> {
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let content =
-        fs::read_to_string(&path).map_err(|error| format!("待确认记忆读取失败：{error}"))?;
-    let value: serde_json::Value =
-        serde_json::from_str(&content).map_err(|error| format!("待确认记忆格式损坏：{error}"))?;
-    if let Some(items) = value.get("items") {
-        serde_json::from_value(items.clone())
-            .map_err(|error| format!("待确认记忆条目格式损坏：{error}"))
-    } else {
-        Ok(Vec::new())
-    }
-}
-
-fn write_memory_candidates(data_dir: &Path, candidates: &[MemoryCandidate]) -> Result<(), String> {
-    write_memory_candidates_at(&candidates_path(data_dir), candidates)
-}
-
-fn write_memory_candidates_at(path: &Path, candidates: &[MemoryCandidate]) -> Result<(), String> {
-    let content = serde_json::to_string_pretty(&json!({
-        "schemaVersion": 1,
-        "items": candidates
-    }))
-    .map_err(|error| error.to_string())?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| format!("待确认记忆目录创建失败：{error}"))?;
-    }
-    fs::write(path, content).map_err(|error| format!("待确认记忆写入失败：{error}"))
-}
-
-fn propose_memory_texts(input: &CreateMemoryCandidateInput) -> Vec<String> {
-    let mut texts = Vec::new();
-    let user_intent = compact_text(&input.user_intent, 120);
-    let content_signal = extract_content_signal(&input.content);
-    if !user_intent.is_empty() {
-        texts.push(format!("{}：用户希望处理“{}”。", input.title, user_intent));
-    }
-    if !content_signal.is_empty() {
-        texts.push(format!(
-            "{}：当前正文线索是“{}”。",
-            input.title, content_signal
-        ));
-    }
-    texts
-}
-
-fn extract_content_signal(content: &str) -> String {
-    content
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .last()
-        .map(|line| compact_text(line, 120))
-        .unwrap_or_default()
-}
-
-fn compact_text(text: &str, max_chars: usize) -> String {
-    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    compact.chars().take(max_chars).collect()
-}
-
-#[derive(Debug, Deserialize)]
-struct ModelMemoryCandidateResponse {
-    items: Vec<ModelMemoryCandidate>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ModelMemoryCandidate {
-    category: Option<String>,
-    text: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ExtractedMemoryCandidate {
-    category: String,
-    text: String,
-}
-
-fn default_memory_category() -> String {
-    "其他".to_string()
-}
-
-fn normalize_memory_category(category: &str) -> String {
-    let trimmed = category.trim();
-    if MEMORY_CATEGORIES.contains(&trimmed) {
-        trimmed.to_string()
-    } else {
-        "其他".to_string()
-    }
-}
-
-fn parse_model_memory_candidates(output: &str) -> Result<Vec<ExtractedMemoryCandidate>, String> {
-    let parsed: ModelMemoryCandidateResponse = serde_json::from_str(output.trim())
-        .map_err(|error| format!("模型记忆提取结果不是有效 JSON：{error}"))?;
-    let mut candidates = Vec::new();
-    for item in parsed.items {
-        let text = item.text.unwrap_or_default().trim().to_string();
-        if text.is_empty() {
-            continue;
-        }
-        let category = normalize_memory_category(&item.category.unwrap_or_default());
-        if candidates
-            .iter()
-            .any(|candidate: &ExtractedMemoryCandidate| candidate.text == text)
-        {
-            continue;
-        }
-        candidates.push(ExtractedMemoryCandidate { category, text });
-    }
-    Ok(candidates)
-}
-
-async fn extract_candidates_with_model(
-    settings: &StoredCustomApiSettings,
-    input: &ExtractMemoryCandidatesInput,
-) -> Result<Vec<ExtractedMemoryCandidate>, String> {
-    let url = format!("{}/chat/completions", settings.base_url);
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(60))
-        .build()
-        .map_err(|error| format!("记忆提取客户端创建失败：{error}"))?;
-    let response = client
-        .post(url)
-        .bearer_auth(&settings.api_key)
-        .json(&json!({
-            "model": settings.model,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": memory_extraction_system_prompt()
-                },
-                {
-                    "role": "user",
-                    "content": format!(
-                        "文件标题：{}\n来源路径：{}\n\n正文：\n{}",
-                        input.title,
-                        input.source_path,
-                        compact_text(&input.content, 6000)
-                    )
-                }
-            ],
-            "response_format": { "type": "json_object" },
-            "temperature": 0.2
-        }))
-        .send()
-        .await
-        .map_err(|error| format!("记忆提取请求失败：{error}"))?;
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err(format!(
-            "记忆提取失败：HTTP {} {}",
-            status.as_u16(),
-            body.chars().take(240).collect::<String>()
-        ));
-    }
-    let content = read_chat_completion_content(&body)?;
-    parse_model_memory_candidates(&content)
-}
-
-fn read_chat_completion_content(body: &str) -> Result<String, String> {
-    let value: serde_json::Value =
-        serde_json::from_str(body).map_err(|error| format!("记忆提取响应格式损坏：{error}"))?;
-    value
-        .get("choices")
-        .and_then(serde_json::Value::as_array)
-        .and_then(|choices| choices.first())
-        .and_then(|choice| choice.get("message"))
-        .and_then(|message| message.get("content"))
-        .and_then(serde_json::Value::as_str)
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| "记忆提取响应缺少 choices[0].message.content。".to_string())
-}
-
-fn memory_extraction_system_prompt() -> &'static str {
-    r#"你是 Wridian 的写作记忆提取器。
-请从正文中提取对后续写作有长期价值、需要用户确认后保存的候选记忆。
-只提取稳定事实、人物设定、世界观设定、剧情线索、风格偏好、创作禁区。
-不要总结全文，不要写建议，不要把临时措辞当成记忆。
-输出必须是 JSON 对象，格式：
-{"items":[{"category":"人物|世界观|剧情线|风格|禁区|其他","text":"一条可独立理解的中文候选记忆"}]}
-最多输出 6 条；没有可用记忆时输出 {"items":[]}。"#
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_model_memory_candidates_keeps_valid_categories_and_texts() {
-        let output = r#"{
-            "items": [
-                { "category": "人物", "text": "女主进入旧楼不是冲动，而是为了确认父亲线索。" },
-                { "category": "未知", "text": "雾城旧楼区十年前发生过事故。" },
-                { "category": "禁区", "text": "不要提前暴露凶手。" },
-                { "category": "剧情线", "text": "" }
-            ]
-        }"#;
-
-        let candidates = parse_model_memory_candidates(output).expect("model output parses");
-
-        assert_eq!(candidates.len(), 3);
-        assert_eq!(candidates[0].category, "人物");
-        assert_eq!(candidates[1].category, "其他");
-        assert_eq!(candidates[2].text, "不要提前暴露凶手。");
-    }
-
-    #[test]
-    fn read_chat_completion_content_reads_first_choice_message() {
-        let body = r#"{
-            "choices": [
-                { "message": { "content": "{\"items\":[]}" } }
-            ]
-        }"#;
-
-        let content = read_chat_completion_content(body).expect("content exists");
-
-        assert_eq!(content, r#"{"items":[]}"#);
-    }
-
-    #[test]
-    #[ignore = "requires WRIDIAN_TEST_API_BASE_URL, WRIDIAN_TEST_API_KEY, WRIDIAN_TEST_MODEL"]
-    fn extract_candidates_with_configured_provider_returns_items() {
-        let settings = StoredCustomApiSettings {
-            base_url: std::env::var("WRIDIAN_TEST_API_BASE_URL")
-                .expect("WRIDIAN_TEST_API_BASE_URL is required"),
-            api_key: std::env::var("WRIDIAN_TEST_API_KEY")
-                .expect("WRIDIAN_TEST_API_KEY is required"),
-            model: std::env::var("WRIDIAN_TEST_MODEL").expect("WRIDIAN_TEST_MODEL is required"),
-        };
-        let input = ExtractMemoryCandidatesInput {
-            source_path: "test://chapter.md".to_string(),
-            title: "chapter.md".to_string(),
-            content: "女主进入旧楼不是冲动，而是为了确认父亲留下的线索。雨夜场景不能提前暴露凶手。"
-                .to_string(),
-        };
-
-        let candidates =
-            tauri::async_runtime::block_on(extract_candidates_with_model(&settings, &input))
-                .expect("provider returns parseable candidates");
-
-        assert!(!candidates.is_empty());
-    }
+fn civil_date_from_days(days_since_epoch: i64) -> String {
+    let z = days_since_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 }.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096).div_euclid(365);
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2).div_euclid(153);
+    let day = doy - (153 * mp + 2).div_euclid(5) + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    let year = y + if month <= 2 { 1 } else { 0 };
+    format!("{year:04}-{month:02}-{day:02}")
 }

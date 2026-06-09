@@ -12,7 +12,6 @@ export function ChatPanel({
   activeModelLabel,
   error,
   messages,
-  onAddToMemory,
   onAddRelevantNote,
   onCopy,
   onEditUserMessage,
@@ -36,7 +35,6 @@ export function ChatPanel({
   activeModelLabel: string;
   error: string;
   messages: ChatMessage[];
-  onAddToMemory: (text: string) => void;
   onAddRelevantNote: (note: RelevantNote) => void;
   onCopy: (text: string) => void;
   onEditUserMessage: (message: ChatMessage) => void;
@@ -82,7 +80,6 @@ export function ChatPanel({
               <ChatMessageView
                 key={message.id}
                 message={message}
-                onAddToMemory={onAddToMemory}
                 onCopy={onCopy}
                 onEditUserMessage={onEditUserMessage}
                 onRetry={onRetry}
@@ -150,14 +147,12 @@ export function ChatPanel({
 
 function ChatMessageView({
   message,
-  onAddToMemory,
   onCopy,
   onEditUserMessage,
   onRetry,
   userForRetry,
 }: {
   message: ChatMessage;
-  onAddToMemory: (text: string) => void;
   onCopy: (text: string) => void;
   onEditUserMessage: (message: ChatMessage) => void;
   onRetry: (message: ChatMessage) => void;
@@ -186,9 +181,6 @@ function ChatMessageView({
             <button type="button" onClick={() => onCopy(message.text)} title="复制">
               复制
             </button>
-            <button type="button" onClick={() => onAddToMemory(message.text)} title="添加到记忆">
-              记忆
-            </button>
           </>
         ) : (
           <>
@@ -197,9 +189,6 @@ function ChatMessageView({
             </button>
             <button type="button" onClick={() => onCopy(message.text)} title="复制">
               复制
-            </button>
-            <button type="button" onClick={() => onAddToMemory(message.text)} title="添加到记忆">
-              记忆
             </button>
           </>
         )}

@@ -146,7 +146,7 @@ fn build_cocreation_prompt(
     active_project_context: &str,
 ) -> String {
     let memories_block = if memories.is_empty() {
-        "暂无已确认记忆。".to_string()
+        "暂无记忆树上下文。".to_string()
     } else {
         memories
             .iter()
@@ -170,7 +170,7 @@ fn build_cocreation_prompt(
     };
 
     format!(
-        "稿件类型：{}\n当前文件：{}\n来源路径：{}\n\nProject Mode：\n{}\n\n当前现场：\n{}\n\n已确认相关记忆：\n{}\n\n用户选中的片段：\n{}\n\n稿件内容：\n{}\n\n用户这次想要：\n{}",
+        "稿件类型：{}\n当前文件：{}\n来源路径：{}\n\nProject Mode：\n{}\n\n当前现场：\n{}\n\n记忆树上下文：\n{}\n\n用户选中的片段：\n{}\n\n稿件内容：\n{}\n\n用户这次想要：\n{}",
         draft_kind,
         input.title,
         input.source_path,
@@ -268,7 +268,7 @@ mod tests {
         );
 
         assert!(prompt.contains("稿件内容"));
-        assert!(prompt.contains("已确认相关记忆"));
+        assert!(prompt.contains("记忆树上下文"));
         assert!(prompt.contains("强化她进门前的动机"));
     }
 
