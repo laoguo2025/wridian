@@ -91,17 +91,20 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 ## 记忆存储
 
 - 记忆文件夹：Wridian 数据目录下的 `.wridian/memory-tree/`。
-- 记忆树是用户可见、可编辑的 Markdown 文件树，分为全局层、伙伴层、作品层和知识层。
-- 全局层：`.wridian/memory-tree/global/AGENTS.md`、`MEMORY.md`、`AWARENESS.md`。
-- 伙伴层：`.wridian/memory-tree/partner/soul.md`、`user.md`、`relationship.md`、`partnermemory.md`。
-- 作品层：每个作品库顶层作品文件夹会派生一组记忆文件：`projectrules.md`、`workmemory.md`、`caring-note.md`、`episodes/YYYY-MM-DD.md`、`imprints/YYYY-MM-DD.md`。
-- 知识层：知识库里的 Markdown 文件作为 `cards/*.md` 进入记忆树，可被多个作品按需引用。
-- 记忆作用域：普通聊天使用全局层和伙伴层；作品项目使用全局层、伙伴层和对应作品层；知识卡只在显式选择或召回时进入上下文，不默认混进作品记忆。
+- 记忆树是用户可见、可编辑的 Markdown 生命树，主结构为根文件、九个分支文件和 leaves 叶子目录。
+- 根文件：`.wridian/memory-tree/SOUL.md`、`AGENTS.md`、`MEMORY.md`。
+  - `SOUL.md` 是图腾，记录 Wridian 的底层灵魂、价值观和共创人格。
+  - `AGENTS.md` 是树根，记录 Wridian 如何行动、如何使用记忆树、哪些事必须问用户、哪些事不能自作主张。
+  - `MEMORY.md` 是主干，记录索引、上下文编译策略、分支说明和最近活跃叶子。
+- 分支文件：`.wridian/memory-tree/branches/` 下固定有 `SENSE.md`、`USER.md`、`RELATIONSHIP.md`、`JOURNEY.md`、`DRAMA.md`、`NOVEL.md`、`KNOWLEDGE.md`、`SKILL.md`、`AWARENESS.md`。分支文件只写机制、准则和如何长叶子，不写具体事件。
+- 叶子目录：`.wridian/memory-tree/leaves/` 下按 `sense/user/relationship/journey/drama/novel/knowledge/skill/awareness` 分类。叶子文件才写具体生命记录、作品记忆、知识卡、技能和反思。
+- 作品项目会自动在 `leaves/drama/` 或 `leaves/novel/` 下生成对应项目叶子文件；知识库 Markdown 会迁移/镜像为 `leaves/knowledge/cards/` 下的叶子。
+- 记忆弹窗内部使用仿真树画布展示根、枝、叶；工作界面左侧作品库/知识库文件树不参与这套视觉变化。
+- 自动长叶子只生成候选叶预览；用户确认“种下”后才写入 `leaves/<branch>/`。模型不得直接写入长期记忆。
+- 记忆作用域：普通聊天读取根文件和通用分支/叶子；作品项目额外读取命中的 drama/novel 分支机制和对应作品叶子；知识卡只在显式选择或召回时进入上下文，不默认混进作品记忆。
 - 聊天记录：`.wridian/chat/*.md`，每个运行会话保存为 Markdown，包含 frontmatter、来源文件、用户/助手消息和上下文 pill。
-- 旧的“提取记忆、图谱检索、待用户确认”不再作为用户界面路径；记忆树里的 Markdown 文件是主编辑面。
+- 旧的“提取记忆、图谱检索、待用户确认”不再作为用户界面路径；记忆树里的 Markdown 文件是主编辑面，候选叶只是写入前预览。
 - 后续上下文编译应参考 OpenHuman/holaOS/Hermes/OpenClaw：按槽位、作用域和预算加载记忆树文件，不把所有文件每轮硬塞进 prompt。
-- 记忆条目支持写作分类：人物、世界观、剧情线、风格、禁区、其他。
-- 模型不得直接写入记忆树；记忆树由用户在 Markdown 文件里直接编辑。
 
 ## 最小 MVP 路线
 

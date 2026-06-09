@@ -89,6 +89,17 @@ type MemoryTreeState = {
   roots: MemoryTreeNode[];
 };
 
+type MemoryLeafCandidate = {
+  id: string;
+  branch: string;
+  title: string;
+  summary: string;
+  reason: string;
+  status: string;
+  sourcePath: string;
+  targetPath: string;
+};
+
 type FileContextMenu = {
   node: WorkFileNode;
   x: number;
@@ -123,6 +134,7 @@ function App() {
   const [saveError, setSaveError] = useState("");
   const [memoryError, setMemoryError] = useState("");
   const [memoryTreeState, setMemoryTreeState] = useState<MemoryTreeState>({ roots: [] });
+  const [memoryLeafCandidate, setMemoryLeafCandidate] = useState<MemoryLeafCandidate | null>(null);
   const [savingMemoryTree, setSavingMemoryTree] = useState(false);
   const [fileMenu, setFileMenu] = useState<FileContextMenu | null>(null);
   const [libraryTab, setLibraryTab] = useState<"works" | "knowledge">("works");
@@ -516,6 +528,46 @@ function App() {
     }
   };
 
+  const proposeMemoryLeaf = async () => {
+    try {
+      const response = await invoke<MemoryLeafCandidate | null>("wridian_propose_memory_leaf", {
+        input: {
+          content: editorContent,
+          draftKind,
+          sourcePath: selectedPath || null,
+          title: editorTitle || baseName(selectedPath) || null,
+          userIntent: prompt || null,
+        },
+      });
+      setMemoryLeafCandidate(response);
+      setMemoryError(response ? "" : "当前现场还不足以长出候选叶。");
+    } catch (error) {
+      setMemoryError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const plantMemoryLeaf = async (candidate: MemoryLeafCandidate) => {
+    setSavingMemoryTree(true);
+    try {
+      const response = await invoke<MemoryTreeState>("wridian_plant_memory_leaf", {
+        input: {
+          branch: candidate.branch,
+          reason: candidate.reason,
+          sourcePath: candidate.sourcePath,
+          summary: candidate.summary,
+          title: candidate.title,
+        },
+      });
+      setMemoryTreeState(response);
+      setMemoryLeafCandidate(null);
+      setMemoryError("");
+    } catch (error) {
+      setMemoryError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavingMemoryTree(false);
+    }
+  };
+
   const openMemoryFolder = async () => {
     if (!workspace?.runtimePath) {
       setMemoryError("请在 Wridian 桌面端打开记忆文件夹。");
@@ -682,9 +734,13 @@ function App() {
         <MemoryDrawer
           currentTitle={editorTitle}
           memoryError={memoryError}
+          candidate={memoryLeafCandidate}
           memoryTree={memoryTreeState}
           onClose={() => setMemoryOpen(false)}
           onOpenMemoryFolder={openMemoryFolder}
+          onPlantCandidate={plantMemoryLeaf}
+          onProposeCandidate={proposeMemoryLeaf}
+          onRejectCandidate={() => setMemoryLeafCandidate(null)}
           onSaveFile={saveMemoryTreeFile}
           saving={savingMemoryTree}
           workspace={workspace}
@@ -1037,20 +1093,28 @@ function buildDraftSuggestionChunks(content: string, edits: DraftEdit[]): DraftS
 }
 
 function MemoryDrawer({
+  candidate,
   currentTitle,
   memoryError,
   memoryTree,
   onClose,
   onOpenMemoryFolder,
+  onPlantCandidate,
+  onProposeCandidate,
+  onRejectCandidate,
   onSaveFile,
   saving,
   workspace,
 }: {
+  candidate: MemoryLeafCandidate | null;
   currentTitle: string;
   memoryError: string;
   memoryTree: MemoryTreeState;
   onClose: () => void;
   onOpenMemoryFolder: () => void;
+  onPlantCandidate: (candidate: MemoryLeafCandidate) => void;
+  onProposeCandidate: () => void;
+  onRejectCandidate: () => void;
   onSaveFile: (path: string, content: string) => void;
   saving: boolean;
   workspace: WorkspaceInfo | null;
@@ -1084,6 +1148,9 @@ function MemoryDrawer({
             <div className="drawer-subtitle">当前文件：{currentTitle}</div>
           </div>
           <div className="drawer-header-actions">
+            <button type="button" className="small-action" onClick={onProposeCandidate}>
+              长一片叶子
+            </button>
             <button type="button" className="small-action" onClick={onOpenMemoryFolder}>
               文件夹
             </button>
@@ -1095,20 +1162,50 @@ function MemoryDrawer({
 
         {memoryError ? <div className="rail-error">{memoryError}</div> : null}
 
-        <div className="memory-tree-layout">
-          <div className="memory-tree-list" aria-label="记忆树文件">
+        <div className="memory-forest-shell" aria-label="记忆树仿真视图">
+          <div className="memory-forest" aria-label="记忆树">
+            <div className="memory-forest-ground" aria-hidden="true" />
             {memoryTree.roots.map((node) => (
-              <MemoryTreeNodeView
+              <MemoryTreeSimulationNode
                 key={node.id}
                 node={node}
                 selectedPath={selectedNode?.path ?? ""}
                 onSelect={(node) => node.path && node.content != null ? setSelectedPath(node.path) : undefined}
               />
             ))}
-          </div>
-          <section className="memory-tree-editor">
-            {selectedNode?.path ? (
-              <>
+            {candidate ? (
+              <section className="memory-node-detail candidate-panel">
+                <div className="candidate-leaf-orbit" aria-hidden="true">
+                  <span />
+                </div>
+                <div className="memory-tree-editor-header">
+                  <div>
+                    <h2>{candidate.title}</h2>
+                    <p>候选叶子 / {branchLabel(candidate.branch)} / 等待确认</p>
+                  </div>
+                  <div className="candidate-actions">
+                    <button type="button" onClick={() => onPlantCandidate(candidate)} disabled={saving}>
+                      {saving ? "种下中" : "确认种下"}
+                    </button>
+                    <button type="button" className="secondary" onClick={onRejectCandidate} disabled={saving}>
+                      放弃
+                    </button>
+                  </div>
+                </div>
+                <div className="candidate-body">
+                  <p>{candidate.summary}</p>
+                  <div>
+                    <strong>为什么长出来</strong>
+                    <p>{candidate.reason}</p>
+                  </div>
+                  <div>
+                    <strong>将写入</strong>
+                    <p>{candidate.targetPath}</p>
+                  </div>
+                </div>
+              </section>
+            ) : selectedNode?.path ? (
+              <section className="memory-node-detail">
                 <div className="memory-tree-editor-header">
                   <div>
                     <h2>{selectedNode.label}</h2>
@@ -1125,11 +1222,11 @@ function MemoryDrawer({
                   spellCheck={false}
                   aria-label={`编辑 ${selectedNode.label}`}
                 />
-              </>
+              </section>
             ) : (
-              <div className="memory-tree-empty">选择左侧 Markdown 文件。</div>
+              <div className="memory-tree-empty">点选一片叶子或一段根枝。</div>
             )}
-          </section>
+          </div>
         </div>
 
         <footer className="drawer-footer">
@@ -1140,7 +1237,32 @@ function MemoryDrawer({
   );
 }
 
-function MemoryTreeNodeView({
+function branchLabel(branch: string) {
+  switch (branch) {
+    case "sense":
+      return "自我意识";
+    case "user":
+      return "用户画像";
+    case "relationship":
+      return "关系";
+    case "journey":
+      return "共创里程碑";
+    case "drama":
+      return "剧本";
+    case "novel":
+      return "小说";
+    case "knowledge":
+      return "知识";
+    case "skill":
+      return "技能";
+    case "awareness":
+      return "反思";
+    default:
+      return "记忆";
+  }
+}
+
+function MemoryTreeSimulationNode({
   node,
   onSelect,
   selectedPath,
@@ -1153,10 +1275,10 @@ function MemoryTreeNodeView({
   const selectable = Boolean(node.path && node.content != null);
   const active = selectable && node.path === selectedPath;
   return (
-    <div className="memory-tree-node">
+    <div className={`memory-sim-node ${node.kind}`}>
       <button
         type="button"
-        className={`memory-tree-row ${node.kind} ${active ? "active" : ""}`}
+        className={`memory-sim-node-button ${node.kind} ${active ? "active" : ""}`}
         onClick={() => {
           if (selectable) {
             onSelect(node);
@@ -1165,13 +1287,14 @@ function MemoryTreeNodeView({
           }
         }}
       >
-        <span>{node.children.length ? (expanded ? "▾" : "▸") : " "}</span>
+        <span className="memory-sim-symbol">{node.children.length ? (expanded ? "●" : "○") : "◦"}</span>
         <strong>{node.label}</strong>
+        <small>{node.description}</small>
       </button>
       {expanded && node.children.length ? (
-        <div className="memory-tree-children">
+        <div className="memory-sim-children">
           {node.children.map((child) => (
-            <MemoryTreeNodeView key={child.id} node={child} onSelect={onSelect} selectedPath={selectedPath} />
+            <MemoryTreeSimulationNode key={child.id} node={child} onSelect={onSelect} selectedPath={selectedPath} />
           ))}
         </div>
       ) : null}

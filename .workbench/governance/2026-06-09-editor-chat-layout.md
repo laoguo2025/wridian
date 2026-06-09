@@ -46,6 +46,9 @@
   - 追加收敛：左侧文件区增加“作品库 / 知识库”标签。作品库管理作品文件夹和稿件；知识库管理知识卡文件。
   - 追加收敛：记忆按作用域保存。普通聊天使用全局记忆；作品文件夹拥有独立作品记忆；知识库拥有独立知识卡记忆，`@` 菜单只显示当前加载作用域的知识卡。作品项目的 confirmed memory 改为 `memory.md`，方便用户直接编辑。
   - 追加收敛：用户明确要求废弃“提取记忆、图谱检索、待用户确认”这套旧界面路径，改为 OpenHuman 对标的结构化“记忆树”。顶部入口改为“记忆树”；抽屉只展示和编辑 Markdown 文件树。新主路径为 `.wridian/memory-tree/`：全局层 `AGENTS.md/MEMORY.md/AWARENESS.md`，伙伴层 `soul.md/user.md/relationship.md/partnermemory.md`，作品层 `projectrules.md/workmemory.md/caring-note.md/episodes/imprints`，知识层直接读取知识库 Markdown cards。
+  - 追加收敛：记忆树主口径改为 `SOUL.md`、`AGENTS.md`、`MEMORY.md`、`branches/` 九分支和 `leaves/` 九叶类。分支文件只写生长机制，叶子文件才写具体记录；旧 global/partner/works 结构不删除，作为兼容迁移来源。
+  - 追加收敛：记忆弹窗内部改为单一仿真树画布，不再使用“左侧列表 + 右侧编辑器”布局；工作界面左侧作品库/知识库文件树不纳入本轮视觉改动。
+  - 追加收敛：新增候选叶机制。Wridian 可以根据当前稿件和输入生成候选叶预览，但只有用户点击确认种下才会写入 `leaves/<branch>/` 的 Markdown 文件。
 - 根页面和工作区固定视口高度，隐藏窗口级滚动；正文编辑器、文件树、右侧聊天消息区使用内部滚动。
 - 增加主题化滚动条样式。
 

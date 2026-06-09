@@ -33,6 +33,8 @@ pub fn run() {
             memory::wridian_get_memory_state,
             memory::wridian_get_memory_state_for_source,
             memory::wridian_get_memory_tree,
+            memory::wridian_plant_memory_leaf,
+            memory::wridian_propose_memory_leaf,
             memory::wridian_save_memory_tree_file,
         ])
         .run(tauri::generate_context!())
