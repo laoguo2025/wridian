@@ -210,10 +210,29 @@ function App() {
   });
   const workspaceRef = useRef<HTMLDivElement | null>(null);
   const draftEditorRef = useRef<HTMLDivElement | null>(null);
+  const fontSizeControlRef = useRef<HTMLDivElement | null>(null);
   const draftSelectionRef = useRef<TextSelection>({ start: editorContent.length, end: editorContent.length });
   const appendDraftEdits = useCallback((edits: DraftEdit[]) => {
     setPendingEdits((current) => [...current, ...edits]);
   }, []);
+
+  useEffect(() => {
+    if (!fontSizeMenuOpen) {
+      return;
+    }
+
+    const closeFontSizeMenuOnOutsidePointerDown = (event: PointerEvent) => {
+      const control = fontSizeControlRef.current;
+      if (!control || !(event.target instanceof Node) || !control.contains(event.target)) {
+        setFontSizeMenuOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", closeFontSizeMenuOnOutsidePointerDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", closeFontSizeMenuOnOutsidePointerDown, true);
+    };
+  }, [fontSizeMenuOpen]);
   const chatManager = useChatManager({ onDraftEdits: appendDraftEdits });
   const draftKind = useMemo(() => detectDraftKind(selectedPath, editorContent), [editorContent, selectedPath]);
 
@@ -757,7 +776,7 @@ function App() {
           <button type="button" title="模型配置" aria-label="模型配置" onClick={() => setSettingsOpen(true)}>
             <ModelConfigIcon />
           </button>
-          <div className="font-size-control">
+          <div className="font-size-control" ref={fontSizeControlRef}>
             <button
               type="button"
               title="字体大小"
