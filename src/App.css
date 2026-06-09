@@ -1279,6 +1279,7 @@ button {
 
 .memory-forest {
   position: relative;
+  --memory-tree-offset-y: 24px;
   width: 100%;
   height: 100%;
   min-width: 0;
@@ -1305,7 +1306,7 @@ button {
 .memory-tree-base {
   position: absolute;
   left: 50%;
-  top: 28px;
+  top: calc(28px + var(--memory-tree-offset-y));
   z-index: 0;
   width: 860px;
   height: 588px;
@@ -1328,7 +1329,7 @@ button {
 .memory-sense-card {
   position: absolute;
   left: calc(50% + 215px);
-  top: 424px;
+  top: calc(424px + var(--memory-tree-offset-y));
   display: grid;
   justify-items: center;
   gap: 1px;
@@ -1363,15 +1364,15 @@ button {
 }
 
 .memory-trunk-card.totem {
-  top: 180px;
+  top: calc(180px + var(--memory-tree-offset-y));
 }
 
 .memory-trunk-card.root {
-  top: 509px;
+  top: calc(509px + var(--memory-tree-offset-y));
 }
 
 .memory-trunk-card.trunk {
-  top: 346px;
+  top: calc(346px + var(--memory-tree-offset-y));
 }
 
 .memory-trunk-card strong,
@@ -1427,42 +1428,42 @@ button {
 
 .memory-branch-arm.branch-user {
   left: calc(50% - 276px);
-  top: 424px;
+  top: calc(424px + var(--memory-tree-offset-y));
 }
 
 .memory-branch-arm.branch-relationship {
   left: calc(50% - 310px);
-  top: 337px;
+  top: calc(337px + var(--memory-tree-offset-y));
 }
 
 .memory-branch-arm.branch-journey {
   left: calc(50% + 194px);
-  top: 337px;
+  top: calc(337px + var(--memory-tree-offset-y));
 }
 
 .memory-branch-arm.branch-drama {
   left: calc(50% - 300px);
-  top: 245px;
+  top: calc(245px + var(--memory-tree-offset-y));
 }
 
 .memory-branch-arm.branch-novel {
   left: calc(50% + 184px);
-  top: 245px;
+  top: calc(245px + var(--memory-tree-offset-y));
 }
 
 .memory-branch-arm.branch-knowledge {
   left: calc(50% - 253px);
-  top: 164px;
+  top: calc(164px + var(--memory-tree-offset-y));
 }
 
 .memory-branch-arm.branch-skill {
   left: calc(50% + 135px);
-  top: 164px;
+  top: calc(164px + var(--memory-tree-offset-y));
 }
 
 .memory-branch-arm.branch-awareness {
   left: calc(50% - 58px);
-  top: 33px;
+  top: calc(33px + var(--memory-tree-offset-y));
 }
 
 .memory-branch-card {
