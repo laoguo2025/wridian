@@ -137,13 +137,14 @@ export function ChatPanel({
           placeholder="与 Wridian 对话"
           suggestions={promptSuggestions}
         />
-        <button type="submit" className="prompt-send" aria-label={pending ? "停止" : "发送"} disabled={pending || !prompt.trim()}>
-          {pending ? "..." : "↵"}
-        </button>
-        <div className="prompt-controls" aria-label="输入控制">
-          <span className="prompt-model" title={activeProjectName ? `Project: ${activeProjectName}` : "当前模型"}>
-            {activeProjectName || activeModelLabel || "未配置模型"}
-          </span>
+        <div className="prompt-footer">
+          <select className="prompt-model-select" value={activeModelLabel || "未配置模型"} onChange={() => undefined} aria-label="模型选择">
+            <option value={activeModelLabel || "未配置模型"}>{activeModelLabel || "未配置模型"}</option>
+            {activeProjectName ? <option value={activeProjectName}>{activeProjectName}</option> : null}
+          </select>
+          <button type="submit" className="prompt-send" aria-label={pending ? "停止" : "发送"} disabled={pending || !prompt.trim()}>
+            {pending ? "..." : "发送"}
+          </button>
         </div>
       </form>
     </aside>
