@@ -28,6 +28,7 @@ import {
   createDraftReplaceGuardReport,
   describeDraftReplaceSkip,
 } from "./editor/draftReplaceGuard";
+import { libraryFolderPath, libraryFolderTooltip } from "./libraryToolbar";
 import "./App.css";
 
 type Theme = "light" | "dark";
@@ -287,17 +288,16 @@ function App() {
     }
   };
 
-  const openWorkFolder = async () => {
+  const openCurrentLibraryFolder = async () => {
     setWorkspaceError("");
+    const path = libraryFolderPath(libraryTab, workspace);
+    if (!path) return;
     try {
-      const { open } = await import("@tauri-apps/plugin-dialog");
-      const selected = await open({ directory: true, multiple: false });
-      if (typeof selected !== "string") return;
-      const response = await invoke<WorkspaceInfo>("wridian_set_work_root", { input: { path: selected } });
-      setWorkspace(response);
+      const { openPath } = await import("@tauri-apps/plugin-opener");
+      await openPath(path);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setWorkspaceError(message.includes("not allowed") || message.includes("Tauri") ? "请在 Wridian 桌面端选择本地文件夹。" : message);
+      setWorkspaceError(message.includes("not allowed") || message.includes("Tauri") ? "请在 Wridian 桌面端打开本地文件夹。" : message);
     }
   };
 
@@ -622,7 +622,12 @@ function App() {
               <button type="button" title="新建文件夹" aria-label="新建文件夹" onClick={() => void createFolder()}>
                 <FolderPlusIcon />
               </button>
-              <button type="button" title="作品文件夹" aria-label="作品文件夹" onClick={() => void openWorkFolder()} disabled={libraryTab === "knowledge"}>
+              <button
+                type="button"
+                title={libraryFolderTooltip(libraryTab)}
+                aria-label={libraryFolderTooltip(libraryTab)}
+                onClick={() => void openCurrentLibraryFolder()}
+              >
                 <WorkFolderIcon />
               </button>
             </div>
