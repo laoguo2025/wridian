@@ -1049,6 +1049,7 @@ button {
 
 .memory-tree-drawer {
   width: min(880px, calc(100vw - 24px));
+  gap: 8px;
 }
 
 .settings-dialog {
@@ -1279,7 +1280,7 @@ button {
   min-width: 820px;
   min-height: 100%;
   overflow: auto;
-  padding: 18px 22px 26px;
+  padding: 8px 22px 10px;
   background: linear-gradient(180deg, color-mix(in srgb, var(--bg-panel), var(--bg-selected) 18%), var(--bg-panel));
 }
 
@@ -1287,7 +1288,7 @@ button {
   content: "";
   position: absolute;
   left: 50%;
-  bottom: 28px;
+  bottom: 24px;
   width: 250px;
   height: 24px;
   border-radius: 50%;
@@ -1300,7 +1301,7 @@ button {
 .memory-tree-base {
   position: absolute;
   left: 50%;
-  top: 18px;
+  top: 64px;
   z-index: 0;
   width: 760px;
   height: 520px;
@@ -1313,7 +1314,7 @@ button {
 .memory-tree-roots {
   position: absolute;
   left: 50%;
-  top: 38px;
+  top: 84px;
   z-index: 2;
   display: grid;
   justify-items: center;
@@ -1400,7 +1401,7 @@ button {
 }
 
 .memory-branch-arm {
-  --branch-y: calc(118px + var(--branch-index) * 90px);
+  --branch-y: calc(164px + var(--branch-index) * 90px);
   position: absolute;
   top: var(--branch-y);
   z-index: 2;

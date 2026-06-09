@@ -552,24 +552,6 @@ function App() {
     }
   };
 
-  const proposeMemoryLeaf = async () => {
-    try {
-      const response = await invoke<MemoryLeafCandidate | null>("wridian_propose_memory_leaf", {
-        input: {
-          content: editorContent,
-          draftKind,
-          sourcePath: selectedPath || null,
-          title: editorTitle || baseName(selectedPath) || null,
-          userIntent: prompt || null,
-        },
-      });
-      setMemoryLeafCandidate(response);
-      setMemoryError(response ? "" : "当前现场还不足以长出候选叶。");
-    } catch (error) {
-      setMemoryError(error instanceof Error ? error.message : String(error));
-    }
-  };
-
   const plantMemoryLeaf = async (candidate: MemoryLeafCandidate) => {
     setSavingMemoryTree(true);
     try {
@@ -871,18 +853,15 @@ function App() {
 
       {memoryOpen ? (
         <MemoryDrawer
-          currentTitle={editorTitle}
           memoryError={memoryError}
           candidate={memoryLeafCandidate}
           memoryTree={memoryTreeState}
           onClose={() => setMemoryOpen(false)}
           onOpenMemoryFolder={openMemoryFolder}
           onPlantCandidate={plantMemoryLeaf}
-          onProposeCandidate={proposeMemoryLeaf}
           onRejectCandidate={() => setMemoryLeafCandidate(null)}
           onSaveFile={saveMemoryTreeFile}
           saving={savingMemoryTree}
-          workspace={workspace}
         />
       ) : null}
       {settingsOpen ? <ModelSettingsDialog onClose={() => setSettingsOpen(false)} /> : null}
@@ -1294,30 +1273,24 @@ function buildDraftSuggestionChunks(content: string, edits: DraftEdit[]): DraftS
 
 function MemoryDrawer({
   candidate,
-  currentTitle,
   memoryError,
   memoryTree,
   onClose,
   onOpenMemoryFolder,
   onPlantCandidate,
-  onProposeCandidate,
   onRejectCandidate,
   onSaveFile,
   saving,
-  workspace,
 }: {
   candidate: MemoryLeafCandidate | null;
-  currentTitle: string;
   memoryError: string;
   memoryTree: MemoryTreeState;
   onClose: () => void;
   onOpenMemoryFolder: () => void;
   onPlantCandidate: (candidate: MemoryLeafCandidate) => void;
-  onProposeCandidate: () => void;
   onRejectCandidate: () => void;
   onSaveFile: (path: string, content: string) => void;
   saving: boolean;
-  workspace: WorkspaceInfo | null;
 }) {
   const viewModel = useMemo(() => buildMemoryTreeViewModel(memoryTree.roots), [memoryTree.roots]);
   const [selectedPath, setSelectedPath] = useState("");
@@ -1339,12 +1312,8 @@ function MemoryDrawer({
         <div className="drawer-header">
           <div>
             <div className="drawer-title">记忆树</div>
-            <div className="drawer-subtitle">当前文件：{currentTitle}</div>
           </div>
           <div className="drawer-header-actions">
-            <button type="button" className="small-action" onClick={onProposeCandidate}>
-              长一片叶子
-            </button>
             <button type="button" className="small-action" onClick={onOpenMemoryFolder}>
               文件夹
             </button>
@@ -1441,15 +1410,9 @@ function MemoryDrawer({
                   aria-label={`编辑 ${selectedNode.label}`}
                 />
               </section>
-            ) : (
-              <div className="memory-tree-empty">点选主干、分支或叶子。</div>
-            )}
+            ) : null}
           </div>
         </div>
-
-        <footer className="drawer-footer">
-          {workspace?.runtimePath ? `${workspace.runtimePath}\\memory-tree` : "本地记忆树初始化中"}
-        </footer>
       </aside>
     </div>
   );
