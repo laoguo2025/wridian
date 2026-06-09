@@ -1788,20 +1788,6 @@ button {
   stroke-width: 0.44;
 }
 
-.creative-skills-summary {
-  min-height: 36px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--bg-selected), transparent 50%);
-  color: var(--text-muted);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 0 12px;
-  font-size: calc(12px * var(--ui-font-scale, 1));
-}
-
 .creative-skills-list {
   display: grid;
   align-content: start;

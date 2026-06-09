@@ -36,12 +36,11 @@ import "./App.css";
 type Theme = "light" | "dark";
 type FontSizeMode = "default" | "large" | "max";
 type SaveStatus = "idle" | "dirty" | "saving" | "saved" | "error";
-type CreativeSkillId = "knowledgeOps" | "workDecompose" | "knowledgeCard" | "authorDistill" | "shortDrama";
+type CreativeSkillId = "knowledgeOps" | "workDecompose" | "knowledgeCard" | "authorDistill";
 
 type CreativeSkill = {
   id: CreativeSkillId;
   title: string;
-  domain: string;
   status: string;
 };
 
@@ -178,18 +177,16 @@ const FONT_SIZE_SCALE: Record<FontSizeMode, number> = {
   max: 1.25,
 };
 const CREATIVE_SKILLS: CreativeSkill[] = [
-  { id: "knowledgeOps", title: "知识库运营", domain: "知识域", status: "目录体检、归档、进化" },
-  { id: "workDecompose", title: "作品拆解", domain: "知识生产", status: "拆解报告与案例分析" },
-  { id: "knowledgeCard", title: "知识卡提炼", domain: "知识生产", status: "S 级知识卡入库" },
-  { id: "authorDistill", title: "大神蒸馏", domain: "创作技能", status: "作者方法论与小 skill" },
-  { id: "shortDrama", title: "短剧剧本", domain: "作品域", status: "分集、场景、对白、卡点" },
+  { id: "knowledgeOps", title: "知识库运维", status: "目录体检、归档、进化" },
+  { id: "workDecompose", title: "作品拆解", status: "拆解报告与案例分析" },
+  { id: "knowledgeCard", title: "知识卡提炼", status: "将知识卡打造成可复用skill" },
+  { id: "authorDistill", title: "大神蒸馏", status: "至少2部作品，即可将作者的创作基因蒸馏成skill" },
 ];
 const DEFAULT_CREATIVE_SKILL_STATE: Record<CreativeSkillId, boolean> = {
   knowledgeOps: true,
   workDecompose: true,
   knowledgeCard: true,
-  authorDistill: false,
-  shortDrama: true,
+  authorDistill: true,
 };
 
 function App() {
@@ -797,7 +794,7 @@ function App() {
           <button type="button" title="知识图谱" aria-label="知识图谱" onClick={() => setKnowledgeGraphOpen(true)}>
             <KnowledgeGraphIcon />
           </button>
-          <button type="button" title="创作技能" aria-label="创作技能" onClick={() => setCreativeSkillsOpen(true)}>
+          <button type="button" title="技能管理" aria-label="技能管理" onClick={() => setCreativeSkillsOpen(true)}>
             <LightningIcon />
           </button>
           <button type="button" title="模型配置" aria-label="模型配置" onClick={() => setSettingsOpen(true)}>
@@ -1915,24 +1912,16 @@ function CreativeSkillsDrawer({
   onToggle: (id: CreativeSkillId) => void;
   skills: CreativeSkill[];
 }) {
-  const enabledCount = skills.filter((skill) => enabled[skill.id]).length;
-
   return (
     <div className="drawer-backdrop" onMouseDown={onClose} role="presentation">
-      <aside className="memory-drawer creative-skills-drawer" role="dialog" aria-modal="true" aria-label="创作技能" onMouseDown={(event) => event.stopPropagation()}>
+      <aside className="memory-drawer creative-skills-drawer" role="dialog" aria-modal="true" aria-label="技能管理" onMouseDown={(event) => event.stopPropagation()}>
         <div className="drawer-header">
           <div>
-            <div className="drawer-title">创作技能</div>
-            <div className="drawer-subtitle">管理写作、知识生产和知识库运营技能。</div>
+            <div className="drawer-title">技能管理</div>
           </div>
           <button type="button" className="icon-button" onClick={onClose} aria-label="关闭">
             ×
           </button>
-        </div>
-
-        <div className="creative-skills-summary">
-          <span>{enabledCount} 个已启用</span>
-          <span>技能只作为调用入口，不改变知识库目录所有权。</span>
         </div>
 
         <div className="creative-skills-list">
@@ -1940,7 +1929,7 @@ function CreativeSkillsDrawer({
             <div className="creative-skill-row" key={skill.id}>
               <div className="creative-skill-main">
                 <div className="creative-skill-title">{skill.title}</div>
-                <div className="creative-skill-meta">{skill.domain} · {skill.status}</div>
+                <div className="creative-skill-meta">{skill.status}</div>
               </div>
               <button
                 type="button"
