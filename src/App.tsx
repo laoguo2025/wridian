@@ -28,19 +28,18 @@ import {
   describeDraftReplaceSkip,
 } from "./editor/draftReplaceGuard";
 import { libraryFolderPath, libraryFolderTooltip } from "./libraryToolbar";
+import {
+  CREATIVE_SKILLS,
+  DEFAULT_CREATIVE_SKILL_STATE,
+  type CreativeSkill,
+  type CreativeSkillId,
+} from "./creativeSkills";
 import memoryTreeBase from "./assets/memory-tree-base.png";
 import "./App.css";
 
 type Theme = "light" | "dark";
 type FontSizeMode = "default" | "large" | "max";
 type SaveStatus = "idle" | "dirty" | "saving" | "saved" | "error";
-type CreativeSkillId = "knowledgeOps" | "workDecompose" | "knowledgeCard" | "authorDistill";
-
-type CreativeSkill = {
-  id: CreativeSkillId;
-  title: string;
-  status: string;
-};
 
 type WorkspaceInfo = {
   vaultPath: string;
@@ -174,19 +173,6 @@ const FONT_SIZE_SCALE: Record<FontSizeMode, number> = {
   large: 1.12,
   max: 1.25,
 };
-const CREATIVE_SKILLS: CreativeSkill[] = [
-  { id: "knowledgeOps", title: "知识库运维", status: "目录体检、归档、进化" },
-  { id: "workDecompose", title: "作品拆解", status: "拆解报告与案例分析" },
-  { id: "knowledgeCard", title: "知识卡提炼", status: "将知识卡打造成可复用skill" },
-  { id: "authorDistill", title: "大神蒸馏", status: "至少2部作品，即可将作者的创作基因蒸馏成skill" },
-];
-const DEFAULT_CREATIVE_SKILL_STATE: Record<CreativeSkillId, boolean> = {
-  knowledgeOps: true,
-  workDecompose: true,
-  knowledgeCard: true,
-  authorDistill: true,
-};
-
 function App() {
   const [theme, setTheme] = useState<Theme>("light");
   const [fontSizeMode, setFontSizeMode] = useState<FontSizeMode>("default");
@@ -643,12 +629,17 @@ function App() {
   );
   const blockedDraftEditCount = draftReplaceGuardReport.skipped.length;
   const knowledgeSuggestionIndex = useMemo(() => buildKnowledgeSuggestionIndex(knowledgeFiles), [knowledgeFiles]);
+  const enabledCreativeSkills = useMemo(
+    () => CREATIVE_SKILLS.filter((skill) => creativeSkillEnabled[skill.id]),
+    [creativeSkillEnabled],
+  );
   const promptSuggestions = useMemo(() => buildPromptSuggestions({
+    creativeSkills: enabledCreativeSkills,
     draftKind,
     knowledgeCards: knowledgeSuggestionIndex.cards,
     knowledgeCategories: knowledgeSuggestionIndex.categories,
     selectedKnowledgeCategoryId,
-  }), [draftKind, knowledgeSuggestionIndex, selectedKnowledgeCategoryId]);
+  }), [draftKind, enabledCreativeSkills, knowledgeSuggestionIndex, selectedKnowledgeCategoryId]);
 
   const statusLabel = useMemo(() => {
     if (saveStatus === "idle") return "读取中";

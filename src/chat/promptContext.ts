@@ -1,3 +1,5 @@
+import type { CreativeSkill } from "../creativeSkills";
+
 export type PromptContextPillKind =
   | "selection"
   | "active-file"
@@ -37,6 +39,7 @@ export type PromptSuggestion = {
 };
 
 export type PromptSuggestionInput = {
+  creativeSkills?: CreativeSkill[];
   draftKind: DraftKind;
   knowledgeCards: PromptKnowledgeCardCandidate[];
   knowledgeCategories?: PromptKnowledgeCategoryCandidate[];
@@ -201,86 +204,16 @@ export function buildPromptSuggestions(input: PromptSuggestionInput): PromptSugg
     });
   }
 
-  if (input.draftKind === "screenplay") {
-    suggestions.push(...SCREENPLAY_COMMAND_SUGGESTIONS);
+  for (const skill of input.creativeSkills ?? []) {
+    suggestions.push({
+      id: `creative-skill:${skill.id}`,
+      label: skill.title,
+      detail: skill.status,
+      insertText: skill.prompt,
+      kind: "command",
+      pillKind: "tool",
+    });
   }
-  suggestions.push(...WRITING_COMMAND_SUGGESTIONS);
 
   return suggestions;
 }
-
-const WRITING_COMMAND_SUGGESTIONS: PromptSuggestion[] = [
-  {
-    id: "rewrite-dialogue",
-    label: "改对白",
-    detail: "让对白更像角色本人、更适合小说或短剧表演",
-    insertText: "请把这段对白改得更符合角色口吻，并增强短剧冲突。",
-    kind: "command",
-  },
-  {
-    id: "raise-conflict",
-    label: "增强冲突",
-    detail: "提高场景里的阻力、误会、压迫感或选择成本",
-    insertText: "请增强这一段的戏剧冲突，但不要改变既有人物关系和事件顺序。",
-    kind: "command",
-  },
-  {
-    id: "add-hook",
-    label: "加结尾钩子",
-    detail: "补一个适合章节、分场或短剧结尾的悬念",
-    insertText: "请给这一段补一个结尾钩子，让读者或观众想继续看下一段。",
-    kind: "command",
-  },
-  {
-    id: "voice-check",
-    label: "检查角色口吻",
-    detail: "检查人物说话是否串味，指出并改写",
-    insertText: "请检查这一段的角色口吻是否一致，指出问题并给出修改建议。",
-    kind: "command",
-  },
-  {
-    id: "rename-character",
-    label: "批量修改角色名",
-    detail: "跨段落替换当前文件里的角色名",
-    insertText: "请把当前文件里的角色名从「旧名字」批量改成「新名字」，并保持上下文自然。",
-    kind: "command",
-  },
-  {
-    id: "extract-memory",
-    label: "整理到记忆树",
-    detail: "整理人物、设定、伏笔、风格、禁区和剧本规则",
-    insertText: "请从当前稿件中整理适合写入记忆树的人物、设定、伏笔、风格、禁区和剧本规则，并说明建议写入哪个记忆树文件。",
-    kind: "command",
-  },
-];
-
-const SCREENPLAY_COMMAND_SUGGESTIONS: PromptSuggestion[] = [
-  {
-    id: "episode-rhythm",
-    label: "拆分分集节奏",
-    detail: "按短剧节奏拆分信息点、冲突点和结尾钩子",
-    insertText: "请按短剧节奏拆分这一段的分集节奏，标出每集信息点、冲突点和结尾钩子。",
-    kind: "command",
-  },
-  {
-    id: "scene-hook",
-    label: "强化场景钩子",
-    detail: "让本场结尾更适合短剧转场或卡点",
-    insertText: "请强化这一场的结尾钩子，让它更适合短剧转场、卡点或下一集开头。",
-    kind: "command",
-  },
-  {
-    id: "performable-dialogue",
-    label: "对白口语化",
-    detail: "把对白改得更短、更可表演、更有冲突",
-    insertText: "请把这段对白改得更口语化、更可表演，并保留角色关系和核心信息。",
-    kind: "command",
-  },
-  {
-    id: "budget-scene-check",
-    label: "场景成本检查",
-    detail: "检查场景、人物和动作是否适合低成本短剧拍摄",
-    insertText: "请检查这一段的场景、人物调度和动作是否适合低成本短剧拍摄，并给出精简建议。",
-    kind: "command",
-  },
-];
