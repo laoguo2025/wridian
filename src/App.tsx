@@ -1524,7 +1524,9 @@ function flattenMemoryLeaves(node: MemoryTreeNode | undefined): MemoryTreeNode[]
   const leaves: MemoryTreeNode[] = [];
   const visit = (item: MemoryTreeNode) => {
     if (item.content != null && item.path) {
-      leaves.push(item);
+      if (!item.label.toLowerCase().startsWith("legacy-")) {
+        leaves.push(item);
+      }
       return;
     }
     item.children.forEach(visit);

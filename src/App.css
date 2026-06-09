@@ -1515,12 +1515,12 @@ button {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 10px;
-  height: 10px;
+  width: 7px;
+  height: 7px;
   border: 1px solid color-mix(in srgb, #dc7d57, black 10%);
   border-radius: 50%;
   background: #dc7d57;
-  box-shadow: 0 3px 10px color-mix(in srgb, #dc7d57, transparent 55%);
+  box-shadow: 0 2px 8px color-mix(in srgb, #dc7d57, transparent 55%);
   transform:
     translate(-50%, -50%)
     rotate(var(--leaf-angle))
@@ -1531,10 +1531,10 @@ button {
 
 .memory-leaf-dot:hover,
 .memory-leaf-dot.active {
-  width: 12px;
-  height: 12px;
+  width: 9px;
+  height: 9px;
   border-color: color-mix(in srgb, #dc7d57, black 24%);
-  box-shadow: 0 4px 14px color-mix(in srgb, #dc7d57, transparent 35%);
+  box-shadow: 0 3px 10px color-mix(in srgb, #dc7d57, transparent 35%);
 }
 
 .memory-node-detail {

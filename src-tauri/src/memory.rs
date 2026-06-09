@@ -535,31 +535,6 @@ fn migrate_legacy_memory_files(_data_dir: &Path, root: &Path) -> Result<(), Stri
         &root.join("global").join("MEMORY.md"),
         &root.join("MEMORY.md"),
     )?;
-    copy_legacy_if_target_empty(
-        &root.join("partner").join("user.md"),
-        &root.join("leaves").join("user").join("legacy-user.md"),
-    )?;
-    copy_legacy_if_target_empty(
-        &root.join("partner").join("relationship.md"),
-        &root
-            .join("leaves")
-            .join("relationship")
-            .join("legacy-relationship.md"),
-    )?;
-    copy_legacy_if_target_empty(
-        &root.join("partner").join("partnermemory.md"),
-        &root
-            .join("leaves")
-            .join("relationship")
-            .join("legacy-partnermemory.md"),
-    )?;
-    copy_legacy_if_target_empty(
-        &root.join("global").join("AWARENESS.md"),
-        &root
-            .join("leaves")
-            .join("awareness")
-            .join("legacy-awareness.md"),
-    )?;
 
     Ok(())
 }
@@ -653,6 +628,29 @@ mod tests {
 
         assert!(find_node_by_label(&tree.roots, "默认知识.md").is_none());
         assert_eq!(novel_leaf_count, 0);
+    }
+
+    #[test]
+    fn legacy_branch_files_are_not_copied_into_leaf_nodes() {
+        let data_dir = temp_data_dir("legacy-not-leaves");
+        let root = memory_tree_files_root(&data_dir);
+        fs::create_dir_all(root.join("partner")).expect("create partner");
+        fs::create_dir_all(root.join("global")).expect("create global");
+        fs::write(root.join("partner").join("user.md"), "旧用户主文件")
+            .expect("write legacy user");
+        fs::write(root.join("partner").join("relationship.md"), "旧关系主文件")
+            .expect("write legacy relationship");
+        fs::write(root.join("partner").join("partnermemory.md"), "旧伙伴记忆主文件")
+            .expect("write legacy partner memory");
+        fs::write(root.join("global").join("AWARENESS.md"), "旧反思主文件")
+            .expect("write legacy awareness");
+
+        let tree = read_memory_tree_files(&data_dir).expect("read tree");
+
+        assert!(find_node_by_label(&tree.roots, "legacy-user.md").is_none());
+        assert!(find_node_by_label(&tree.roots, "legacy-relationship.md").is_none());
+        assert!(find_node_by_label(&tree.roots, "legacy-partnermemory.md").is_none());
+        assert!(find_node_by_label(&tree.roots, "legacy-awareness.md").is_none());
     }
 
     fn find_node_by_label<'a>(
