@@ -1159,11 +1159,7 @@ function MemoryDrawer({
         <div className="memory-forest-shell" aria-label="记忆树仿真视图">
           <div className="memory-forest" aria-label="记忆树">
             <div className="memory-tree-glow" aria-hidden="true" />
-            <div className="memory-tree-trunk" aria-hidden="true">
-              <span />
-              <span />
-              <span />
-            </div>
+            <MemoryTreeSkeleton />
             <div className="memory-tree-roots">
               {viewModel.trunk.map((node) => (
                 <button
@@ -1247,6 +1243,26 @@ function MemoryDrawer({
         </footer>
       </aside>
     </div>
+  );
+}
+
+function MemoryTreeSkeleton() {
+  return (
+    <svg className="memory-tree-skeleton" viewBox="0 0 820 560" preserveAspectRatio="none" aria-hidden="true">
+      <path className="memory-tree-spine" d="M410 30 C404 108 420 172 408 236 C396 310 416 392 410 528" />
+      <path className="memory-tree-branch" d="M409 58 C345 56 300 76 248 98" />
+      <path className="memory-tree-branch" d="M413 112 C478 110 526 130 578 150" />
+      <path className="memory-tree-branch" d="M409 164 C344 160 300 184 248 206" />
+      <path className="memory-tree-branch" d="M413 216 C478 212 526 238 578 258" />
+      <path className="memory-tree-branch" d="M409 268 C344 266 300 292 248 314" />
+      <path className="memory-tree-branch" d="M413 320 C478 318 526 344 578 366" />
+      <path className="memory-tree-branch" d="M409 372 C344 370 300 396 248 418" />
+      <path className="memory-tree-branch" d="M413 424 C478 422 526 448 578 470" />
+      <path className="memory-tree-branch" d="M409 476 C344 474 300 500 248 522" />
+      {[58, 112, 164, 216, 268, 320, 372, 424, 476].map((y) => (
+        <circle key={y} className="memory-tree-joint" cx="410" cy={y} r="4" />
+      ))}
+    </svg>
   );
 }
 
@@ -1345,10 +1361,6 @@ function MemoryBranchArm({
   const branchStyle = { "--branch-index": index } as React.CSSProperties;
   return (
     <div className={`memory-branch-arm ${side} ${active ? "active" : ""}`} style={branchStyle}>
-      <div className="memory-branch-line" aria-hidden="true">
-        <span />
-        <span />
-      </div>
       <button
         type="button"
         className={`memory-branch-card ${active ? "active" : ""}`}

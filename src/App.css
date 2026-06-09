@@ -1241,30 +1241,37 @@ button {
   pointer-events: none;
 }
 
-.memory-tree-trunk span {
+.memory-tree-skeleton {
   position: absolute;
-  left: 50%;
-  width: 136px;
-  height: 22px;
-  border-top: 2px solid color-mix(in srgb, var(--accent), var(--text-muted) 28%);
-  border-radius: 50%;
-  filter: drop-shadow(0 0 7px color-mix(in srgb, var(--accent), transparent 72%));
+  inset: 18px 28px 28px;
+  z-index: 1;
+  overflow: visible;
   pointer-events: none;
 }
 
-.memory-tree-trunk span:nth-child(1) {
-  top: 106px;
-  transform: translateX(-96%) rotate(-25deg);
+.memory-tree-spine,
+.memory-tree-branch {
+  fill: none;
+  stroke: color-mix(in srgb, var(--accent), var(--text-muted) 24%);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
 }
 
-.memory-tree-trunk span:nth-child(2) {
-  top: 228px;
-  transform: translateX(-4%) rotate(24deg);
+.memory-tree-spine {
+  stroke-width: 5px;
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent), transparent 68%));
 }
 
-.memory-tree-trunk span:nth-child(3) {
-  top: 350px;
-  transform: translateX(-96%) rotate(-18deg);
+.memory-tree-branch {
+  stroke-width: 2px;
+}
+
+.memory-tree-joint {
+  fill: color-mix(in srgb, var(--accent), var(--bg-panel) 18%);
+  stroke: var(--bg-panel);
+  stroke-width: 2px;
+  vector-effect: non-scaling-stroke;
 }
 
 .memory-tree-roots {
@@ -1325,7 +1332,7 @@ button {
 }
 
 .memory-branch-arm {
-  --branch-y: calc(34px + var(--branch-index) * 52px);
+  --branch-y: calc(46px + var(--branch-index) * 52px);
   position: absolute;
   top: var(--branch-y);
   z-index: 2;
@@ -1336,59 +1343,13 @@ button {
 }
 
 .memory-branch-arm.left {
-  left: calc(50% - 374px);
+  left: calc(50% - 360px);
   grid-template-columns: 146px 1fr;
 }
 
 .memory-branch-arm.right {
-  right: calc(50% - 374px);
+  right: calc(50% - 360px);
   grid-template-columns: 1fr 146px;
-}
-
-.memory-branch-line {
-  position: absolute;
-  top: 30px;
-  width: 186px;
-  height: 42px;
-  pointer-events: none;
-}
-
-.memory-branch-arm.left .memory-branch-line {
-  right: 50px;
-  border-top: 2px solid color-mix(in srgb, var(--accent), var(--border) 38%);
-  border-radius: 0 90px 0 0;
-  transform: rotate(-7deg);
-}
-
-.memory-branch-arm.right .memory-branch-line {
-  left: 50px;
-  border-top: 2px solid color-mix(in srgb, var(--accent), var(--border) 38%);
-  border-radius: 90px 0 0 0;
-  transform: rotate(7deg);
-}
-
-.memory-branch-line span {
-  position: absolute;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--accent), var(--bg-panel) 24%);
-  box-shadow: 0 0 10px color-mix(in srgb, var(--accent), transparent 70%);
-}
-
-.memory-branch-arm.left .memory-branch-line span:first-child {
-  right: 0;
-  top: -5px;
-}
-
-.memory-branch-arm.right .memory-branch-line span:first-child {
-  left: 0;
-  top: -5px;
-}
-
-.memory-branch-line span:last-child {
-  top: 12px;
-  left: 50%;
 }
 
 .memory-branch-card {
