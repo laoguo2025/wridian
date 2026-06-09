@@ -7,11 +7,9 @@ import {
 import { useChatManager, type ChatDraftEdit } from "./chat/chatManager";
 import { ChatPanel } from "./chat/ChatPanel";
 import {
-  findRelevantNotes,
   getProjectState,
   selectProject,
   type ProjectState,
-  type RelevantNote,
 } from "./chat/projectContext";
 import {
   buildPromptSuggestions,
@@ -209,7 +207,6 @@ function App() {
   const [selectedKnowledgeCategoryId, setSelectedKnowledgeCategoryId] = useState("");
   const [activeModelLabel, setActiveModelLabel] = useState("");
   const [projectState, setProjectState] = useState<ProjectState>({ projects: [] });
-  const [relevantNotes, setRelevantNotes] = useState<RelevantNote[]>([]);
   const [projectError, setProjectError] = useState("");
   const [hasDraftSelection, setHasDraftSelection] = useState(false);
   const [selectedPath, setSelectedPath] = useState("");
@@ -393,23 +390,6 @@ function App() {
     }, 1000);
     return () => window.clearTimeout(timer);
   }, [dirty, isRealFile, loadingPath, saveCurrentFile]);
-
-  useEffect(() => {
-    if (!selectedPath || !editorContent.trim()) {
-      setRelevantNotes([]);
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      void findRelevantNotes({
-        sourcePath: selectedPath,
-        content: editorContent,
-        limit: 6,
-      })
-        .then(setRelevantNotes)
-        .catch(() => setRelevantNotes([]));
-    }, 400);
-    return () => window.clearTimeout(timer);
-  }, [editorContent, selectedPath, projectState.activeProjectId]);
 
   const switchProject = async (id: string) => {
     try {
@@ -976,10 +956,8 @@ function App() {
           activeModelLabel={activeModelLabel}
           projectError={projectError}
           projects={projectState.projects}
-          relevantNotes={relevantNotes}
           selectedProjectId={projectState.activeProjectId ?? ""}
           onSelectProject={(id) => void switchProject(id)}
-          onAddRelevantNote={(note) => void addFileToPrompt(note.title, note.path)}
           onPromptChange={setPrompt}
           onPromptPillsChange={setPromptPills}
           onImagePaste={(files) => {

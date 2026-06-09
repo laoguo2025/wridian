@@ -6,13 +6,12 @@ import {
   type ChatMessage,
 } from "./messageRepository";
 import type { PromptContextPill, PromptSuggestion } from "./promptContext";
-import type { ProjectConfig, RelevantNote } from "./projectContext";
+import type { ProjectConfig } from "./projectContext";
 
 export function ChatPanel({
   activeModelLabel,
   error,
   messages,
-  onAddRelevantNote,
   onCopy,
   onEditUserMessage,
   onPromptChange,
@@ -29,13 +28,11 @@ export function ChatPanel({
   prompt,
   promptPills,
   promptSuggestions,
-  relevantNotes,
   selectedProjectId,
 }: {
   activeModelLabel: string;
   error: string;
   messages: ChatMessage[];
-  onAddRelevantNote: (note: RelevantNote) => void;
   onCopy: (text: string) => void;
   onEditUserMessage: (message: ChatMessage) => void;
   onPromptChange: (value: string) => void;
@@ -52,7 +49,6 @@ export function ChatPanel({
   prompt: string;
   promptPills: PromptContextPill[];
   promptSuggestions: PromptSuggestion[];
-  relevantNotes: RelevantNote[];
   selectedProjectId: string;
 }) {
   const threadRef = useRef<HTMLDivElement | null>(null);
@@ -90,17 +86,6 @@ export function ChatPanel({
         {pending ? <div className="chat-status">正在回复。</div> : null}
         {error ? <div className="chat-status error">{error}</div> : null}
       </div>
-
-      {relevantNotes.length ? (
-        <div className="relevant-notes" aria-label="Relevant Notes">
-          {relevantNotes.map((note) => (
-            <button type="button" key={note.path} onClick={() => onAddRelevantNote(note)} title={note.path}>
-              <span>{note.title}</span>
-              <small>{note.hasBacklinks ? "backlink" : note.hasOutgoingLinks ? "link" : note.score.toFixed(2)}</small>
-            </button>
-          ))}
-        </div>
-      ) : null}
 
       <form
         className="prompt-bar"

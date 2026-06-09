@@ -1175,39 +1175,6 @@ button {
   scroll-behavior: smooth;
 }
 
-.relevant-notes {
-  display: flex;
-  gap: 4px;
-  overflow-x: auto;
-  padding: 3px 0;
-  scrollbar-width: thin;
-}
-
-.relevant-notes button {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  max-width: 156px;
-  min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--text-muted);
-  padding: 2px 7px;
-}
-
-.relevant-notes span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.relevant-notes small {
-  color: var(--text-faint);
-  font-size: calc(10px * var(--ui-font-scale, 1));
-}
-
 .chat-message {
   display: flex;
   flex-direction: column;
