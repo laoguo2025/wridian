@@ -10,7 +10,6 @@ import type { ProjectConfig, RelevantNote } from "./projectContext";
 
 export function ChatPanel({
   activeModelLabel,
-  activeProjectName,
   error,
   messages,
   onAddToMemory,
@@ -35,7 +34,6 @@ export function ChatPanel({
   selectedProjectId,
 }: {
   activeModelLabel: string;
-  activeProjectName: string;
   error: string;
   messages: ChatMessage[];
   onAddToMemory: (text: string) => void;
@@ -140,7 +138,6 @@ export function ChatPanel({
         <div className="prompt-footer">
           <select className="prompt-model-select" value={activeModelLabel || "未配置模型"} onChange={() => undefined} aria-label="模型选择">
             <option value={activeModelLabel || "未配置模型"}>{activeModelLabel || "未配置模型"}</option>
-            {activeProjectName ? <option value={activeProjectName}>{activeProjectName}</option> : null}
           </select>
           <button type="submit" className="prompt-send" aria-label={pending ? "停止" : "发送"} disabled={pending || !prompt.trim()}>
             {pending ? "..." : "发送"}

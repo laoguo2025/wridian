@@ -281,7 +281,6 @@ function App() {
   const visibleFiles = libraryTab === "works" ? files : knowledgeFiles;
   const isRealFile = Boolean(selectedPath);
   const dirty = isRealFile && editorContent !== lastSavedContent;
-  const activeProject = projectState.projects.find((project) => project.id === projectState.activeProjectId);
 
   const saveCurrentFile = useCallback(async () => {
     if (!isRealFile || !dirty) return;
@@ -818,7 +817,6 @@ function App() {
           promptPills={promptPills}
           promptSuggestions={promptSuggestions}
           activeModelLabel={activeModelLabel}
-          activeProjectName={activeProject?.name ?? ""}
           projectError={projectError}
           projects={projectState.projects}
           relevantNotes={relevantNotes}
