@@ -1279,109 +1279,46 @@ button {
   min-width: 820px;
   min-height: 100%;
   overflow: auto;
-  padding: 24px 28px 32px;
-  background:
-    radial-gradient(circle at 50% 8%, color-mix(in srgb, var(--accent), transparent 86%), transparent 24%),
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-panel), var(--bg-selected) 24%), var(--bg-panel));
+  padding: 18px 22px 26px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-panel), var(--bg-selected) 18%), var(--bg-panel));
 }
 
 .memory-forest::before {
   content: "";
   position: absolute;
   left: 50%;
-  bottom: 24px;
-  width: 280px;
-  height: 34px;
+  bottom: 28px;
+  width: 250px;
+  height: 24px;
   border-radius: 50%;
-  border: 1px solid color-mix(in srgb, var(--border), transparent 20%);
-  box-shadow: 0 0 20px color-mix(in srgb, var(--accent), transparent 82%);
+  background: color-mix(in srgb, var(--text-primary), transparent 96%);
+  border: 1px solid color-mix(in srgb, var(--border), transparent 35%);
   transform: translateX(-50%);
   pointer-events: none;
 }
 
-.memory-forest-ground {
-  position: absolute;
-  left: 50%;
-  top: 32px;
-  bottom: 56px;
-  width: 8px;
-  border-radius: 12px 12px 4px 4px;
-  background:
-    linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent), var(--bg-panel) 34%), transparent),
-    linear-gradient(180deg, color-mix(in srgb, var(--accent), transparent 58%), color-mix(in srgb, var(--text-muted), transparent 45%));
-  box-shadow:
-    0 0 16px color-mix(in srgb, var(--accent), transparent 76%),
-    inset 0 0 8px color-mix(in srgb, var(--bg-panel), transparent 34%);
-  transform: translateX(-50%);
-  pointer-events: none;
-}
-
-.memory-tree-glow {
+.memory-tree-base {
   position: absolute;
   left: 50%;
   top: 18px;
-  width: 72px;
-  height: 72px;
-  border-radius: 50%;
-  background: radial-gradient(circle, color-mix(in srgb, var(--accent), transparent 38%), transparent 62%);
-  filter: blur(1px);
-  opacity: 0.75;
+  z-index: 0;
+  width: 760px;
+  height: 520px;
+  object-fit: contain;
+  opacity: 0.9;
   transform: translateX(-50%);
   pointer-events: none;
-}
-
-.memory-tree-skeleton {
-  position: absolute;
-  inset: 18px 28px 28px;
-  z-index: 1;
-  overflow: visible;
-  pointer-events: none;
-}
-
-.memory-tree-spine,
-.memory-tree-branch {
-  fill: none;
-  stroke: color-mix(in srgb, var(--accent), var(--text-muted) 24%);
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  vector-effect: non-scaling-stroke;
-}
-
-.memory-tree-spine.lower {
-  stroke-width: 9px;
-  filter: drop-shadow(0 0 7px color-mix(in srgb, var(--accent), transparent 70%));
-}
-
-.memory-tree-spine.middle {
-  stroke-width: 6px;
-  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent), transparent 68%));
-}
-
-.memory-tree-spine.upper {
-  stroke-width: 3px;
-  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--accent), transparent 72%));
-}
-
-.memory-tree-branch {
-  stroke-width: 2px;
-}
-
-.memory-tree-joint {
-  fill: color-mix(in srgb, var(--accent), var(--bg-panel) 18%);
-  stroke: var(--bg-panel);
-  stroke-width: 2px;
-  vector-effect: non-scaling-stroke;
 }
 
 .memory-tree-roots {
   position: absolute;
   left: 50%;
-  top: 40px;
+  top: 38px;
   z-index: 2;
   display: grid;
   justify-items: center;
-  gap: 6px;
-  width: 116px;
+  gap: 5px;
+  width: 96px;
   transform: translateX(-50%);
 }
 
@@ -1390,15 +1327,15 @@ button {
   display: grid;
   justify-items: center;
   gap: 1px;
-  width: 116px;
-  min-height: 40px;
-  margin-bottom: 188px;
+  width: 96px;
+  min-height: 34px;
+  margin-bottom: 196px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--bg-panel), var(--bg-selected) 18%);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-panel), transparent 6%);
   color: var(--text-primary);
-  padding: 5px 8px;
-  box-shadow: 0 8px 18px color-mix(in srgb, var(--text-primary), transparent 94%);
+  padding: 4px 7px;
+  box-shadow: 0 6px 14px color-mix(in srgb, var(--text-primary), transparent 95%);
   text-align: center;
 }
 
@@ -1407,14 +1344,14 @@ button {
   display: grid;
   justify-items: center;
   gap: 1px;
-  width: 112px;
-  min-height: 38px;
+  width: 92px;
+  min-height: 32px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--bg-panel), var(--bg-selected) 18%);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-panel), transparent 8%);
   color: var(--text-primary);
-  padding: 5px 8px;
-  box-shadow: 0 8px 18px color-mix(in srgb, var(--text-primary), transparent 94%);
+  padding: 4px 7px;
+  box-shadow: 0 6px 14px color-mix(in srgb, var(--text-primary), transparent 95%);
   text-align: center;
 }
 
@@ -1433,25 +1370,25 @@ button {
 }
 
 .memory-trunk-card strong {
-  font-size: calc(12px * var(--ui-font-scale, 1));
-  line-height: 15px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
+  line-height: 14px;
 }
 
 .memory-sense-card strong {
-  font-size: calc(12px * var(--ui-font-scale, 1));
-  line-height: 15px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
+  line-height: 14px;
 }
 
 .memory-trunk-card small {
   color: var(--text-muted);
-  font-size: calc(10px * var(--ui-font-scale, 1));
-  line-height: 12px;
+  font-size: calc(9px * var(--ui-font-scale, 1));
+  line-height: 11px;
 }
 
 .memory-sense-card small {
   color: var(--text-muted);
-  font-size: calc(10px * var(--ui-font-scale, 1));
-  line-height: 12px;
+  font-size: calc(9px * var(--ui-font-scale, 1));
+  line-height: 11px;
 }
 
 .memory-trunk-card:hover,
@@ -1463,24 +1400,28 @@ button {
 }
 
 .memory-branch-arm {
-  --branch-y: calc(126px + var(--branch-index) * 88px);
+  --branch-y: calc(118px + var(--branch-index) * 90px);
   position: absolute;
   top: var(--branch-y);
   z-index: 2;
   display: grid;
   align-items: center;
-  width: 335px;
-  min-height: 68px;
+  width: 326px;
+  min-height: 64px;
 }
 
 .memory-branch-arm.left {
-  left: calc(50% - 372px);
-  grid-template-columns: 146px 1fr;
+  left: calc(50% - 376px);
+  grid-template-columns: 132px 1fr;
 }
 
 .memory-branch-arm.right {
-  right: calc(50% - 372px);
-  grid-template-columns: 1fr 146px;
+  right: calc(50% - 376px);
+  grid-template-columns: 1fr 132px;
+}
+
+.memory-branch-arm {
+  transform: translateY(var(--branch-offset));
 }
 
 .memory-branch-card {
@@ -1488,13 +1429,13 @@ button {
   z-index: 2;
   display: grid;
   gap: 1px;
-  min-height: 50px;
+  min-height: 38px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--bg-panel), var(--bg-selected) 12%);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-panel), transparent 6%);
   color: var(--text-primary);
-  padding: 7px 10px;
-  box-shadow: 0 8px 18px color-mix(in srgb, var(--text-primary), transparent 95%);
+  padding: 5px 8px;
+  box-shadow: 0 6px 14px color-mix(in srgb, var(--text-primary), transparent 95%);
   text-align: left;
 }
 
@@ -1507,15 +1448,15 @@ button {
 }
 
 .memory-branch-card strong {
-  font-size: calc(13px * var(--ui-font-scale, 1));
-  line-height: 16px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
+  line-height: 14px;
 }
 
 .memory-branch-card small {
   overflow: hidden;
   color: var(--text-muted);
-  font-size: calc(10px * var(--ui-font-scale, 1));
-  line-height: 13px;
+  font-size: calc(9px * var(--ui-font-scale, 1));
+  line-height: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1531,7 +1472,7 @@ button {
   position: relative;
   z-index: 2;
   display: grid;
-  gap: 4px;
+  gap: 3px;
 }
 
 .memory-branch-arm.left .memory-leaf-cluster {
@@ -1549,14 +1490,15 @@ button {
   display: inline-grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  gap: 4px;
-  width: 128px;
-  min-height: 30px;
-  border: 0;
+  gap: 5px;
+  width: 118px;
+  min-height: 27px;
+  border: 1px solid color-mix(in srgb, var(--border), transparent 22%);
   border-radius: 5px;
-  background: transparent;
+  background: color-mix(in srgb, var(--bg-panel), transparent 10%);
   color: var(--text-muted);
-  padding: 0;
+  padding: 3px 5px;
+  box-shadow: 0 4px 10px color-mix(in srgb, var(--text-primary), transparent 97%);
   text-align: left;
 }
 
@@ -1564,10 +1506,10 @@ button {
 .memory-leaf-placeholder span {
   display: inline-grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 18px;
   border-radius: 3px;
-  background: var(--bg-selected);
+  background: color-mix(in srgb, var(--accent), transparent 86%);
   color: var(--text-muted);
   font-size: calc(8px * var(--ui-font-scale, 1));
   font-weight: 700;
@@ -1575,9 +1517,9 @@ button {
 
 .memory-leaf-card strong,
 .memory-leaf-placeholder strong {
-  font-size: calc(10px * var(--ui-font-scale, 1));
+  font-size: calc(9px * var(--ui-font-scale, 1));
   font-weight: 500;
-  line-height: 12px;
+  line-height: 11px;
 }
 
 .memory-leaf-card small,
@@ -1585,8 +1527,8 @@ button {
   min-width: 0;
   overflow: hidden;
   color: var(--text-muted);
-  font-size: calc(9px * var(--ui-font-scale, 1));
-  line-height: 11px;
+  font-size: calc(8px * var(--ui-font-scale, 1));
+  line-height: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1598,7 +1540,8 @@ button {
 }
 
 .memory-leaf-placeholder {
-  opacity: 0.45;
+  background: transparent;
+  opacity: 0.5;
 }
 
 .memory-leaf-placeholder span::before {

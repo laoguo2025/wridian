@@ -29,6 +29,7 @@ import {
   describeDraftReplaceSkip,
 } from "./editor/draftReplaceGuard";
 import { libraryFolderPath, libraryFolderTooltip } from "./libraryToolbar";
+import memoryTreeBase from "./assets/memory-tree-base.png";
 import "./App.css";
 
 type Theme = "light" | "dark";
@@ -1357,8 +1358,7 @@ function MemoryDrawer({
 
         <div className="memory-forest-shell" aria-label="记忆树仿真视图">
           <div className="memory-forest" aria-label="记忆树">
-            <div className="memory-tree-glow" aria-hidden="true" />
-            <MemoryTreeSkeleton />
+            <img className="memory-tree-base" src={memoryTreeBase} alt="" aria-hidden="true" />
             <div className="memory-tree-roots">
               {viewModel.sense ? (
                 <button
@@ -1455,27 +1455,6 @@ function MemoryDrawer({
   );
 }
 
-function MemoryTreeSkeleton() {
-  return (
-    <svg className="memory-tree-skeleton" viewBox="0 0 820 560" preserveAspectRatio="none" aria-hidden="true">
-      <path className="memory-tree-spine lower" d="M410 530 C414 472 405 420 412 360" />
-      <path className="memory-tree-spine middle" d="M412 360 C418 300 402 248 410 190" />
-      <path className="memory-tree-spine upper" d="M410 190 C416 128 405 84 410 36" />
-      <path className="memory-tree-branch left" d="M409 96 C362 92 318 78 262 112 C238 126 226 136 214 150" />
-      <path className="memory-tree-branch right" d="M413 150 C470 144 508 130 564 164 C586 178 600 190 614 204" />
-      <path className="memory-tree-branch left" d="M408 206 C350 200 314 202 262 238 C238 254 224 266 210 282" />
-      <path className="memory-tree-branch right" d="M414 260 C468 252 512 258 566 292 C590 308 604 322 618 338" />
-      <path className="memory-tree-branch left" d="M408 314 C348 306 312 314 260 350 C236 366 222 382 208 398" />
-      <path className="memory-tree-branch right" d="M414 368 C470 360 510 370 562 406 C586 422 602 438 616 454" />
-      <path className="memory-tree-branch left" d="M409 422 C350 414 312 430 260 462 C238 476 224 490 210 504" />
-      <path className="memory-tree-branch right" d="M413 476 C464 470 510 488 558 516 C582 530 596 542 610 554" />
-      {[96, 150, 206, 260, 314, 368, 422, 476].map((y) => (
-        <circle key={y} className="memory-tree-joint" cx="410" cy={y} r="4" />
-      ))}
-    </svg>
-  );
-}
-
 type MemoryBranchView = {
   branchNode?: MemoryTreeNode;
   key: string;
@@ -1569,7 +1548,8 @@ function MemoryBranchArm({
   const side = index < 4 ? "left" : "right";
   const sideIndex = index < 4 ? index : index - 4;
   const active = branch.rule?.path === selectedPath || branch.leaves.some((leaf) => leaf.path === selectedPath);
-  const branchStyle = { "--branch-index": sideIndex } as React.CSSProperties;
+  const verticalOffset = sideIndex % 2 === 0 ? "-8px" : "10px";
+  const branchStyle = { "--branch-index": sideIndex, "--branch-offset": verticalOffset } as React.CSSProperties;
   return (
     <div className={`memory-branch-arm ${side} ${active ? "active" : ""}`} style={branchStyle}>
       <button
