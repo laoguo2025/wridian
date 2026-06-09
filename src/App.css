@@ -179,10 +179,40 @@ button {
 .workspace {
   min-height: 0;
   display: grid;
-  grid-template-columns: 218px minmax(0, 1fr) 292px;
-  gap: 12px;
+  grid-template-columns:
+    var(--left-pane-width, 218px)
+    12px
+    minmax(360px, 1fr)
+    12px
+    var(--right-pane-width, 292px);
+  gap: 0;
   padding: 12px 14px 14px;
   overflow: hidden;
+}
+
+.workspace-resizer {
+  width: 12px;
+  min-width: 12px;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.workspace-resizer::before {
+  content: "";
+  width: 6px;
+  height: 62px;
+  border-radius: 999px;
+  background: var(--accent);
+  opacity: 0.95;
+}
+
+.workspace-resizer:hover::before,
+.workspace-resizer:focus-visible::before {
+  opacity: 1;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent), transparent 78%);
 }
 
 .project-rail {
@@ -1819,6 +1849,10 @@ button {
   }
 
   .project-rail {
+    display: none;
+  }
+
+  .workspace-resizer {
     display: none;
   }
 

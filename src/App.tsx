@@ -1,4 +1,4 @@
-import { KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   restorePromptPillsFromMessage,
@@ -112,6 +112,16 @@ type TextSelection = {
   end: number;
 };
 
+const DEFAULT_LEFT_PANE_WIDTH = 218;
+const DEFAULT_RIGHT_PANE_WIDTH = 292;
+const MIN_LEFT_PANE_WIDTH = 168;
+const MAX_LEFT_PANE_WIDTH = 360;
+const MIN_RIGHT_PANE_WIDTH = 240;
+const MAX_RIGHT_PANE_WIDTH = 420;
+const MIN_WRITING_PANE_WIDTH = 360;
+const WORKSPACE_RESIZER_WIDTH = 12;
+const WORKSPACE_RESIZER_COUNT = 2;
+
 function App() {
   const [theme, setTheme] = useState<Theme>("light");
   const [memoryOpen, setMemoryOpen] = useState(false);
@@ -139,6 +149,11 @@ function App() {
   const [savingMemoryTree, setSavingMemoryTree] = useState(false);
   const [fileMenu, setFileMenu] = useState<FileContextMenu | null>(null);
   const [libraryTab, setLibraryTab] = useState<"works" | "knowledge">("works");
+  const [workspacePaneWidths, setWorkspacePaneWidths] = useState({
+    left: DEFAULT_LEFT_PANE_WIDTH,
+    right: DEFAULT_RIGHT_PANE_WIDTH,
+  });
+  const workspaceRef = useRef<HTMLDivElement | null>(null);
   const draftEditorRef = useRef<HTMLDivElement | null>(null);
   const draftSelectionRef = useRef<TextSelection>({ start: editorContent.length, end: editorContent.length });
   const appendDraftEdits = useCallback((edits: DraftEdit[]) => {
@@ -568,6 +583,50 @@ function App() {
     }
   };
 
+  const resizeWorkspacePane = (side: "left" | "right", event: ReactPointerEvent<HTMLDivElement>) => {
+    const workspaceNode = workspaceRef.current;
+    if (!workspaceNode) return;
+    event.preventDefault();
+
+    const startX = event.clientX;
+    const startWidths = workspacePaneWidths;
+    const workspaceWidth = workspaceNode.getBoundingClientRect().width;
+    const resizerSpace = WORKSPACE_RESIZER_WIDTH * WORKSPACE_RESIZER_COUNT;
+
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      const deltaX = moveEvent.clientX - startX;
+      setWorkspacePaneWidths(() => {
+        if (side === "left") {
+          const maxLeft = Math.min(
+            MAX_LEFT_PANE_WIDTH,
+            workspaceWidth - startWidths.right - MIN_WRITING_PANE_WIDTH - resizerSpace,
+          );
+          return {
+            left: clamp(startWidths.left + deltaX, MIN_LEFT_PANE_WIDTH, maxLeft),
+            right: startWidths.right,
+          };
+        }
+
+        const maxRight = Math.min(
+          MAX_RIGHT_PANE_WIDTH,
+          workspaceWidth - startWidths.left - MIN_WRITING_PANE_WIDTH - resizerSpace,
+        );
+        return {
+          left: startWidths.left,
+          right: clamp(startWidths.right - deltaX, MIN_RIGHT_PANE_WIDTH, maxRight),
+        };
+      });
+    };
+
+    const onPointerUp = () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+    };
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp, { once: true });
+  };
+
   const openMemoryFolder = async () => {
     if (!workspace?.runtimePath) {
       setMemoryError("请在 Wridian 桌面端打开记忆文件夹。");
@@ -609,7 +668,14 @@ function App() {
         </nav>
       </header>
 
-      <div className="workspace">
+      <div
+        className="workspace"
+        ref={workspaceRef}
+        style={{
+          "--left-pane-width": `${workspacePaneWidths.left}px`,
+          "--right-pane-width": `${workspacePaneWidths.right}px`,
+        } as React.CSSProperties}
+      >
         <aside className="project-rail" aria-label="作品">
           <div className="rail-topline">
             <div className="library-tabs" role="tablist" aria-label="资料库">
@@ -659,6 +725,15 @@ function App() {
           </div>
         </aside>
 
+        <div
+          className="workspace-resizer"
+          role="separator"
+          aria-label="调整作品区宽度"
+          aria-orientation="vertical"
+          tabIndex={0}
+          onPointerDown={(event) => resizeWorkspacePane("left", event)}
+        />
+
         <main className="writing-pane">
           <section className={`paper ${selectedPath ? "" : "paper-empty"}`} aria-label="正文编辑区">
             {selectedPath ? (
@@ -700,6 +775,15 @@ function App() {
             {saveError ? <div className="paper-error">{saveError}</div> : null}
           </section>
         </main>
+
+        <div
+          className="workspace-resizer"
+          role="separator"
+          aria-label="调整对话区宽度"
+          aria-orientation="vertical"
+          tabIndex={0}
+          onPointerDown={(event) => resizeWorkspacePane("right", event)}
+        />
 
         <ChatPanel
           error={chatManager.error}
@@ -920,6 +1004,10 @@ function detectDraftKind(path: string, content: string): DraftKind {
   const sceneSignals = (content.match(/(^|\n)\s*(INT\.|EXT\.|内景|外景|第[一二三四五六七八九十\d]+[集场])/g) ?? []).length;
   const dialogueSignals = (content.match(/(^|\n)\s*[\u4e00-\u9fa5A-Za-z0-9_]{2,12}[：:]/g) ?? []).length;
   return sceneSignals >= 2 || dialogueSignals >= 4 ? "screenplay" : "prose";
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), Math.max(min, max));
 }
 
 function PencilIcon() {
