@@ -32,6 +32,7 @@ import { libraryFolderPath, libraryFolderTooltip } from "./libraryToolbar";
 import "./App.css";
 
 type Theme = "light" | "dark";
+type FontSizeMode = "default" | "large" | "max";
 type SaveStatus = "idle" | "dirty" | "saving" | "saved" | "error";
 
 type WorkspaceInfo = {
@@ -121,9 +122,16 @@ const MAX_RIGHT_PANE_WIDTH = 420;
 const MIN_WRITING_PANE_WIDTH = 360;
 const WORKSPACE_RESIZER_WIDTH = 12;
 const WORKSPACE_RESIZER_COUNT = 2;
+const FONT_SIZE_SCALE: Record<FontSizeMode, number> = {
+  default: 1,
+  large: 1.12,
+  max: 1.25,
+};
 
 function App() {
   const [theme, setTheme] = useState<Theme>("light");
+  const [fontSizeMode, setFontSizeMode] = useState<FontSizeMode>("default");
+  const [fontSizeMenuOpen, setFontSizeMenuOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [workspace, setWorkspace] = useState<WorkspaceInfo | null>(null);
@@ -642,7 +650,10 @@ function App() {
   };
 
   return (
-    <div className="app-shell">
+    <div
+      className="app-shell"
+      style={{ "--ui-font-scale": FONT_SIZE_SCALE[fontSizeMode] } as React.CSSProperties}
+    >
       <header className="topbar">
         <div className="brand">
           <span className="brand-mark" />
@@ -657,6 +668,39 @@ function App() {
           <button type="button" title="模型配置" aria-label="模型配置" onClick={() => setSettingsOpen(true)}>
             <ModelConfigIcon />
           </button>
+          <div className="font-size-control">
+            <button
+              type="button"
+              title="字体大小"
+              aria-label="字体大小"
+              aria-expanded={fontSizeMenuOpen}
+              onClick={() => setFontSizeMenuOpen((open) => !open)}
+            >
+              <FontSizeIcon />
+            </button>
+            {fontSizeMenuOpen ? (
+              <div className="font-size-popover" role="menu" aria-label="字体大小">
+                <button type="button" className={fontSizeMode === "default" ? "active" : ""} onClick={() => {
+                  setFontSizeMode("default");
+                  setFontSizeMenuOpen(false);
+                }}>
+                  默认
+                </button>
+                <button type="button" className={fontSizeMode === "large" ? "active" : ""} onClick={() => {
+                  setFontSizeMode("large");
+                  setFontSizeMenuOpen(false);
+                }}>
+                  较大
+                </button>
+                <button type="button" className={fontSizeMode === "max" ? "active" : ""} onClick={() => {
+                  setFontSizeMode("max");
+                  setFontSizeMenuOpen(false);
+                }}>
+                  最大
+                </button>
+              </div>
+            ) : null}
+          </div>
           <button
             type="button"
             title={theme === "light" ? "深色主题" : "浅色主题"}
@@ -1066,6 +1110,17 @@ function ModelConfigIcon() {
       <path d="M30 24.0034V37.9999C30 41.3136 27.3137 43.9999 24 43.9999C20.6863 43.9999 18 41.3136 18 37.9999V35.9699" />
       <path d="M24 30H9.98415C6.67919 30 4 27.3137 4 24C4 20.6863 6.67919 18 9.98415 18H11.9886" />
       <path d="M24 18H37.9888C41.3087 18 44 20.6863 44 24C44 27.3137 41.3087 30 37.9888 30H36.0663" />
+    </svg>
+  );
+}
+
+function FontSizeIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 48 48">
+      <path d="M4 8H32" />
+      <path d="M28 21H44" />
+      <path d="M18 42L18 8" />
+      <path d="M36 42L36 21" />
     </svg>
   );
 }
