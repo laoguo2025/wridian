@@ -1,5 +1,5 @@
 use crate::runtime::{ensure_workspace, runtime_root, wridian_data_dir};
-use crate::workspace::{allowed_work_roots, is_supported_writing_file, works_root};
+use crate::workspace::{allowed_work_roots, is_supported_writing_file, read_active_work_root, works_root};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashSet;
@@ -200,6 +200,12 @@ fn derive_project_state_from_work_folders(
     data_dir: &Path,
     persisted: ProjectState,
 ) -> Result<ProjectState, String> {
+    if read_active_work_root(data_dir)?.is_none() {
+        return Ok(ProjectState {
+            active_project_id: None,
+            projects: Vec::new(),
+        });
+    }
     let root = works_root(data_dir)?;
     let mut projects = Vec::new();
     if root.is_dir() {

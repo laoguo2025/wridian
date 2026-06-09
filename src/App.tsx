@@ -324,7 +324,10 @@ function App() {
   const openCurrentLibraryFolder = async () => {
     setWorkspaceError("");
     const path = libraryFolderPath(libraryTab, workspace);
-    if (!path) return;
+    if (!path) {
+      await chooseLibraryRoot();
+      return;
+    }
     try {
       const { openPath } = await import("@tauri-apps/plugin-opener");
       await openPath(path);
@@ -747,14 +750,6 @@ function App() {
               </button>
             </div>
             <div className="file-toolbar" aria-label="文件操作">
-              <button
-                type="button"
-                title={libraryTab === "knowledge" ? "选择知识库文件夹" : "选择作品库文件夹"}
-                aria-label={libraryTab === "knowledge" ? "选择知识库文件夹" : "选择作品库文件夹"}
-                onClick={() => void chooseLibraryRoot()}
-              >
-                <FolderSwitchIcon />
-              </button>
               <button type="button" title="新建文件" aria-label="新建文件" onClick={() => void createFile()} disabled={!activeLibraryConfigured}>
                 <PencilIcon />
               </button>
@@ -763,10 +758,9 @@ function App() {
               </button>
               <button
                 type="button"
-                title={libraryFolderTooltip(libraryTab)}
-                aria-label={libraryFolderTooltip(libraryTab)}
+                title={activeLibraryConfigured ? libraryFolderTooltip(libraryTab) : libraryTab === "knowledge" ? "选择知识库文件夹" : "选择作品库文件夹"}
+                aria-label={activeLibraryConfigured ? libraryFolderTooltip(libraryTab) : libraryTab === "knowledge" ? "选择知识库文件夹" : "选择作品库文件夹"}
                 onClick={() => void openCurrentLibraryFolder()}
-                disabled={!activeLibraryConfigured}
               >
                 <WorkFolderIcon />
               </button>
@@ -786,14 +780,7 @@ function App() {
                   onOpenMenu={openFileContextMenu}
                 />
               ))
-            ) : (
-              <div className="file-tree-empty">
-                <p>{libraryTab === "knowledge" ? "选择知识库文件夹" : "选择作品库文件夹"}</p>
-                <button type="button" onClick={() => void chooseLibraryRoot()}>
-                  选择文件夹
-                </button>
-              </div>
-            )}
+            ) : null}
           </div>
 
           <div className="rail-bottom">
@@ -1119,18 +1106,6 @@ function WorkFolderIcon() {
       <path d="M38 38L40.1213 40.1213" />
       <path d="M28 35H29.5H31" />
       <path d="M39 35H40.5H42" />
-    </svg>
-  );
-}
-
-function FolderSwitchIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 48 48">
-      <path d="M5 9C5 7.89543 5.89543 7 7 7H19L24 13H41C42.1046 13 43 13.8954 43 15V40C43 41.1046 42.1046 42 41 42H7C5.89543 42 5 41.1046 5 40V9Z" />
-      <path d="M15 25H32" />
-      <path d="M28 21L32 25L28 29" />
-      <path d="M33 32H16" />
-      <path d="M20 28L16 32L20 36" />
     </svg>
   );
 }

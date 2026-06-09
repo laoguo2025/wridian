@@ -108,19 +108,11 @@ pub(crate) fn ensure_workspace(data_dir: &Path) -> Result<(), String> {
         "# 创作记忆\n\n## 方法\n\n## 审美\n\n## 禁区\n",
     )?;
     write_if_missing(
-        &works.join("雾城手记").join("正文.md"),
-        "# 雾城手记\n\n## 作品状态\n\n- 当前示例章节：第三章：雨夜。\n\n## 人物\n\n## 设定\n\n## 伏笔\n\n## 开放问题\n",
-    )?;
-    write_if_missing(
-        &knowledge.join("知识卡示例.md"),
-        "# 知识卡示例\n\n分类：设定\n\n这里可以放人物、地点、设定、世界观、风格、禁区或资料摘录。\n",
-    )?;
-    write_if_missing(
         &runtime.join("active-context.json"),
         &serde_json::to_string_pretty(&json!({
             "schemaVersion": 1,
-            "currentWork": "雾城手记",
-            "currentChapter": "第三章：雨夜",
+            "currentWork": null,
+            "currentChapter": null,
             "lastUserIntent": null,
             "lastAssistantJudgement": null,
             "nextStep": null

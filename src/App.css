@@ -418,30 +418,6 @@ button {
   padding: 5px 0 8px;
 }
 
-.file-tree-empty {
-  display: grid;
-  justify-items: start;
-  gap: 8px;
-  padding: 14px 10px;
-  color: var(--text-muted);
-  font-size: calc(12px * var(--ui-font-scale, 1));
-  line-height: 17px;
-}
-
-.file-tree-empty p {
-  margin: 0;
-}
-
-.file-tree-empty button {
-  min-height: 28px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-panel);
-  color: var(--text-primary);
-  padding: 0 10px;
-  font-size: calc(12px * var(--ui-font-scale, 1));
-}
-
 .file-node {
   position: relative;
   min-width: 0;
