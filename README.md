@@ -1,7 +1,13 @@
-# Tauri + React + Typescript
+# Wridian
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+Wridian 是本地优先的写作对话桌面应用，当前核心是作品文件编辑、右侧共创对话、显式记忆树和简化模型接入。
 
-## Recommended IDE Setup
+## 常用命令
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+- `npm run dev`
+- `npm run build`
+- `powershell -ExecutionPolicy Bypass -File scripts\cargo-msvc.ps1 test --manifest-path src-tauri\Cargo.toml`
+
+## 项目知识
+
+长期项目地图和过程记录在 `.workbench/` 下维护；开工先读 `.workbench/reademe.md`。

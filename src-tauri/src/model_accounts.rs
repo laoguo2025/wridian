@@ -277,13 +277,16 @@ async fn test_openai_compatible_chat(
         .await
         .map_err(|error| format!("自定义 API 连接失败：{error}"))?;
     let status = response.status();
-    let body = response.text().await.unwrap_or_default();
     if status.is_success() {
         Ok(TestCustomApiResponse {
             ok: true,
             message: "连接成功。".to_string(),
         })
     } else {
+        let body = response
+            .text()
+            .await
+            .map_err(|error| format!("自定义 API 响应读取失败：{error}"))?;
         Err(format!(
             "自定义 API 测试失败：HTTP {} {}",
             status.as_u16(),

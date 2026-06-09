@@ -204,12 +204,18 @@ button {
   color: var(--text-primary);
 }
 
-.top-actions button:hover,
+.top-actions button:not(:disabled):hover,
 .rail-link:hover,
 .new-work:hover,
-.icon-button:hover {
+.icon-button:not(:disabled):hover {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+.top-actions button:disabled,
+.icon-button:disabled {
+  cursor: default;
+  opacity: 0.45;
 }
 
 .workspace {
@@ -918,7 +924,7 @@ button {
   padding: 0 2px;
 }
 
-.prompt-model-select {
+.prompt-model-label {
   min-width: 0;
   max-width: 122px;
   height: 24px;
@@ -927,9 +933,11 @@ button {
   background: var(--bg-panel);
   color: var(--text-muted);
   font-size: calc(11px * var(--ui-font-scale, 1));
-  padding: 0 5px;
+  line-height: 22px;
+  padding: 0 6px;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .prompt-placeholder {
@@ -956,7 +964,7 @@ button {
   font-weight: 520;
 }
 
-.prompt-send:hover {
+.prompt-send:not(:disabled):hover {
   background: color-mix(in srgb, var(--text-primary), transparent 12%);
 }
 
@@ -1135,9 +1143,14 @@ button {
   font-size: calc(12px * var(--ui-font-scale, 1));
 }
 
-.small-action:hover {
+.small-action:not(:disabled):hover {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+.small-action:disabled {
+  cursor: default;
+  opacity: 0.45;
 }
 
 .chat-thread {
@@ -1259,12 +1272,13 @@ button {
   line-height: 16px;
 }
 
-.message-actions button:hover {
+.message-actions button:not(:disabled):hover {
   background: var(--bg-hover);
   color: var(--text-primary);
 }
 
 .message-actions button:disabled {
+  cursor: default;
   opacity: 0.45;
 }
 
@@ -1601,6 +1615,7 @@ button {
 }
 
 .memory-tree-editor-header button:disabled {
+  cursor: default;
   opacity: 0.45;
 }
 

@@ -133,9 +133,9 @@ export function ChatPanel({
           suggestions={promptSuggestions}
         />
         <div className="prompt-footer">
-          <select className="prompt-model-select" value={activeModelLabel || "未配置模型"} onChange={() => undefined} aria-label="模型选择">
-            <option value={activeModelLabel || "未配置模型"}>{activeModelLabel || "未配置模型"}</option>
-          </select>
+          <span className="prompt-model-label" aria-label="当前模型">
+            {activeModelLabel || "未配置模型"}
+          </span>
           <button type="submit" className="prompt-send" aria-label={pending ? "停止" : "发送"} disabled={pending || !prompt.trim()}>
             {pending ? "..." : "发送"}
           </button>
@@ -162,7 +162,7 @@ function ChatMessageView({
 
   return (
     <article className={`chat-message ${message.role}`}>
-      {message.selectedText ? (
+      {contextPills.length ? (
         <div className="message-context-row">
           {contextPills.map((pill) => (
             <span className={`message-context-pill ${pillClassName(pill)}`} key={pill.id}>

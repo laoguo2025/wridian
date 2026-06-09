@@ -130,7 +130,10 @@ async fn cocreate_with_model(
         .await
         .map_err(|error| format!("对话请求失败：{error}"))?;
     let status = response.status();
-    let body = response.text().await.unwrap_or_default();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("对话响应读取失败：{error}"))?;
     if !status.is_success() {
         return Err(format!(
             "对话请求失败：HTTP {} {}",

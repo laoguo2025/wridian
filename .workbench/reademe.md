@@ -7,3 +7,4 @@
 - 近期过程留痕：
   - `.workbench/governance/2026-06-10-high-priority-audit-fixes.md`
   - `.workbench/governance/2026-06-10-medium-priority-audit-fixes.md`
+  - `.workbench/governance/2026-06-10-low-priority-debt-fixes.md`
