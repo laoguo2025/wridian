@@ -11,6 +11,10 @@ node_modules
 dist
 dist-ssr
 *.local
+.cargo/config.toml
+.workbench/runtime/
+release/*.exe
+src-tauri/target/
 
 # Editor directories and files
 .vscode/*

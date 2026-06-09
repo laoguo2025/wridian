@@ -283,11 +283,12 @@ fn build_cocreation_prompt(
     };
     let explicit_context_block = render_context_items(&input.context_items);
 
+    let source_label = prompt_source_label(&input.source_path, &input.title);
     format!(
         "稿件类型：{}\n当前文件：{}\n来源路径：{}\n\nProject Mode：\n{}\n\n当前现场：\n{}\n\n记忆树上下文：\n{}\n\n显式上下文：\n{}\n\n用户选中的片段：\n{}\n\n稿件内容：\n{}\n\n用户这次想要：\n{}",
         draft_kind,
         input.title,
-        input.source_path,
+        source_label,
         active_project_block,
         active_context_block,
         memories_block,
@@ -301,6 +302,15 @@ fn build_cocreation_prompt(
         compact_text(&input.content, 7000),
         input.user_input.trim()
     )
+}
+
+fn prompt_source_label(source_path: &str, title: &str) -> String {
+    Path::new(source_path)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.trim().is_empty())
+        .or_else(|| (!title.trim().is_empty()).then(|| title.trim().to_string()))
+        .unwrap_or_else(|| "当前稿件".to_string())
 }
 
 fn render_context_items(items: &[DialogueContextItem]) -> String {
@@ -455,6 +465,30 @@ mod tests {
         assert!(prompt.contains("用户选中的片段：\n她推开门"));
         assert!(prompt.contains("显式上下文："));
         assert!(prompt.contains("【memory｜人物卡｜人物卡.md】\n她怕黑，但不承认。"));
+    }
+
+    #[test]
+    fn build_prompt_does_not_send_absolute_source_path() {
+        let input = CoCreateInput {
+            source_path: "D:/private/vault/works/第一章.md".to_string(),
+            title: "第一章.md".to_string(),
+            content: "她推开门。".to_string(),
+            draft_kind: Some("prose".to_string()),
+            user_input: "润色".to_string(),
+            selected_text: None,
+            context_items: Vec::new(),
+        };
+
+        let prompt = build_cocreation_prompt(&input, &[], "", "");
+
+        assert!(prompt.contains("来源路径：第一章.md"));
+        assert!(!prompt.contains("D:/private"));
+    }
+
+    #[test]
+    fn prompt_source_label_falls_back_to_title() {
+        assert_eq!(prompt_source_label("", "未保存稿件"), "未保存稿件");
+        assert_eq!(prompt_source_label("", ""), "当前稿件");
     }
 
     #[test]

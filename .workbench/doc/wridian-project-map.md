@@ -28,7 +28,7 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 - `src-tauri/src/memory.rs`：文件化记忆树、作用域记忆和知识卡读取。
   - `src-tauri/src/cocreation.rs`：对话请求上下文组装和模型回复。
 - 本地运行：`npm run dev`
-- Rust 检查：普通 PowerShell 中可直接运行 `cargo check --manifest-path src-tauri\Cargo.toml`；项目通过 `.cargo/config.toml` 注入本机 MSVC Build Tools 路径，避免每次手工执行 `vcvars64.bat`。
+- Rust 检查：普通 PowerShell 中优先运行 `powershell -ExecutionPolicy Bypass -File scripts\cargo-msvc.ps1 check --manifest-path src-tauri\Cargo.toml`；脚本会定位本机 Visual Studio Build Tools 并进入 MSVC 环境，仓库不再提交 `.cargo/config.toml` 这类本机绝对路径配置。
 
 ## 当前边界
 

@@ -1,9 +1,14 @@
 use crate::runtime::{ensure_workspace, model_accounts_path, wridian_data_dir};
+use keyring_core::{set_default_store, Entry, Error as KeyringError};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
+use windows_native_keyring_store::Store;
+
+const KEYRING_SERVICE: &str = "ai.wridian.app";
+const CUSTOM_API_KEYRING_USER: &str = "custom-api-key";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,6 +40,17 @@ pub(crate) struct StoredCustomApiSettings {
     pub(crate) base_url: String,
     pub(crate) api_key: String,
     pub(crate) model: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredCustomApiSettingsFile {
+    base_url: String,
+    model: String,
+    #[serde(default)]
+    key_stored: bool,
+    #[serde(default)]
+    api_key: Option<String>,
 }
 
 #[tauri::command]
@@ -94,9 +110,7 @@ fn normalize_custom_api_settings(
             .unwrap_or_default();
     }
     let model = input.model.trim().to_string();
-    if !(base_url.starts_with("http://") || base_url.starts_with("https://")) {
-        return Err("Base URL 必须是 http 或 https 地址。".to_string());
-    }
+    validate_base_url(&base_url)?;
     if api_key.is_empty() {
         return Err("API Key 不能为空。".to_string());
     }
@@ -124,14 +138,54 @@ pub(crate) fn read_custom_api_settings(
     let Some(custom_api) = value.get("customApi") else {
         return Ok(None);
     };
-    serde_json::from_value(custom_api.clone())
-        .map(Some)
-        .map_err(|error| format!("自定义 API 配置格式损坏：{error}"))
+    let stored: StoredCustomApiSettingsFile = serde_json::from_value(custom_api.clone())
+        .map_err(|error| format!("自定义 API 配置格式损坏：{error}"))?;
+    let api_key = if let Some(legacy_key) = stored.api_key.as_deref().map(str::trim).filter(|key| !key.is_empty()) {
+        store_api_key(legacy_key)?;
+        write_custom_api_settings_file(
+            data_dir,
+            &StoredCustomApiSettingsFile {
+                base_url: stored.base_url.clone(),
+                model: stored.model.clone(),
+                key_stored: true,
+                api_key: None,
+            },
+        )?;
+        legacy_key.to_string()
+    } else if stored.key_stored {
+        read_api_key()?
+    } else {
+        String::new()
+    };
+    if api_key.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(StoredCustomApiSettings {
+        base_url: stored.base_url,
+        api_key,
+        model: stored.model,
+    }))
 }
 
 fn write_custom_api_settings(
     data_dir: &Path,
     settings: &StoredCustomApiSettings,
+) -> Result<(), String> {
+    store_api_key(&settings.api_key)?;
+    write_custom_api_settings_file(
+        data_dir,
+        &StoredCustomApiSettingsFile {
+            base_url: settings.base_url.clone(),
+            model: settings.model.clone(),
+            key_stored: true,
+            api_key: None,
+        },
+    )
+}
+
+fn write_custom_api_settings_file(
+    data_dir: &Path,
+    settings: &StoredCustomApiSettingsFile,
 ) -> Result<(), String> {
     let content = serde_json::to_string_pretty(&json!({
         "schemaVersion": 1,
@@ -140,6 +194,47 @@ fn write_custom_api_settings(
     .map_err(|error| error.to_string())?;
     fs::write(model_accounts_path(data_dir), content)
         .map_err(|error| format!("模型账户配置写入失败：{error}"))
+}
+
+fn api_key_entry() -> Result<Entry, String> {
+    set_default_store(Store::new().map_err(|error| format!("系统凭据存储初始化失败：{error}"))?);
+    Entry::new(KEYRING_SERVICE, CUSTOM_API_KEYRING_USER)
+        .map_err(|error| format!("系统凭据项创建失败：{error}"))
+}
+
+fn store_api_key(api_key: &str) -> Result<(), String> {
+    api_key_entry()?
+        .set_password(api_key)
+        .map_err(|error| format!("API Key 写入系统凭据失败：{error}"))
+}
+
+fn read_api_key() -> Result<String, String> {
+    match api_key_entry()?.get_password() {
+        Ok(api_key) => Ok(api_key),
+        Err(KeyringError::NoEntry) => Ok(String::new()),
+        Err(error) => Err(format!("API Key 读取系统凭据失败：{error}")),
+    }
+}
+
+fn validate_base_url(base_url: &str) -> Result<(), String> {
+    if base_url.starts_with("https://") {
+        return Ok(());
+    }
+    if let Some(authority) = base_url.strip_prefix("http://") {
+        let authority = authority.split('/').next().unwrap_or("");
+        let host = if authority.starts_with('[') {
+            authority
+                .find(']')
+                .map(|end| &authority[..=end])
+                .unwrap_or(authority)
+        } else {
+            authority.split(':').next().unwrap_or("")
+        };
+        if matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]") {
+            return Ok(());
+        }
+    }
+    Err("Base URL 必须使用 https；只有 localhost/127.0.0.1 允许 http 本地调试。".to_string())
 }
 
 fn mask_api_key(api_key: &str) -> String {
@@ -194,5 +289,19 @@ async fn test_openai_compatible_chat(
             status.as_u16(),
             body.chars().take(240).collect::<String>()
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn custom_api_base_url_requires_https_except_localhost() {
+        assert!(validate_base_url("https://api.example.com/v1").is_ok());
+        assert!(validate_base_url("http://localhost:8080/v1").is_ok());
+        assert!(validate_base_url("http://127.0.0.1:8080/v1").is_ok());
+        assert!(validate_base_url("http://[::1]:8080/v1").is_ok());
+        assert!(validate_base_url("http://api.example.com/v1").is_err());
     }
 }

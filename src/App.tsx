@@ -153,6 +153,7 @@ function App() {
   const [projectError, setProjectError] = useState("");
   const [hasDraftSelection, setHasDraftSelection] = useState(false);
   const [selectedPath, setSelectedPath] = useState("");
+  const [loadingPath, setLoadingPath] = useState("");
   const [editorTitle, setEditorTitle] = useState("");
   const [editorContent, setEditorContent] = useState("");
   const [lastSavedContent, setLastSavedContent] = useState("");
@@ -264,26 +265,30 @@ function App() {
     ? Boolean(workspace?.knowledgeRootConfigured)
     : Boolean(workspace?.workRootConfigured);
   const isRealFile = Boolean(selectedPath);
-  const dirty = isRealFile && editorContent !== lastSavedContent;
+  const dirty = isRealFile && !loadingPath && editorContent !== lastSavedContent;
 
   const saveCurrentFile = useCallback(async () => {
-    if (!isRealFile || !dirty) return;
+    if (!isRealFile || loadingPath || !dirty) return;
+    const pathToSave = selectedPath;
+    const contentToSave = editorContent;
     setSaveStatus("saving");
     setSaveError("");
     try {
       await invoke<SaveFileResponse>("wridian_save_file", {
-        input: { path: selectedPath, content: editorContent },
+        input: { path: pathToSave, content: contentToSave },
       });
-      setLastSavedContent(editorContent);
+      if (selectedPath === pathToSave && editorContent === contentToSave) {
+        setLastSavedContent(contentToSave);
+      }
       setSaveStatus("saved");
     } catch (error) {
       setSaveStatus("error");
       setSaveError(error instanceof Error ? error.message : String(error));
     }
-  }, [dirty, editorContent, isRealFile, selectedPath]);
+  }, [dirty, editorContent, isRealFile, loadingPath, selectedPath]);
 
   useEffect(() => {
-    if (!isRealFile) return;
+    if (!isRealFile || loadingPath) return;
     if (!dirty) {
       setSaveStatus("saved");
       return;
@@ -293,7 +298,7 @@ function App() {
       void saveCurrentFile();
     }, 1000);
     return () => window.clearTimeout(timer);
-  }, [dirty, isRealFile, saveCurrentFile]);
+  }, [dirty, isRealFile, loadingPath, saveCurrentFile]);
 
   useEffect(() => {
     if (!selectedPath || !editorContent.trim()) {
@@ -439,16 +444,18 @@ function App() {
 
   const openFile = async (node: WorkFileNode) => {
     if (node.folder) return;
-    setSelectedPath(node.path);
+    const requestedPath = node.path;
+    setLoadingPath(requestedPath);
     setEditorTitle(node.name);
     setSaveError("");
     setSaveStatus("idle");
     try {
-      const response = await invoke<OpenFileResponse>("wridian_open_file", { input: { path: node.path } });
+      const response = await invoke<OpenFileResponse>("wridian_open_file", { input: { path: requestedPath } });
       setSelectedPath(response.path);
       setEditorTitle(response.name);
       setEditorContent(response.content);
       setLastSavedContent(response.content);
+      setPromptFileContentCache((current) => ({ ...current, [response.path]: response.content }));
       draftSelectionRef.current = { start: response.content.length, end: response.content.length };
       setHasDraftSelection(false);
       setPromptPills([]);
@@ -463,6 +470,8 @@ function App() {
     } catch (error) {
       setSaveStatus("error");
       setSaveError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoadingPath((current) => (current === requestedPath ? "" : current));
     }
   };
 
