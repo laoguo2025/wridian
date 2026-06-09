@@ -590,16 +590,21 @@ function App() {
           <span>Wridian</span>
         </div>
         <nav className="top-actions" aria-label="Wridian actions">
-          <button type="button" onClick={() => {
+          <button type="button" title="记忆树" aria-label="记忆树" onClick={() => {
             setMemoryOpen(true);
           }}>
-            记忆树
+            <MemoryTreeIcon />
           </button>
           <button type="button" onClick={() => setSettingsOpen(true)}>
             模型
           </button>
-          <button type="button" onClick={() => setTheme(theme === "light" ? "dark" : "light")}>
-            {theme === "light" ? "深色" : "浅色"}
+          <button
+            type="button"
+            title={theme === "light" ? "深色主题" : "浅色主题"}
+            aria-label={theme === "light" ? "深色主题" : "浅色主题"}
+            onClick={() => setTheme(theme === "light" ? "dark" : "light")}
+          >
+            {theme === "light" ? <DarkThemeIcon /> : <LightThemeIcon />}
           </button>
         </nav>
       </header>
@@ -951,6 +956,41 @@ function WorkFolderIcon() {
       <path d="M38 38L40.1213 40.1213" />
       <path d="M28 35H29.5H31" />
       <path d="M39 35H40.5H42" />
+    </svg>
+  );
+}
+
+function MemoryTreeIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 48 48">
+      <path d="M13.0448 14C13.5501 8.3935 18.262 4 24 4C29.738 4 34.4499 8.3935 34.9552 14H35C39.9706 14 44 18.0294 44 23C44 27.9706 39.9706 32 35 32H13C8.02944 32 4 27.9706 4 23C4 18.0294 8.02944 14 13 14H13.0448Z" />
+      <path d="M24 28L29 23" />
+      <path d="M24 25L18 19" />
+      <path d="M24 44V18" />
+    </svg>
+  );
+}
+
+function LightThemeIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 48 48">
+      <path d="M24 37C31.1797 37 37 31.1797 37 24C37 16.8203 31.1797 11 24 11C16.8203 11 11 16.8203 11 24C11 31.1797 16.8203 37 24 37Z" />
+      <circle cx="24" cy="3.5" r="2.5" />
+      <circle cx="38.5" cy="9.5" r="2.5" />
+      <circle cx="44.5" cy="24" r="2.5" />
+      <circle cx="38.5" cy="38.5" r="2.5" />
+      <circle cx="24" cy="44.5" r="2.5" />
+      <circle cx="9.5" cy="38.5" r="2.5" />
+      <circle cx="3.5" cy="24" r="2.5" />
+      <circle cx="9.5" cy="9.5" r="2.5" />
+    </svg>
+  );
+}
+
+function DarkThemeIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 48 48">
+      <path d="M28.0527 4.41085C22.5828 5.83695 18.5455 10.8106 18.5455 16.7273C18.5455 23.7564 24.2436 29.4545 31.2727 29.4545C37.1894 29.4545 42.1631 25.4172 43.5891 19.9473C43.8585 21.256 44 22.6115 44 24C44 35.0457 35.0457 44 24 44C12.9543 44 4 35.0457 4 24C4 12.9543 12.9543 4 24 4C25.3885 4 26.744 4.14149 28.0527 4.41085Z" />
     </svg>
   );
 }
