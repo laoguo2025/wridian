@@ -1324,7 +1324,7 @@ button {
 .memory-sense-card {
   position: absolute;
   left: 0;
-  top: 96px;
+  top: 36px;
   display: grid;
   justify-items: center;
   gap: 1px;
@@ -1359,15 +1359,15 @@ button {
 }
 
 .memory-trunk-card.totem {
-  top: 374px;
+  top: 180px;
 }
 
 .memory-trunk-card.root {
-  top: 520px;
+  top: 509px;
 }
 
 .memory-trunk-card.trunk {
-  top: 448px;
+  top: 346px;
 }
 
 .memory-trunk-card strong,
