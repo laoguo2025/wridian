@@ -1328,7 +1328,7 @@ button {
   display: grid;
   justify-items: center;
   gap: 1px;
-  width: 96px;
+  width: 116px;
   min-height: 34px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -1346,7 +1346,7 @@ button {
   display: grid;
   justify-items: center;
   gap: 1px;
-  width: 92px;
+  width: 116px;
   min-height: 32px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -1415,35 +1415,69 @@ button {
 }
 
 .memory-branch-arm {
-  --branch-y: calc(190px + var(--branch-index) * 92px);
   position: absolute;
-  top: var(--branch-y);
   z-index: 2;
   display: grid;
   align-items: center;
-  width: 326px;
-  min-height: 64px;
+  width: 250px;
+  min-height: 40px;
 }
 
 .memory-branch-arm.left {
-  left: calc(50% - 388px);
   grid-template-columns: 132px 1fr;
 }
 
 .memory-branch-arm.right {
-  right: calc(50% - 388px);
   grid-template-columns: 1fr 132px;
 }
 
-.memory-branch-arm {
-  transform: translateY(var(--branch-offset));
+.memory-branch-arm.branch-user {
+  left: calc(50% - 390px);
+  top: 445px;
+}
+
+.memory-branch-arm.branch-relationship {
+  left: calc(50% - 422px);
+  top: 314px;
+}
+
+.memory-branch-arm.branch-journey {
+  right: calc(50% - 240px);
+  top: 445px;
+}
+
+.memory-branch-arm.branch-drama {
+  left: calc(50% - 390px);
+  top: 532px;
+}
+
+.memory-branch-arm.branch-novel {
+  right: calc(50% - 330px);
+  top: 186px;
+}
+
+.memory-branch-arm.branch-knowledge {
+  left: calc(50% - 358px);
+  top: 242px;
+}
+
+.memory-branch-arm.branch-skill {
+  right: calc(50% - 360px);
+  top: 316px;
+}
+
+.memory-branch-arm.branch-awareness {
+  right: calc(50% - 240px);
+  top: 242px;
 }
 
 .memory-branch-card {
   position: relative;
   z-index: 2;
   display: grid;
+  justify-items: center;
   gap: 1px;
+  width: 116px;
   min-height: 38px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -1451,7 +1485,7 @@ button {
   color: var(--text-primary);
   padding: 5px 8px;
   box-shadow: 0 6px 14px color-mix(in srgb, var(--text-primary), transparent 95%);
-  text-align: left;
+  text-align: center;
 }
 
 .memory-branch-arm.left .memory-branch-card {

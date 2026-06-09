@@ -1428,14 +1428,14 @@ type MemoryBranchView = {
 };
 
 const MEMORY_BRANCH_LAYOUT = [
-  { key: "user", label: "USER", labelCn: "用户画像" },
-  { key: "relationship", label: "RELATIONSHIP", labelCn: "关系准则" },
-  { key: "journey", label: "JOURNEY", labelCn: "共创旅程" },
-  { key: "drama", label: "DRAMA", labelCn: "剧本记忆" },
-  { key: "novel", label: "NOVEL", labelCn: "小说记忆" },
-  { key: "knowledge", label: "KNOWLEDGE", labelCn: "知识生产" },
-  { key: "skill", label: "SKILL", labelCn: "技能方法" },
-  { key: "awareness", label: "AWARENESS", labelCn: "反思机制" },
+  { key: "user", label: "USER.md", labelCn: "用户画像" },
+  { key: "relationship", label: "RELATIONSHIP.md", labelCn: "关系准则" },
+  { key: "journey", label: "JOURNEY.md", labelCn: "共创旅程" },
+  { key: "drama", label: "DRAMA.md", labelCn: "剧本记忆" },
+  { key: "novel", label: "NOVEL.md", labelCn: "小说记忆" },
+  { key: "knowledge", label: "KNOWLEDGE.md", labelCn: "知识生产" },
+  { key: "skill", label: "SKILL.md", labelCn: "技能方法" },
+  { key: "awareness", label: "AWARENESS.md", labelCn: "复盘反思" },
 ] as const;
 
 function buildMemoryTreeViewModel(roots: MemoryTreeNode[]) {
@@ -1499,7 +1499,6 @@ function branchLabel(branch: string) {
 
 function MemoryBranchArm({
   branch,
-  index,
   onSelect,
   selectedPath,
 }: {
@@ -1508,13 +1507,10 @@ function MemoryBranchArm({
   onSelect: (node: MemoryTreeNode) => void;
   selectedPath: string;
 }) {
-  const side = index < 4 ? "left" : "right";
-  const sideIndex = index < 4 ? index : index - 4;
+  const side = ["user", "relationship", "drama", "knowledge"].includes(branch.key) ? "left" : "right";
   const active = branch.rule?.path === selectedPath || branch.leaves.some((leaf) => leaf.path === selectedPath);
-  const verticalOffset = sideIndex % 2 === 0 ? "-8px" : "10px";
-  const branchStyle = { "--branch-index": sideIndex, "--branch-offset": verticalOffset } as React.CSSProperties;
   return (
-    <div className={`memory-branch-arm ${side} ${active ? "active" : ""}`} style={branchStyle}>
+    <div className={`memory-branch-arm ${side} branch-${branch.key} ${active ? "active" : ""}`}>
       <button
         type="button"
         className={`memory-branch-card ${active ? "active" : ""}`}
