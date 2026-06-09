@@ -1323,8 +1323,8 @@ button {
 
 .memory-sense-card {
   position: absolute;
-  left: 0;
-  top: 36px;
+  left: calc(50% + 215px);
+  top: 424px;
   display: grid;
   justify-items: center;
   gap: 1px;
@@ -1417,58 +1417,48 @@ button {
 .memory-branch-arm {
   position: absolute;
   z-index: 2;
-  display: grid;
-  align-items: center;
-  width: 250px;
+  width: 116px;
   min-height: 40px;
 }
 
-.memory-branch-arm.left {
-  grid-template-columns: 132px 1fr;
-}
-
-.memory-branch-arm.right {
-  grid-template-columns: 1fr 132px;
-}
-
 .memory-branch-arm.branch-user {
-  left: calc(50% - 390px);
-  top: 445px;
+  left: calc(50% - 276px);
+  top: 424px;
 }
 
 .memory-branch-arm.branch-relationship {
-  left: calc(50% - 422px);
-  top: 314px;
+  left: calc(50% - 310px);
+  top: 337px;
 }
 
 .memory-branch-arm.branch-journey {
-  right: calc(50% - 240px);
-  top: 445px;
+  left: calc(50% + 194px);
+  top: 337px;
 }
 
 .memory-branch-arm.branch-drama {
-  left: calc(50% - 390px);
-  top: 532px;
+  left: calc(50% - 300px);
+  top: 245px;
 }
 
 .memory-branch-arm.branch-novel {
-  right: calc(50% - 330px);
-  top: 186px;
+  left: calc(50% + 184px);
+  top: 245px;
 }
 
 .memory-branch-arm.branch-knowledge {
-  left: calc(50% - 358px);
-  top: 242px;
+  left: calc(50% - 253px);
+  top: 164px;
 }
 
 .memory-branch-arm.branch-skill {
-  right: calc(50% - 360px);
-  top: 316px;
+  left: calc(50% + 135px);
+  top: 164px;
 }
 
 .memory-branch-arm.branch-awareness {
-  right: calc(50% - 240px);
-  top: 242px;
+  left: calc(50% - 58px);
+  top: 33px;
 }
 
 .memory-branch-card {
@@ -1486,14 +1476,6 @@ button {
   padding: 5px 8px;
   box-shadow: 0 6px 14px color-mix(in srgb, var(--text-primary), transparent 95%);
   text-align: center;
-}
-
-.memory-branch-arm.left .memory-branch-card {
-  grid-column: 1;
-}
-
-.memory-branch-arm.right .memory-branch-card {
-  grid-column: 2;
 }
 
 .memory-branch-card strong {
@@ -1515,90 +1497,6 @@ button {
 .memory-branch-arm.active .memory-branch-card {
   border-color: color-mix(in srgb, var(--accent), transparent 20%);
   background: color-mix(in srgb, var(--accent), transparent 88%);
-}
-
-.memory-leaf-cluster {
-  position: relative;
-  z-index: 2;
-  display: grid;
-  gap: 3px;
-}
-
-.memory-branch-arm.left .memory-leaf-cluster {
-  grid-column: 2;
-  justify-items: start;
-}
-
-.memory-branch-arm.right .memory-leaf-cluster {
-  grid-column: 1;
-  justify-items: end;
-}
-
-.memory-leaf-card,
-.memory-leaf-placeholder {
-  display: inline-grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 5px;
-  width: 118px;
-  min-height: 27px;
-  border: 1px solid color-mix(in srgb, var(--border), transparent 22%);
-  border-radius: 5px;
-  background: color-mix(in srgb, var(--bg-panel), transparent 10%);
-  color: var(--text-muted);
-  padding: 3px 5px;
-  box-shadow: 0 4px 10px color-mix(in srgb, var(--text-primary), transparent 97%);
-  text-align: left;
-}
-
-.memory-leaf-card span,
-.memory-leaf-placeholder span {
-  display: inline-grid;
-  place-items: center;
-  width: 20px;
-  height: 18px;
-  border-radius: 3px;
-  background: color-mix(in srgb, var(--accent), transparent 86%);
-  color: var(--text-muted);
-  font-size: calc(8px * var(--ui-font-scale, 1));
-  font-weight: 700;
-}
-
-.memory-leaf-card strong,
-.memory-leaf-placeholder strong {
-  font-size: calc(9px * var(--ui-font-scale, 1));
-  font-weight: 500;
-  line-height: 11px;
-}
-
-.memory-leaf-card small,
-.memory-leaf-placeholder small {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-muted);
-  font-size: calc(8px * var(--ui-font-scale, 1));
-  line-height: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.memory-leaf-card:hover,
-.memory-leaf-card.active {
-  color: #fff;
-  color: var(--text-primary);
-}
-
-.memory-leaf-placeholder {
-  background: transparent;
-  opacity: 0.5;
-}
-
-.memory-leaf-placeholder span::before {
-  content: "";
-  width: 7px;
-  height: 7px;
-  border-radius: 999px 999px 999px 2px;
-  background: color-mix(in srgb, var(--accent), transparent 24%);
 }
 
 .memory-node-detail {

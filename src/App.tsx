@@ -1329,16 +1329,14 @@ function MemoryDrawer({
           <div className="memory-forest" aria-label="记忆树">
             <img className="memory-tree-base" src={memoryTreeBase} alt="" aria-hidden="true" />
             <div className="memory-tree-roots">
-              {viewModel.sense ? (
-                <button
-                  type="button"
-                  className={`memory-sense-card ${viewModel.sense.path === selectedPath ? "active" : ""}`}
-                  onClick={() => viewModel.sense?.path ? setSelectedPath(viewModel.sense.path) : undefined}
-                >
-                  <strong>自我意识</strong>
-                  <small>SENSE</small>
-                </button>
-              ) : null}
+              <button
+                type="button"
+                className={`memory-sense-card ${viewModel.sense?.path === selectedPath ? "active" : ""}`}
+                onClick={() => viewModel.sense?.path ? setSelectedPath(viewModel.sense.path) : undefined}
+              >
+                <strong>自我意识</strong>
+                <small>SENSE.md</small>
+              </button>
               {viewModel.trunk.map((node) => (
                 <button
                   type="button"
@@ -1419,12 +1417,10 @@ function MemoryDrawer({
 }
 
 type MemoryBranchView = {
-  branchNode?: MemoryTreeNode;
   key: string;
   labelCn: string;
   label: string;
   rule?: MemoryTreeNode;
-  leaves: MemoryTreeNode[];
 };
 
 const MEMORY_BRANCH_LAYOUT = [
@@ -1441,35 +1437,18 @@ const MEMORY_BRANCH_LAYOUT = [
 function buildMemoryTreeViewModel(roots: MemoryTreeNode[]) {
   const rootLayer = roots.find((node) => node.id === "totem");
   const branchLayer = roots.find((node) => node.id === "branches");
-  const leavesLayer = roots.find((node) => node.id === "leaves");
   const trunk = rootLayer?.children ?? [];
   const sense = branchLayer?.children.find((node) => node.label.toLowerCase().startsWith("sense"));
   const branches = MEMORY_BRANCH_LAYOUT.map(({ key, label, labelCn }) => {
     const rule = branchLayer?.children.find((node) => node.label.toLowerCase().startsWith(key));
-    const leafFolder = leavesLayer?.children.find((node) => node.label.toLowerCase() === key);
     return {
-      branchNode: leafFolder,
       key,
       label,
       labelCn,
       rule,
-      leaves: collectLeafFiles(leafFolder).slice(0, 4),
     };
   });
   return { branches, sense, trunk };
-}
-
-function collectLeafFiles(node?: MemoryTreeNode): MemoryTreeNode[] {
-  if (!node) return [];
-  const files: MemoryTreeNode[] = [];
-  const visit = (current: MemoryTreeNode) => {
-    if (current.path && current.content != null) {
-      files.push(current);
-    }
-    current.children.forEach(visit);
-  };
-  node.children.forEach(visit);
-  return files;
 }
 
 function branchLabel(branch: string) {
@@ -1508,7 +1487,7 @@ function MemoryBranchArm({
   selectedPath: string;
 }) {
   const side = ["user", "relationship", "drama", "knowledge"].includes(branch.key) ? "left" : "right";
-  const active = branch.rule?.path === selectedPath || branch.leaves.some((leaf) => leaf.path === selectedPath);
+  const active = branch.rule?.path === selectedPath;
   return (
     <div className={`memory-branch-arm ${side} branch-${branch.key} ${active ? "active" : ""}`}>
       <button
@@ -1519,26 +1498,6 @@ function MemoryBranchArm({
         <strong>{branch.labelCn}</strong>
         <small>{branch.label}</small>
       </button>
-      <div className="memory-leaf-cluster">
-        {branch.leaves.length ? branch.leaves.map((leaf) => (
-          <button
-            type="button"
-            key={leaf.id}
-            className={`memory-leaf-card ${leaf.path === selectedPath ? "active" : ""}`}
-            onClick={() => onSelect(leaf)}
-          >
-            <span>.md</span>
-            <strong>{leafTitleEn(leaf.label)}</strong>
-            <small>{leafTitleCn(leaf)}</small>
-          </button>
-        )) : (
-          <div className="memory-leaf-placeholder">
-            <span />
-            <strong>等待长叶</strong>
-            <small>empty</small>
-          </div>
-        )}
-      </div>
     </div>
   );
 }
@@ -1555,17 +1514,6 @@ function trunkNodeClass(label: string) {
   if (label === "AGENTS.md") return "root";
   if (label === "MEMORY.md") return "trunk";
   return "file";
-}
-
-function leafTitleEn(label: string) {
-  return label.replace(/\.md$/i, "");
-}
-
-function leafTitleCn(node: MemoryTreeNode) {
-  if (node.description && node.description !== "Markdown 记忆文件") {
-    return node.description;
-  }
-  return "记忆叶";
 }
 
 function findMemoryNodeByPath(nodes: MemoryTreeNode[], path: string): MemoryTreeNode | undefined {
