@@ -1294,6 +1294,7 @@ function MemoryDrawer({
 }) {
   const viewModel = useMemo(() => buildMemoryTreeViewModel(memoryTree.roots), [memoryTree.roots]);
   const [selectedPath, setSelectedPath] = useState("");
+  const [editorSide, setEditorSide] = useState<"left" | "right">("right");
   const selectedNode = useMemo(() => findMemoryNodeByPath(memoryTree.roots, selectedPath), [memoryTree.roots, selectedPath]);
   const [draft, setDraft] = useState(selectedNode?.content ?? "");
 
@@ -1301,13 +1302,36 @@ function MemoryDrawer({
     setDraft(selectedNode?.content ?? "");
   }, [selectedNode?.content, selectedNode?.path]);
 
-  const save = () => {
+  const selectNode = (node: MemoryTreeNode | undefined, side: "left" | "right") => {
+    if (!node?.path || node.content == null) return;
+    if (selectedNode?.path && draft !== (selectedNode.content ?? "")) {
+      onSaveFile(selectedNode.path, draft);
+    }
+    setEditorSide(side);
+    setSelectedPath(node.path);
+  };
+
+  const save = (closeAfterSave = false) => {
+    if (selectedNode?.path && draft !== (selectedNode.content ?? "")) {
+      onSaveFile(selectedNode.path, draft);
+    }
+    if (closeAfterSave) {
+      setSelectedPath("");
+    }
+  };
+
+  const closeEditorFromBlank = () => {
     if (!selectedNode?.path) return;
-    onSaveFile(selectedNode.path, draft);
+    save(true);
+  };
+
+  const closeDrawer = () => {
+    save(false);
+    onClose();
   };
 
   return (
-    <div className="drawer-backdrop" onMouseDown={onClose} role="presentation">
+    <div className="drawer-backdrop" onMouseDown={() => closeDrawer()} role="presentation">
       <aside className="memory-drawer memory-tree-drawer" role="dialog" aria-modal="true" aria-label="记忆树" onMouseDown={(event) => event.stopPropagation()}>
         <div className="drawer-header">
           <div>
@@ -1317,7 +1341,7 @@ function MemoryDrawer({
             <button type="button" className="small-action" onClick={onOpenMemoryFolder}>
               记忆文件夹
             </button>
-            <button type="button" className="icon-button" onClick={onClose} aria-label="关闭">
+            <button type="button" className="icon-button" onClick={() => closeDrawer()} aria-label="关闭">
               ×
             </button>
           </div>
@@ -1326,13 +1350,14 @@ function MemoryDrawer({
         {memoryError ? <div className="rail-error">{memoryError}</div> : null}
 
         <div className="memory-forest-shell" aria-label="记忆树仿真视图">
-          <div className="memory-forest" aria-label="记忆树">
+          <div className="memory-forest" aria-label="记忆树" onMouseDown={() => closeEditorFromBlank()}>
             <img className="memory-tree-base" src={memoryTreeBase} alt="" aria-hidden="true" />
             <div className="memory-tree-roots">
               <button
                 type="button"
                 className={`memory-sense-card ${viewModel.sense?.path === selectedPath ? "active" : ""}`}
-                onClick={() => viewModel.sense?.path ? setSelectedPath(viewModel.sense.path) : undefined}
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={() => selectNode(viewModel.sense, "left")}
               >
                 <strong>自我意识</strong>
                 <small>SENSE.md</small>
@@ -1342,7 +1367,8 @@ function MemoryDrawer({
                   type="button"
                   key={node.id}
                   className={`memory-trunk-card ${trunkNodeClass(node.label)} ${node.path === selectedPath ? "active" : ""}`}
-                  onClick={() => node.path ? setSelectedPath(node.path) : undefined}
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={() => selectNode(node, "right")}
                 >
                   <strong>{trunkTitleCn(node.label)}</strong>
                   <small>{node.label}</small>
@@ -1355,11 +1381,11 @@ function MemoryDrawer({
                 branch={branch}
                 index={index}
                 selectedPath={selectedNode?.path ?? ""}
-                onSelect={(node) => node.path && node.content != null ? setSelectedPath(node.path) : undefined}
+                onSelect={(node, side) => selectNode(node, side)}
               />
             ))}
             {candidate ? (
-              <section className="memory-node-detail candidate-panel">
+              <section className="memory-node-detail editor-right candidate-panel" onMouseDown={(event) => event.stopPropagation()}>
                 <div className="candidate-leaf-orbit" aria-hidden="true">
                   <span />
                 </div>
@@ -1390,13 +1416,13 @@ function MemoryDrawer({
                 </div>
               </section>
             ) : selectedNode?.path ? (
-              <section className="memory-node-detail">
+              <section className={`memory-node-detail editor-${editorSide}`} onMouseDown={(event) => event.stopPropagation()}>
                 <div className="memory-tree-editor-header">
                   <div>
                     <h2>{selectedNode.label}</h2>
                     <p>{selectedNode.description}</p>
                   </div>
-                  <button type="button" onClick={save} disabled={saving || draft === (selectedNode.content ?? "")}>
+                  <button type="button" onClick={() => save()} disabled={saving || draft === (selectedNode.content ?? "")}>
                     {saving ? "保存中" : "保存"}
                   </button>
                 </div>
@@ -1483,17 +1509,19 @@ function MemoryBranchArm({
 }: {
   branch: MemoryBranchView;
   index: number;
-  onSelect: (node: MemoryTreeNode) => void;
+  onSelect: (node: MemoryTreeNode, side: "left" | "right") => void;
   selectedPath: string;
 }) {
   const side = ["user", "relationship", "drama", "knowledge"].includes(branch.key) ? "left" : "right";
+  const editorSide = ["journey", "novel", "skill", "sense"].includes(branch.key) ? "left" : "right";
   const active = branch.rule?.path === selectedPath;
   return (
     <div className={`memory-branch-arm ${side} branch-${branch.key} ${active ? "active" : ""}`}>
       <button
         type="button"
         className={`memory-branch-card ${active ? "active" : ""}`}
-        onClick={() => branch.rule ? onSelect(branch.rule) : undefined}
+        onMouseDown={(event) => event.stopPropagation()}
+        onClick={() => branch.rule ? onSelect(branch.rule, editorSide) : undefined}
       >
         <strong>{branch.labelCn}</strong>
         <small>{branch.label}</small>

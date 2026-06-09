@@ -1500,20 +1500,27 @@ button {
 }
 
 .memory-node-detail {
-  position: sticky;
-  left: 100%;
-  top: 18px;
+  position: absolute;
+  top: 28px;
+  bottom: 34px;
   z-index: 4;
   display: grid;
   grid-template-rows: auto minmax(120px, 1fr);
-  width: min(330px, 36vw);
-  max-height: calc(100% - 36px);
-  margin-left: auto;
+  width: 330px;
+  min-height: 0;
   border: 1px solid color-mix(in srgb, var(--border), transparent 10%);
   border-radius: 8px;
   background: color-mix(in srgb, var(--bg-panel), transparent 2%);
   box-shadow: var(--shadow-pop);
   overflow: hidden;
+}
+
+.memory-node-detail.editor-right {
+  right: 18px;
+}
+
+.memory-node-detail.editor-left {
+  left: 18px;
 }
 
 .memory-tree-editor {
