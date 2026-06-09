@@ -1793,8 +1793,8 @@ function KnowledgeGraphDrawer({
           {!knowledgeRootConfigured ? (
             <div className="knowledge-graph-empty">先选择知识库文件夹</div>
           ) : graph.nodes.length ? (
-            <>
-              <svg className="knowledge-graph-edges" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+            <svg className="knowledge-graph-canvas" viewBox="0 0 100 100" role="img" aria-label="知识库动态图谱">
+              <g className="graph-drift graph-drift-slow">
                 {layout.edges.map((edge) => (
                   <line
                     key={`${edge.source.id}-${edge.target.id}-${edge.kind}`}
@@ -1805,28 +1805,32 @@ function KnowledgeGraphDrawer({
                     className={`graph-edge edge-${edge.kind}`}
                   />
                 ))}
-              </svg>
-              <div className="knowledge-graph-nodes">
                 {layout.nodes.map((node) => (
-                  <button
-                    type="button"
-                    key={node.id}
-                    className={`graph-node node-${node.kind}`}
-                    style={{
-                      "--graph-x": `${node.x}%`,
-                      "--graph-y": `${node.y}%`,
-                      "--graph-size": `${node.radius}px`,
-                      "--graph-delay": `${node.delay}s`,
-                    } as React.CSSProperties}
-                    title={node.path ?? node.label}
-                    aria-label={`${node.kind === "folder" ? "分类" : "知识卡"} ${node.label}`}
-                  >
-                    <span />
-                    <strong>{node.label}</strong>
-                  </button>
+                  <g key={node.id} className={`graph-node node-${node.kind}`}>
+                    <title>{node.path ?? node.label}</title>
+                    <circle cx={node.x} cy={node.y} r={node.radius} />
+                    {node.showLabel ? (
+                      <text x={node.x} y={node.y + node.radius + 2.5}>{node.label}</text>
+                    ) : null}
+                    <animateTransform
+                      attributeName="transform"
+                      type="translate"
+                      values={`0 0; ${node.floatX} ${node.floatY}; 0 0`}
+                      dur={`${node.duration}s`}
+                      begin={`${node.delay}s`}
+                      repeatCount="indefinite"
+                    />
+                  </g>
                 ))}
-              </div>
-            </>
+                <animateTransform
+                  attributeName="transform"
+                  type="rotate"
+                  values="0 50 50; 1.6 50 50; -1.2 50 50; 0 50 50"
+                  dur="18s"
+                  repeatCount="indefinite"
+                />
+              </g>
+            </svg>
           ) : (
             <div className="knowledge-graph-empty">知识库里还没有 Markdown 知识卡</div>
           )}
@@ -1838,7 +1842,11 @@ function KnowledgeGraphDrawer({
 
 type KnowledgeGraphLayoutNode = KnowledgeGraphNode & {
   delay: number;
+  duration: number;
+  floatX: number;
+  floatY: number;
   radius: number;
+  showLabel: boolean;
   x: number;
   y: number;
 };
@@ -1848,11 +1856,16 @@ function buildKnowledgeGraphLayout(graph: KnowledgeGraphState) {
     const groupHash = stableNumber(node.group || node.id);
     const ring = node.kind === "folder" ? 18 + (groupHash % 3) * 8 : 28 + (groupHash % 4) * 7;
     const angle = (index * 137.508 + groupHash * 11) * (Math.PI / 180);
-    const radius = node.kind === "folder" ? 13 + Math.min(8, node.size) : 7 + Math.min(8, node.size);
+    const radius = node.kind === "folder" ? 1.9 + Math.min(0.8, node.size / 20) : 0.9 + Math.min(0.7, node.size / 16);
+    const floatAngle = (groupHash % 360) * (Math.PI / 180);
     return {
       ...node,
       delay: (index % 12) * 0.09,
+      duration: 6 + (groupHash % 7),
+      floatX: Number((Math.cos(floatAngle) * (0.55 + (index % 5) * 0.11)).toFixed(2)),
+      floatY: Number((Math.sin(floatAngle) * (0.55 + (index % 4) * 0.13)).toFixed(2)),
       radius,
+      showLabel: node.kind === "folder" || index < 12,
       x: clamp(50 + Math.cos(angle) * ring, 7, 93),
       y: clamp(50 + Math.sin(angle) * ring, 8, 92),
     };

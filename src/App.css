@@ -1728,98 +1728,58 @@ button {
   font-size: calc(13px * var(--ui-font-scale, 1));
 }
 
-.knowledge-graph-edges {
+.knowledge-graph-canvas {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
 }
 
+.graph-drift {
+  transform-origin: 50% 50%;
+}
+
 .graph-edge {
   stroke: color-mix(in srgb, var(--text-muted), transparent 56%);
-  stroke-width: 0.16;
+  stroke-width: 0.18;
   vector-effect: non-scaling-stroke;
 }
 
 .graph-edge.edge-wikilink {
   stroke: color-mix(in srgb, var(--accent), transparent 48%);
-  stroke-width: 0.22;
-}
-
-.knowledge-graph-nodes {
-  position: absolute;
-  inset: 0;
+  stroke-width: 0.24;
 }
 
 .graph-node {
-  position: absolute;
-  left: var(--graph-x);
-  top: var(--graph-y);
-  width: var(--graph-size);
-  height: var(--graph-size);
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--text-primary);
-  padding: 0;
-  transform: translate(-50%, -50%);
-  animation: graph-float 5.6s ease-in-out infinite;
-  animation-delay: var(--graph-delay);
+  transform-box: fill-box;
+  transform-origin: center;
 }
 
-.graph-node span {
-  display: block;
-  width: 100%;
-  height: 100%;
-  border-radius: inherit;
+.graph-node circle {
   background: color-mix(in srgb, var(--accent), white 14%);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--bg-panel), transparent 22%);
+  fill: color-mix(in srgb, var(--accent), white 14%);
+  stroke: color-mix(in srgb, var(--bg-panel), transparent 22%);
+  stroke-width: 0.26;
+  vector-effect: non-scaling-stroke;
 }
 
-.graph-node.node-folder span {
-  background: color-mix(in srgb, var(--focus), var(--accent) 18%);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--bg-panel), transparent 24%);
+.graph-node.node-folder circle {
+  fill: color-mix(in srgb, var(--focus), var(--accent) 18%);
+  stroke: color-mix(in srgb, var(--bg-panel), transparent 24%);
 }
 
-.graph-node strong {
-  position: absolute;
-  left: 50%;
-  top: calc(100% + 5px);
-  max-width: 112px;
-  overflow: hidden;
+.graph-node text {
   color: var(--text-muted);
-  font-size: calc(10px * var(--ui-font-scale, 1));
+  fill: var(--text-muted);
+  font-size: 2.2px;
   font-weight: 500;
-  line-height: 13px;
-  opacity: 0;
-  text-overflow: ellipsis;
-  transform: translateX(-50%);
-  white-space: nowrap;
+  pointer-events: none;
+  text-anchor: middle;
 }
 
-.graph-node:hover,
-.graph-node:focus-visible {
-  z-index: 4;
-}
-
-.graph-node:hover span,
-.graph-node:focus-visible span {
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--text-primary), transparent 30%);
-}
-
-.graph-node:hover strong,
-.graph-node:focus-visible strong {
-  opacity: 1;
-}
-
-@keyframes graph-float {
-  0%,
-  100% {
-    transform: translate(-50%, -50%);
-  }
-  50% {
-    transform: translate(calc(-50% + 2px), calc(-50% - 3px));
-  }
+.graph-node:hover circle {
+  stroke: color-mix(in srgb, var(--text-primary), transparent 26%);
+  stroke-width: 0.44;
 }
 
 .memory-tree-empty {
