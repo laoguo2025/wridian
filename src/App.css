@@ -1190,23 +1190,22 @@ button {
   min-width: 780px;
   min-height: 100%;
   overflow: auto;
-  padding: 24px 28px 180px;
+  padding: 24px 28px 40px;
   background:
-    radial-gradient(circle at 50% 4%, color-mix(in srgb, var(--accent), transparent 70%), transparent 18%),
-    radial-gradient(circle at 50% 72%, color-mix(in srgb, var(--accent), transparent 84%), transparent 28%),
-    linear-gradient(180deg, color-mix(in srgb, #061412, var(--bg-panel) 30%), color-mix(in srgb, #020607, var(--bg-panel) 18%));
+    radial-gradient(circle at 50% 8%, color-mix(in srgb, var(--accent), transparent 86%), transparent 24%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-panel), var(--bg-selected) 24%), var(--bg-panel));
 }
 
 .memory-forest::before {
   content: "";
   position: absolute;
   left: 50%;
-  bottom: 48px;
+  bottom: 28px;
   width: 320px;
   height: 42px;
   border-radius: 50%;
-  border: 1px solid color-mix(in srgb, var(--accent), transparent 20%);
-  box-shadow: 0 0 28px color-mix(in srgb, var(--accent), transparent 46%);
+  border: 1px solid color-mix(in srgb, var(--border), transparent 20%);
+  box-shadow: 0 0 20px color-mix(in srgb, var(--accent), transparent 82%);
   transform: translateX(-50%);
   pointer-events: none;
 }
@@ -1215,15 +1214,15 @@ button {
   position: absolute;
   left: 50%;
   top: 34px;
-  bottom: 72px;
-  width: 12px;
+  bottom: 56px;
+  width: 10px;
   border-radius: 12px 12px 4px 4px;
   background:
-    linear-gradient(90deg, transparent, color-mix(in srgb, #d8fff3, var(--accent) 38%), transparent),
-    linear-gradient(180deg, color-mix(in srgb, var(--accent), transparent 44%), color-mix(in srgb, #d19d5f, transparent 18%));
+    linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent), var(--bg-panel) 34%), transparent),
+    linear-gradient(180deg, color-mix(in srgb, var(--accent), transparent 58%), color-mix(in srgb, var(--text-muted), transparent 45%));
   box-shadow:
-    0 0 18px color-mix(in srgb, var(--accent), transparent 36%),
-    inset 0 0 8px color-mix(in srgb, #ffffff, transparent 54%);
+    0 0 16px color-mix(in srgb, var(--accent), transparent 76%),
+    inset 0 0 8px color-mix(in srgb, var(--bg-panel), transparent 34%);
   transform: translateX(-50%);
   pointer-events: none;
 }
@@ -1235,7 +1234,7 @@ button {
   width: 72px;
   height: 72px;
   border-radius: 50%;
-  background: radial-gradient(circle, color-mix(in srgb, #ffffff, var(--accent) 28%), transparent 62%);
+  background: radial-gradient(circle, color-mix(in srgb, var(--accent), transparent 38%), transparent 62%);
   filter: blur(1px);
   opacity: 0.75;
   transform: translateX(-50%);
@@ -1247,9 +1246,9 @@ button {
   left: 50%;
   width: 120px;
   height: 20px;
-  border-top: 2px solid color-mix(in srgb, var(--accent), #ffe6b0 28%);
+  border-top: 2px solid color-mix(in srgb, var(--accent), var(--text-muted) 28%);
   border-radius: 50%;
-  filter: drop-shadow(0 0 8px color-mix(in srgb, var(--accent), transparent 32%));
+  filter: drop-shadow(0 0 7px color-mix(in srgb, var(--accent), transparent 72%));
   pointer-events: none;
 }
 
@@ -1271,7 +1270,7 @@ button {
 .memory-tree-roots {
   position: absolute;
   left: 50%;
-  bottom: 28px;
+  bottom: 14px;
   z-index: 2;
   display: grid;
   justify-items: center;
@@ -1287,12 +1286,12 @@ button {
   gap: 2px;
   width: 156px;
   min-height: 42px;
-  border: 1px solid color-mix(in srgb, #f2d59c, transparent 24%);
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: color-mix(in srgb, #241c13, transparent 22%);
+  background: color-mix(in srgb, var(--bg-panel), var(--bg-selected) 18%);
   color: var(--text-primary);
   padding: 7px 10px;
-  box-shadow: 0 0 16px color-mix(in srgb, #d7a45a, transparent 74%);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--text-primary), transparent 94%);
   text-align: center;
 }
 
@@ -1316,28 +1315,28 @@ button {
 
 .memory-trunk-card:hover,
 .memory-trunk-card.active {
-  border-color: color-mix(in srgb, #fff3bf, transparent 8%);
-  background: color-mix(in srgb, #3a2a18, transparent 14%);
+  border-color: color-mix(in srgb, var(--accent), transparent 20%);
+  background: color-mix(in srgb, var(--accent), transparent 88%);
 }
 
 .memory-branch-arm {
-  --branch-y: calc(58px + var(--branch-index) * 58px);
+  --branch-y: calc(56px + var(--branch-index) * 56px);
   position: absolute;
   top: var(--branch-y);
   z-index: 2;
   display: grid;
   align-items: center;
-  width: 340px;
+  width: 330px;
   min-height: 76px;
 }
 
 .memory-branch-arm.left {
-  left: calc(50% - 370px);
+  left: calc(50% - 360px);
   grid-template-columns: minmax(132px, 176px) minmax(92px, 1fr);
 }
 
 .memory-branch-arm.right {
-  right: calc(50% - 370px);
+  right: calc(50% - 360px);
   grid-template-columns: minmax(92px, 1fr) minmax(132px, 176px);
 }
 
@@ -1351,14 +1350,14 @@ button {
 
 .memory-branch-arm.left .memory-branch-line {
   right: 56px;
-  border-top: 2px solid color-mix(in srgb, var(--accent), #ffda98 24%);
+  border-top: 2px solid color-mix(in srgb, var(--accent), var(--border) 38%);
   border-radius: 0 90px 0 0;
   transform: rotate(-9deg);
 }
 
 .memory-branch-arm.right .memory-branch-line {
   left: 56px;
-  border-top: 2px solid color-mix(in srgb, var(--accent), #ffda98 24%);
+  border-top: 2px solid color-mix(in srgb, var(--accent), var(--border) 38%);
   border-radius: 90px 0 0 0;
   transform: rotate(9deg);
 }
@@ -1368,8 +1367,8 @@ button {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: color-mix(in srgb, #eaffff, var(--accent) 32%);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--accent), transparent 24%);
+  background: color-mix(in srgb, var(--accent), var(--bg-panel) 24%);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent), transparent 70%);
 }
 
 .memory-branch-arm.left .memory-branch-line span:first-child {
@@ -1393,12 +1392,12 @@ button {
   display: grid;
   gap: 3px;
   min-height: 54px;
-  border: 1px solid color-mix(in srgb, #cbe7ff, transparent 22%);
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: color-mix(in srgb, #0b1522, transparent 12%);
+  background: color-mix(in srgb, var(--bg-panel), var(--bg-selected) 12%);
   color: var(--text-primary);
   padding: 8px 10px;
-  box-shadow: 0 0 18px color-mix(in srgb, #4bbfff, transparent 70%);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--text-primary), transparent 95%);
   text-align: left;
 }
 
@@ -1427,8 +1426,8 @@ button {
 .memory-branch-card:hover,
 .memory-branch-card.active,
 .memory-branch-arm.active .memory-branch-card {
-  border-color: color-mix(in srgb, #f5fbff, transparent 5%);
-  background: color-mix(in srgb, #10263b, transparent 4%);
+  border-color: color-mix(in srgb, var(--accent), transparent 20%);
+  background: color-mix(in srgb, var(--accent), transparent 88%);
 }
 
 .memory-leaf-cluster {
@@ -1459,7 +1458,7 @@ button {
   border: 0;
   border-radius: 5px;
   background: transparent;
-  color: color-mix(in srgb, var(--text-primary), transparent 7%);
+  color: var(--text-muted);
   padding: 0;
   text-align: left;
 }
@@ -1471,8 +1470,8 @@ button {
   width: 24px;
   height: 22px;
   border-radius: 3px;
-  background: #f2f5f7;
-  color: #233;
+  background: var(--bg-selected);
+  color: var(--text-muted);
   font-size: 8px;
   font-weight: 700;
 }
@@ -1487,6 +1486,7 @@ button {
 .memory-leaf-card:hover,
 .memory-leaf-card.active {
   color: #fff;
+  color: var(--text-primary);
 }
 
 .memory-leaf-placeholder {
@@ -1503,13 +1503,14 @@ button {
 
 .memory-node-detail {
   position: sticky;
-  right: 0;
-  bottom: 0;
-  grid-column: 1 / -1;
-  z-index: 2;
+  left: 100%;
+  top: 18px;
+  z-index: 4;
   display: grid;
-  grid-template-rows: auto minmax(120px, 220px);
-  max-height: 320px;
+  grid-template-rows: auto minmax(120px, 1fr);
+  width: min(330px, 36vw);
+  max-height: calc(100% - 36px);
+  margin-left: auto;
   border: 1px solid color-mix(in srgb, var(--border), transparent 10%);
   border-radius: 8px;
   background: color-mix(in srgb, var(--bg-panel), transparent 2%);

@@ -1119,17 +1119,10 @@ function MemoryDrawer({
   saving: boolean;
   workspace: WorkspaceInfo | null;
 }) {
-  const firstFile = useMemo(() => findFirstMemoryFile(memoryTree.roots), [memoryTree.roots]);
   const viewModel = useMemo(() => buildMemoryTreeViewModel(memoryTree.roots), [memoryTree.roots]);
-  const [selectedPath, setSelectedPath] = useState(firstFile?.path ?? "");
-  const selectedNode = useMemo(() => findMemoryNodeByPath(memoryTree.roots, selectedPath) ?? firstFile, [firstFile, memoryTree.roots, selectedPath]);
+  const [selectedPath, setSelectedPath] = useState("");
+  const selectedNode = useMemo(() => findMemoryNodeByPath(memoryTree.roots, selectedPath), [memoryTree.roots, selectedPath]);
   const [draft, setDraft] = useState(selectedNode?.content ?? "");
-
-  useEffect(() => {
-    if (!selectedPath && firstFile?.path) {
-      setSelectedPath(firstFile.path);
-    }
-  }, [firstFile, selectedPath]);
 
   useEffect(() => {
     setDraft(selectedNode?.content ?? "");
@@ -1244,7 +1237,7 @@ function MemoryDrawer({
                 />
               </section>
             ) : (
-              <div className="memory-tree-empty">点选一片叶子或一段根枝。</div>
+              <div className="memory-tree-empty">点选主干、分支或叶子。</div>
             )}
           </div>
         </div>
@@ -1382,15 +1375,6 @@ function MemoryBranchArm({
       </div>
     </div>
   );
-}
-
-function findFirstMemoryFile(nodes: MemoryTreeNode[]): MemoryTreeNode | undefined {
-  for (const node of nodes) {
-    if (node.path && node.content != null) return node;
-    const child = findFirstMemoryFile(node.children);
-    if (child) return child;
-  }
-  return undefined;
 }
 
 function findMemoryNodeByPath(nodes: MemoryTreeNode[], path: string): MemoryTreeNode | undefined {
