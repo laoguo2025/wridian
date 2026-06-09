@@ -1704,10 +1704,7 @@ button {
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
-  background:
-    radial-gradient(circle at 50% 44%, color-mix(in srgb, var(--accent), transparent 88%), transparent 30%),
-    radial-gradient(circle at 76% 28%, color-mix(in srgb, var(--focus), transparent 88%), transparent 24%),
-    color-mix(in srgb, var(--bg-selected), var(--bg-panel) 44%);
+  background: color-mix(in srgb, var(--bg-selected), var(--bg-panel) 44%);
 }
 
 .knowledge-graph-stage::before {
@@ -1776,16 +1773,12 @@ button {
   height: 100%;
   border-radius: inherit;
   background: color-mix(in srgb, var(--accent), white 14%);
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--bg-panel), transparent 22%),
-    0 0 18px color-mix(in srgb, var(--accent), transparent 44%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--bg-panel), transparent 22%);
 }
 
 .graph-node.node-folder span {
   background: color-mix(in srgb, var(--focus), var(--accent) 18%);
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--bg-panel), transparent 24%),
-    0 0 22px color-mix(in srgb, var(--focus), transparent 48%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--bg-panel), transparent 24%);
 }
 
 .graph-node strong {
@@ -1811,9 +1804,7 @@ button {
 
 .graph-node:hover span,
 .graph-node:focus-visible span {
-  box-shadow:
-    0 0 0 2px color-mix(in srgb, var(--bg-panel), transparent 12%),
-    0 0 28px color-mix(in srgb, var(--accent), transparent 26%);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--text-primary), transparent 30%);
 }
 
 .graph-node:hover strong,
