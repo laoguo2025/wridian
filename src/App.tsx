@@ -1315,7 +1315,7 @@ function MemoryDrawer({
           </div>
           <div className="drawer-header-actions">
             <button type="button" className="small-action" onClick={onOpenMemoryFolder}>
-              文件夹
+              记忆文件夹
             </button>
             <button type="button" className="icon-button" onClick={onClose} aria-label="关闭">
               ×

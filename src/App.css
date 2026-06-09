@@ -1301,10 +1301,10 @@ button {
 .memory-tree-base {
   position: absolute;
   left: 50%;
-  top: 64px;
+  top: 28px;
   z-index: 0;
-  width: 760px;
-  height: 520px;
+  width: 860px;
+  height: 588px;
   object-fit: contain;
   opacity: 0.9;
   transform: translateX(-50%);
@@ -1314,7 +1314,7 @@ button {
 .memory-tree-roots {
   position: absolute;
   left: 50%;
-  top: 84px;
+  top: 96px;
   z-index: 2;
   display: grid;
   justify-items: center;
@@ -1330,7 +1330,7 @@ button {
   gap: 1px;
   width: 96px;
   min-height: 34px;
-  margin-bottom: 196px;
+  margin-bottom: 214px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: color-mix(in srgb, var(--bg-panel), transparent 6%);
@@ -1401,7 +1401,7 @@ button {
 }
 
 .memory-branch-arm {
-  --branch-y: calc(164px + var(--branch-index) * 90px);
+  --branch-y: calc(190px + var(--branch-index) * 92px);
   position: absolute;
   top: var(--branch-y);
   z-index: 2;
@@ -1412,12 +1412,12 @@ button {
 }
 
 .memory-branch-arm.left {
-  left: calc(50% - 376px);
+  left: calc(50% - 388px);
   grid-template-columns: 132px 1fr;
 }
 
 .memory-branch-arm.right {
-  right: calc(50% - 376px);
+  right: calc(50% - 388px);
   grid-template-columns: 1fr 132px;
 }
 
