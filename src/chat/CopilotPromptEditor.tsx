@@ -62,7 +62,7 @@ export function CopilotPromptEditor({
     <LexicalComposer initialConfig={initialConfig}>
       <div className="prompt-editor-shell">
         <PlainTextPlugin
-          contentEditable={<ContentEditable className="prompt-editor" aria-label="共创输入" />}
+          contentEditable={<ContentEditable className="prompt-editor" aria-label="对话输入" />}
           placeholder={<div className="prompt-placeholder">{placeholder}</div>}
           ErrorBoundary={LexicalErrorBoundary}
         />

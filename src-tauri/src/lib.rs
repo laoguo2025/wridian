@@ -1,5 +1,5 @@
-mod cocreation;
 mod chat_persistence;
+mod cocreation;
 mod memory;
 mod model_accounts;
 mod projects;
@@ -14,6 +14,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             workspace::wridian_init_workspace,
             workspace::wridian_set_work_root,
+            workspace::wridian_set_knowledge_root,
             workspace::wridian_open_file,
             workspace::wridian_save_file,
             workspace::wridian_create_work_file,

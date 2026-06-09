@@ -14,6 +14,8 @@ export type PromptContextPill = {
   kind: PromptContextPillKind;
   label: string;
   range?: PromptContextRange;
+  sourcePath?: string;
+  relativePath?: string;
   value: string;
 };
 
@@ -30,6 +32,8 @@ export type PromptSuggestion = {
   kind: "context" | "command";
   pillKind?: PromptContextPillKind;
   range?: PromptContextRange;
+  relativePath?: string;
+  sourcePath?: string;
 };
 
 export type PromptSuggestionInput = {
@@ -40,6 +44,7 @@ export type PromptSuggestionInput = {
 export type PromptKnowledgeCardCandidate = {
   category?: string;
   id: string;
+  relativePath?: string;
   sourcePath: string;
   title: string;
 };
@@ -62,11 +67,13 @@ export function createSelectionPromptPill(value: string, range?: PromptContextRa
   };
 }
 
-export function createFilePromptPill(name: string, path: string): PromptContextPill {
+export function createFilePromptPill(name: string, path: string, relativePath?: string): PromptContextPill {
   return {
     id: `file:${path}`,
     kind: "file",
     label: name,
+    relativePath,
+    sourcePath: path,
     value: `路径：${path}`,
   };
 }
@@ -76,7 +83,24 @@ export function createFileContentPromptPill(name: string, path: string, content:
     id: `file:${path}`,
     kind: "file",
     label: name,
+    sourcePath: path,
     value: `路径：${path}\n\n${content}`,
+  };
+}
+
+export function createReferencedFileContentPromptPill(
+  name: string,
+  path: string,
+  relativePath: string,
+  content: string,
+): PromptContextPill {
+  return {
+    id: `file:${path}`,
+    kind: "file",
+    label: name,
+    relativePath,
+    sourcePath: path,
+    value: content,
   };
 }
 
@@ -130,7 +154,9 @@ export function createPromptPillFromSuggestion(suggestion: PromptSuggestion): Pr
     id: suggestion.id,
     kind: suggestion.pillKind ?? "selection",
     label: suggestion.label,
+    relativePath: suggestion.relativePath,
     range: suggestion.range,
+    sourcePath: suggestion.sourcePath,
     value: suggestion.insertText,
   };
 }
@@ -142,10 +168,12 @@ export function buildPromptSuggestions(input: PromptSuggestionInput): PromptSugg
     suggestions.push({
       id: `memory:${card.id}`,
       label: card.title || card.category || "知识卡",
-      detail: [card.category ?? "知识卡", card.sourcePath].filter(Boolean).join(" · "),
+      detail: [card.category ?? "知识卡", card.relativePath ?? card.sourcePath].filter(Boolean).join(" · "),
       insertText: `path:${card.sourcePath}`,
       kind: "context",
       pillKind: "memory",
+      relativePath: card.relativePath,
+      sourcePath: card.sourcePath,
     });
   }
 

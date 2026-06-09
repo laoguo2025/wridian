@@ -1,4 +1,4 @@
-import { serializePromptContextPills, type PromptContextPill } from "./promptContext";
+import type { PromptContextPill } from "./promptContext";
 
 export type ChatMessage = {
   id: string;
@@ -17,7 +17,7 @@ export function createUserChatMessage(params: {
   selectedText?: string;
   text: string;
 }): ChatMessage {
-  const selectedText = (params.selectedText ?? serializePromptContextPills(params.contextPills)).trim();
+  const selectedText = (params.selectedText ?? "").trim();
   return {
     id: createChatMessageId("user"),
     role: "user",

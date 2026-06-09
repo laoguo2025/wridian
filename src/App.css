@@ -418,6 +418,30 @@ button {
   padding: 5px 0 8px;
 }
 
+.file-tree-empty {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  padding: 14px 10px;
+  color: var(--text-muted);
+  font-size: calc(12px * var(--ui-font-scale, 1));
+  line-height: 17px;
+}
+
+.file-tree-empty p {
+  margin: 0;
+}
+
+.file-tree-empty button {
+  min-height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  padding: 0 10px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
+}
+
 .file-node {
   position: relative;
   min-width: 0;
@@ -1502,6 +1526,39 @@ button {
 .memory-branch-arm.active .memory-branch-card {
   border-color: color-mix(in srgb, var(--accent), transparent 20%);
   background: color-mix(in srgb, var(--accent), transparent 88%);
+}
+
+.memory-leaf-dots {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.memory-leaf-dot {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  border: 1px solid color-mix(in srgb, #dc7d57, black 10%);
+  border-radius: 50%;
+  background: #dc7d57;
+  box-shadow: 0 3px 10px color-mix(in srgb, #dc7d57, transparent 55%);
+  transform:
+    translate(-50%, -50%)
+    rotate(var(--leaf-angle))
+    translateX(var(--leaf-radius))
+    rotate(calc(-1 * var(--leaf-angle)));
+  pointer-events: auto;
+}
+
+.memory-leaf-dot:hover,
+.memory-leaf-dot.active {
+  width: 12px;
+  height: 12px;
+  border-color: color-mix(in srgb, #dc7d57, black 24%);
+  box-shadow: 0 4px 14px color-mix(in srgb, #dc7d57, transparent 35%);
 }
 
 .memory-node-detail {

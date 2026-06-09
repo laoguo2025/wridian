@@ -15,6 +15,7 @@ import {
 } from "./chat/projectContext";
 import {
   buildPromptSuggestions,
+  createReferencedFileContentPromptPill,
   createFileContentPromptPill,
   createFilePromptPill,
   createImagePromptPill,
@@ -41,14 +42,19 @@ type WorkspaceInfo = {
   runtimePath: string;
   filesRootPath: string;
   activeWorkRoot?: string | null;
+  workRootConfigured: boolean;
   files: WorkFileNode[];
   knowledgeRootPath: string;
+  activeKnowledgeRoot?: string | null;
+  knowledgeRootConfigured: boolean;
   knowledgeFiles: WorkFileNode[];
 };
 
 type WorkFileNode = {
   name: string;
   path: string;
+  relativePath: string;
+  library: "works" | "knowledge";
   folder: boolean;
   children: WorkFileNode[];
 };
@@ -254,6 +260,9 @@ function App() {
   const files = workspace?.files ?? [];
   const knowledgeFiles = workspace?.knowledgeFiles ?? [];
   const visibleFiles = libraryTab === "works" ? files : knowledgeFiles;
+  const activeLibraryConfigured = libraryTab === "knowledge"
+    ? Boolean(workspace?.knowledgeRootConfigured)
+    : Boolean(workspace?.workRootConfigured);
   const isRealFile = Boolean(selectedPath);
   const dirty = isRealFile && editorContent !== lastSavedContent;
 
@@ -331,8 +340,8 @@ function App() {
   };
 
   const workspaceRootPath = libraryTab === "knowledge"
-    ? workspace?.knowledgeRootPath || ""
-    : workspace?.filesRootPath || workspace?.activeWorkRoot || workspace?.vaultPath || "";
+    ? activeLibraryConfigured ? workspace?.knowledgeRootPath || "" : ""
+    : activeLibraryConfigured ? workspace?.filesRootPath || workspace?.activeWorkRoot || "" : "";
 
   const runWorkspaceAction = async (action: () => Promise<WorkspaceInfo>) => {
     setWorkspaceError("");
@@ -340,6 +349,24 @@ function App() {
       refreshWorkspace(await action());
     } catch (error) {
       setWorkspaceError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const chooseLibraryRoot = async (tab = libraryTab) => {
+    setWorkspaceError("");
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: tab === "knowledge" ? "选择知识库文件夹" : "选择作品库文件夹",
+      });
+      if (!selected || Array.isArray(selected)) return;
+      const command = tab === "knowledge" ? "wridian_set_knowledge_root" : "wridian_set_work_root";
+      refreshWorkspace(await invoke<WorkspaceInfo>(command, { input: { path: selected } }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setWorkspaceError(message.includes("not allowed") || message.includes("Tauri") ? "请在 Wridian 桌面端选择本地文件夹。" : message);
     }
   };
 
@@ -373,17 +400,22 @@ function App() {
 
   const addNodeToPrompt = (node: WorkFileNode) => {
     if (node.folder) return;
-    void addFileToPrompt(node.name, node.path);
+    void addFileToPrompt(node.name, node.path, node.relativePath);
   };
 
-  const addFileToPrompt = async (name: string, path: string) => {
+  const addFileToPrompt = async (name: string, path: string, relativePath = "") => {
     try {
       const cached = promptFileContentCache[path];
       const content = cached ?? (await invoke<OpenFileResponse>("wridian_open_file", { input: { path } })).content;
       setPromptFileContentCache((current) => ({ ...current, [path]: content }));
-      setPromptPills((current) => upsertPromptContextPill(current, createFileContentPromptPill(name, path, content)));
+      setPromptPills((current) => upsertPromptContextPill(
+        current,
+        relativePath
+          ? createReferencedFileContentPromptPill(name, path, relativePath, content)
+          : createFileContentPromptPill(name, path, content),
+      ));
     } catch {
-      setPromptPills((current) => upsertPromptContextPill(current, createFilePromptPill(name, path)));
+      setPromptPills((current) => upsertPromptContextPill(current, createFilePromptPill(name, path, relativePath)));
     }
   };
 
@@ -466,6 +498,7 @@ function App() {
   };
 
   const retryLastUserMessage = (message: ChatMessage) => {
+    setPromptPills(restorePromptPillsFromMessage(message));
     void sendPrompt({ text: message.text, selectedText: message.selectedText });
   };
 
@@ -714,10 +747,18 @@ function App() {
               </button>
             </div>
             <div className="file-toolbar" aria-label="文件操作">
-              <button type="button" title="新建文件" aria-label="新建文件" onClick={() => void createFile()}>
+              <button
+                type="button"
+                title={libraryTab === "knowledge" ? "选择知识库文件夹" : "选择作品库文件夹"}
+                aria-label={libraryTab === "knowledge" ? "选择知识库文件夹" : "选择作品库文件夹"}
+                onClick={() => void chooseLibraryRoot()}
+              >
+                <FolderSwitchIcon />
+              </button>
+              <button type="button" title="新建文件" aria-label="新建文件" onClick={() => void createFile()} disabled={!activeLibraryConfigured}>
                 <PencilIcon />
               </button>
-              <button type="button" title="新建文件夹" aria-label="新建文件夹" onClick={() => void createFolder()}>
+              <button type="button" title="新建文件夹" aria-label="新建文件夹" onClick={() => void createFolder()} disabled={!activeLibraryConfigured}>
                 <FolderPlusIcon />
               </button>
               <button
@@ -725,6 +766,7 @@ function App() {
                 title={libraryFolderTooltip(libraryTab)}
                 aria-label={libraryFolderTooltip(libraryTab)}
                 onClick={() => void openCurrentLibraryFolder()}
+                disabled={!activeLibraryConfigured}
               >
                 <WorkFolderIcon />
               </button>
@@ -733,16 +775,25 @@ function App() {
           {workspaceError ? <div className="rail-error">{workspaceError}</div> : null}
 
           <div className="file-tree">
-            {visibleFiles.map((node) => (
-              <FileNodeView
-                key={node.path}
-                node={node}
-                depth={0}
-                selectedPath={selectedPath}
-                onOpenFile={openFile}
-                onOpenMenu={openFileContextMenu}
-              />
-            ))}
+            {visibleFiles.length ? (
+              visibleFiles.map((node) => (
+                <FileNodeView
+                  key={node.path}
+                  node={node}
+                  depth={0}
+                  selectedPath={selectedPath}
+                  onOpenFile={openFile}
+                  onOpenMenu={openFileContextMenu}
+                />
+              ))
+            ) : (
+              <div className="file-tree-empty">
+                <p>{libraryTab === "knowledge" ? "选择知识库文件夹" : "选择作品库文件夹"}</p>
+                <button type="button" onClick={() => void chooseLibraryRoot()}>
+                  选择文件夹
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="rail-bottom">
@@ -842,7 +893,7 @@ function App() {
             if (suggestion.kind !== "context") return;
             if (suggestion.pillKind === "memory" && suggestion.insertText.startsWith("path:")) {
               const path = suggestion.insertText.slice("path:".length);
-              void addFileToPrompt(suggestion.label, path);
+              void addFileToPrompt(suggestion.label, path, suggestion.relativePath ?? "");
               return;
             }
             setPromptPills((current) => upsertPromptContextPill(current, createPromptPillFromSuggestion(suggestion)));
@@ -924,7 +975,7 @@ function FileNodeView({
         className={rowClassName}
         type="button"
         aria-expanded={isFolder ? expanded : undefined}
-        title={node.path}
+        title={node.relativePath || node.name}
         onClick={handleOpen}
         onContextMenu={(event) => {
           event.preventDefault();
@@ -1005,7 +1056,7 @@ function FileContextMenuView({
         创建副本
       </button>
       <button type="button" onClick={() => run(() => onAddToPrompt(menu.node))}>
-        添加到共创输入
+        添加到对话输入
       </button>
       <button type="button" onClick={() => run(() => onRename(menu.node))}>
         重命名
@@ -1068,6 +1119,18 @@ function WorkFolderIcon() {
       <path d="M38 38L40.1213 40.1213" />
       <path d="M28 35H29.5H31" />
       <path d="M39 35H40.5H42" />
+    </svg>
+  );
+}
+
+function FolderSwitchIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 48 48">
+      <path d="M5 9C5 7.89543 5.89543 7 7 7H19L24 13H41C42.1046 13 43 13.8954 43 15V40C43 41.1046 42.1046 42 41 42H7C5.89543 42 5 41.1046 5 40V9Z" />
+      <path d="M15 25H32" />
+      <path d="M28 21L32 25L28 29" />
+      <path d="M33 32H16" />
+      <path d="M20 28L16 32L20 36" />
     </svg>
   );
 }
@@ -1446,13 +1509,14 @@ type MemoryBranchView = {
   key: string;
   labelCn: string;
   label: string;
+  leaves: MemoryTreeNode[];
   rule?: MemoryTreeNode;
 };
 
 const MEMORY_BRANCH_LAYOUT = [
   { key: "user", label: "USER.md", labelCn: "用户画像" },
   { key: "relationship", label: "RELATIONSHIP.md", labelCn: "关系准则" },
-  { key: "journey", label: "JOURNEY.md", labelCn: "共创旅程" },
+  { key: "journey", label: "JOURNEY.md", labelCn: "创作旅程" },
   { key: "drama", label: "DRAMA.md", labelCn: "剧本记忆" },
   { key: "novel", label: "NOVEL.md", labelCn: "小说记忆" },
   { key: "knowledge", label: "KNOWLEDGE.md", labelCn: "知识生产" },
@@ -1463,18 +1527,35 @@ const MEMORY_BRANCH_LAYOUT = [
 function buildMemoryTreeViewModel(roots: MemoryTreeNode[]) {
   const rootLayer = roots.find((node) => node.id === "totem");
   const branchLayer = roots.find((node) => node.id === "branches");
+  const leafLayer = roots.find((node) => node.id === "leaves");
   const trunk = rootLayer?.children ?? [];
   const sense = branchLayer?.children.find((node) => node.label.toLowerCase().startsWith("sense"));
   const branches = MEMORY_BRANCH_LAYOUT.map(({ key, label, labelCn }) => {
     const rule = branchLayer?.children.find((node) => node.label.toLowerCase().startsWith(key));
+    const leafRoot = leafLayer?.children.find((node) => node.label === key);
     return {
       key,
       label,
       labelCn,
+      leaves: flattenMemoryLeaves(leafRoot),
       rule,
     };
   });
   return { branches, sense, trunk };
+}
+
+function flattenMemoryLeaves(node: MemoryTreeNode | undefined): MemoryTreeNode[] {
+  if (!node) return [];
+  const leaves: MemoryTreeNode[] = [];
+  const visit = (item: MemoryTreeNode) => {
+    if (item.content != null && item.path) {
+      leaves.push(item);
+      return;
+    }
+    item.children.forEach(visit);
+  };
+  node.children.forEach(visit);
+  return leaves;
 }
 
 function branchLabel(branch: string) {
@@ -1486,7 +1567,7 @@ function branchLabel(branch: string) {
     case "relationship":
       return "关系";
     case "journey":
-      return "共创里程碑";
+      return "创作里程碑";
     case "drama":
       return "剧本";
     case "novel":
@@ -1515,6 +1596,8 @@ function MemoryBranchArm({
   const side = ["user", "relationship", "drama", "knowledge"].includes(branch.key) ? "left" : "right";
   const editorSide = ["journey", "novel", "skill", "sense"].includes(branch.key) ? "left" : "right";
   const active = branch.rule?.path === selectedPath;
+  const leafCount = branch.leaves.length;
+  const leafSlots = Math.min(18, Math.max(1, leafCount));
   return (
     <div className={`memory-branch-arm ${side} branch-${branch.key} ${active ? "active" : ""}`}>
       <button
@@ -1526,6 +1609,23 @@ function MemoryBranchArm({
         <strong>{branch.labelCn}</strong>
         <small>{branch.label}</small>
       </button>
+      <div className="memory-leaf-dots" aria-label={`${branch.labelCn}叶子`}>
+        {branch.leaves.map((leaf, leafIndex) => (
+          <button
+            type="button"
+            key={leaf.id}
+            className={`memory-leaf-dot ${leaf.path === selectedPath ? "active" : ""}`}
+            style={{
+              "--leaf-angle": `${-120 + (leafIndex % leafSlots) * (240 / Math.max(1, leafSlots - 1))}deg`,
+              "--leaf-radius": `${34 + Math.floor(leafIndex / 18) * 14 + (leafIndex % 3) * 8}px`,
+            } as React.CSSProperties}
+            title={leaf.label}
+            aria-label={`打开记忆叶子 ${leaf.label}`}
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={() => onSelect(leaf, editorSide)}
+          />
+        ))}
+      </div>
     </div>
   );
 }
@@ -1554,7 +1654,7 @@ function findMemoryNodeByPath(nodes: MemoryTreeNode[], path: string): MemoryTree
 }
 
 function flattenKnowledgeCards(nodes: WorkFileNode[]) {
-  const cards: { id: string; category: string; sourcePath: string; title: string }[] = [];
+  const cards: { id: string; category: string; relativePath: string; sourcePath: string; title: string }[] = [];
   const visit = (node: WorkFileNode) => {
     if (node.folder) {
       node.children.forEach(visit);
@@ -1564,6 +1664,7 @@ function flattenKnowledgeCards(nodes: WorkFileNode[]) {
     cards.push({
       id: node.path,
       category: "知识卡",
+      relativePath: node.relativePath,
       sourcePath: node.path,
       title: node.name.replace(/\.(md|markdown)$/i, ""),
     });

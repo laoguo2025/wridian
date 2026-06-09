@@ -3,6 +3,9 @@ export type LibraryTab = "works" | "knowledge";
 export type LibraryToolbarWorkspace = {
   activeWorkRoot?: string | null;
   filesRootPath?: string | null;
+  workRootConfigured?: boolean;
+  activeKnowledgeRoot?: string | null;
+  knowledgeRootConfigured?: boolean;
   knowledgeRootPath?: string | null;
   vaultPath?: string | null;
 };
@@ -13,6 +16,8 @@ export function libraryFolderTooltip(tab: LibraryTab): string {
 
 export function libraryFolderPath(tab: LibraryTab, workspace: LibraryToolbarWorkspace | null): string {
   if (!workspace) return "";
-  if (tab === "knowledge") return workspace.knowledgeRootPath ?? "";
-  return workspace.filesRootPath || workspace.activeWorkRoot || workspace.vaultPath || "";
+  if (tab === "knowledge") {
+    return workspace.knowledgeRootConfigured ? workspace.knowledgeRootPath ?? "" : "";
+  }
+  return workspace.workRootConfigured ? workspace.filesRootPath || workspace.activeWorkRoot || "" : "";
 }

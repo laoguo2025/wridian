@@ -85,7 +85,7 @@ pub(crate) fn ensure_workspace(data_dir: &Path) -> Result<(), String> {
     )?;
     write_if_missing(
         &memory_tree.join("partner").join("soul.md"),
-        "# soul.md\n\n这里定义 Wridian 作为共创伙伴的底层人格、判断原则和表达气质。\n",
+        "# soul.md\n\n这里定义 Wridian 作为对话伙伴的底层人格、判断原则和表达气质。\n",
     )?;
     write_if_missing(
         &memory_tree.join("partner").join("user.md"),
@@ -97,7 +97,7 @@ pub(crate) fn ensure_workspace(data_dir: &Path) -> Result<(), String> {
     )?;
     write_if_missing(
         &memory_tree.join("partner").join("partnermemory.md"),
-        "# partnermemory.md\n\n这里记录 Wridian 与用户长期共创过程中形成的伙伴记忆。\n",
+        "# partnermemory.md\n\n这里记录 Wridian 与用户长期对话过程中形成的伙伴记忆。\n",
     )?;
     write_if_missing(
         &vault.join("user.md"),

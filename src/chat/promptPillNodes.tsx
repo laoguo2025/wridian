@@ -18,6 +18,8 @@ export interface SerializedPromptPillNode extends SerializedLexicalNode {
   id: string;
   kind: PromptContextPillKind;
   label: string;
+  relativePath?: string;
+  sourcePath?: string;
   value: string;
 }
 
@@ -25,6 +27,8 @@ export class PromptPillNode extends DecoratorNode<ReactNode> {
   __id: string;
   __kind: PromptContextPillKind;
   __label: string;
+  __relativePath?: string;
+  __sourcePath?: string;
   __value: string;
 
   static getType(): string {
@@ -32,7 +36,15 @@ export class PromptPillNode extends DecoratorNode<ReactNode> {
   }
 
   static clone(node: PromptPillNode): PromptPillNode {
-    return new PromptPillNode(node.__id, node.__kind, node.__label, node.__value, node.__key);
+    return new PromptPillNode(
+      node.__id,
+      node.__kind,
+      node.__label,
+      node.__value,
+      node.__sourcePath,
+      node.__relativePath,
+      node.__key,
+    );
   }
 
   static importJSON(serializedNode: SerializedPromptPillNode): PromptPillNode {
@@ -40,6 +52,8 @@ export class PromptPillNode extends DecoratorNode<ReactNode> {
       id: serializedNode.id,
       kind: serializedNode.kind,
       label: serializedNode.label,
+      relativePath: serializedNode.relativePath,
+      sourcePath: serializedNode.sourcePath,
       value: serializedNode.value,
     });
   }
@@ -56,11 +70,21 @@ export class PromptPillNode extends DecoratorNode<ReactNode> {
     };
   }
 
-  constructor(id: string, kind: PromptContextPillKind, label: string, value: string, key?: NodeKey) {
+  constructor(
+    id: string,
+    kind: PromptContextPillKind,
+    label: string,
+    value: string,
+    sourcePath?: string,
+    relativePath?: string,
+    key?: NodeKey,
+  ) {
     super(key);
     this.__id = id;
     this.__kind = kind;
     this.__label = label;
+    this.__relativePath = relativePath;
+    this.__sourcePath = sourcePath;
     this.__value = value;
   }
 
@@ -81,6 +105,12 @@ export class PromptPillNode extends DecoratorNode<ReactNode> {
     element.setAttribute("data-pill-kind", this.__kind);
     element.setAttribute("data-pill-label", this.__label);
     element.setAttribute("data-pill-value", this.__value);
+    if (this.__relativePath) {
+      element.setAttribute("data-pill-relative-path", this.__relativePath);
+    }
+    if (this.__sourcePath) {
+      element.setAttribute("data-pill-source-path", this.__sourcePath);
+    }
     element.textContent = this.__label;
     return { element };
   }
@@ -91,6 +121,8 @@ export class PromptPillNode extends DecoratorNode<ReactNode> {
       id: this.__id,
       kind: this.__kind,
       label: this.__label,
+      relativePath: this.__relativePath,
+      sourcePath: this.__sourcePath,
       type: "wridian-prompt-pill",
       value: this.__value,
       version: 1,
@@ -130,6 +162,8 @@ export class PromptPillNode extends DecoratorNode<ReactNode> {
       id: this.__id,
       kind: this.__kind,
       label: this.__label,
+      relativePath: this.__relativePath,
+      sourcePath: this.__sourcePath,
       value: this.__value,
     };
   }
@@ -145,7 +179,7 @@ export class PromptPillNode extends DecoratorNode<ReactNode> {
 }
 
 export function $createPromptPillNode(pill: PromptContextPill): PromptPillNode {
-  return new PromptPillNode(pill.id, pill.kind, pill.label, pill.value);
+  return new PromptPillNode(pill.id, pill.kind, pill.label, pill.value, pill.sourcePath, pill.relativePath);
 }
 
 export function $isPromptPillNode(node: LexicalNode | null | undefined): node is PromptPillNode {
@@ -210,9 +244,11 @@ function convertPromptPillElement(domNode: HTMLElement): DOMConversionOutput | n
   const id = domNode.getAttribute("data-pill-id");
   const kind = domNode.getAttribute("data-pill-kind") as PromptContextPillKind | null;
   const label = domNode.getAttribute("data-pill-label");
+  const relativePath = domNode.getAttribute("data-pill-relative-path") ?? undefined;
+  const sourcePath = domNode.getAttribute("data-pill-source-path") ?? undefined;
   const value = domNode.getAttribute("data-pill-value");
   if (!id || !kind || !label || value === null) return null;
-  return { node: new PromptPillNode(id, kind, label, value) };
+  return { node: new PromptPillNode(id, kind, label, value, sourcePath, relativePath) };
 }
 
 function compactUrl(url: string) {

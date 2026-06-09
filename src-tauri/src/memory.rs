@@ -1,5 +1,7 @@
-use crate::runtime::{ensure_workspace, knowledge_root, memory_folder_path, wridian_data_dir};
-use crate::workspace::works_root;
+use crate::runtime::{ensure_workspace, memory_folder_path, wridian_data_dir};
+use crate::workspace::{
+    read_active_knowledge_root, read_active_work_root, resolved_knowledge_root,
+};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -8,7 +10,7 @@ const MEMORY_BRANCHES: [(&str, &str, &str); 9] = [
     ("sense", "SENSE.md", "自我意识机制"),
     ("user", "USER.md", "用户画像准则"),
     ("relationship", "RELATIONSHIP.md", "关系准则"),
-    ("journey", "JOURNEY.md", "共创里程碑"),
+    ("journey", "JOURNEY.md", "创作里程碑"),
     ("drama", "DRAMA.md", "剧本准则"),
     ("novel", "NOVEL.md", "小说准则"),
     ("knowledge", "KNOWLEDGE.md", "知识生产准则"),
@@ -178,14 +180,20 @@ pub(crate) fn read_relevant_memory_snippets(
         if trimmed.is_empty() {
             continue;
         }
-        let label = file.file_name().map(|name| name.to_string_lossy()).unwrap_or_default();
+        let label = file
+            .file_name()
+            .map(|name| name.to_string_lossy())
+            .unwrap_or_default();
         snippets.push(format!("【{}】{}", label, compact_markdown(trimmed, 900)));
     }
     snippets.truncate(limit);
     Ok(snippets)
 }
 
-fn read_memory_state_for_source(data_dir: &Path, source_path: &str) -> Result<MemoryStateResponse, String> {
+fn read_memory_state_for_source(
+    data_dir: &Path,
+    source_path: &str,
+) -> Result<MemoryStateResponse, String> {
     ensure_memory_tree_files(data_dir)?;
     let root = memory_tree_files_root(data_dir);
     let memories = context_files_for_source(data_dir, source_path)?
@@ -225,9 +233,24 @@ fn read_memory_tree_files(data_dir: &Path) -> Result<MemoryTreeResponse, String>
             path: None,
             content: None,
             children: vec![
-                memory_file_node(&root, "SOUL.md", "SOUL.md", "Wridian 的底层灵魂、价值观和共创人格。")?,
-                memory_file_node(&root, "AGENTS.md", "AGENTS.md", "Wridian 如何行动、如何使用记忆树和何时询问用户。")?,
-                memory_file_node(&root, "MEMORY.md", "MEMORY.md", "主干索引、上下文编译策略、分支说明和最近活跃叶子。")?,
+                memory_file_node(
+                    &root,
+                    "SOUL.md",
+                    "SOUL.md",
+                    "Wridian 的底层灵魂、价值观和对话人格。",
+                )?,
+                memory_file_node(
+                    &root,
+                    "AGENTS.md",
+                    "AGENTS.md",
+                    "Wridian 如何行动、如何使用记忆树和何时询问用户。",
+                )?,
+                memory_file_node(
+                    &root,
+                    "MEMORY.md",
+                    "MEMORY.md",
+                    "主干索引、上下文编译策略、分支说明和最近活跃叶子。",
+                )?,
             ],
         },
         MemoryTreeNode {
@@ -246,7 +269,7 @@ fn read_memory_tree_files(data_dir: &Path) -> Result<MemoryTreeResponse, String>
             description: "叶子才写具体生命记录、作品记忆、知识卡、技能和反思。".to_string(),
             path: None,
             content: None,
-            children: leaf_nodes(&root)?,
+            children: leaf_nodes(data_dir, &root)?,
         },
     ];
     if roots[2].children.is_empty() {
@@ -274,7 +297,7 @@ fn save_memory_tree_file(data_dir: &Path, path: &str, content: &str) -> Result<(
     let memory_root = memory_tree_files_root(data_dir)
         .canonicalize()
         .map_err(|error| format!("记忆树目录不存在：{error}"))?;
-    let knowledge = knowledge_root(data_dir)
+    let knowledge = resolved_knowledge_root(data_dir)?
         .canonicalize()
         .map_err(|error| format!("知识库目录不存在：{error}"))?;
     if !canonical_parent.starts_with(&memory_root) && !canonical_parent.starts_with(&knowledge) {
@@ -296,9 +319,13 @@ fn ensure_memory_tree_files(data_dir: &Path) -> Result<(), String> {
         fs::create_dir_all(root.join("leaves").join(branch))
             .map_err(|error| format!("记忆树叶子目录创建失败：{error}"))?;
     }
-    let works = works_root(data_dir)?;
-    if works.is_dir() {
-        for entry in fs::read_dir(&works).map_err(|error| format!("作品记忆树读取失败：{error}"))? {
+    if let Some(active_work_root) = read_active_work_root(data_dir)? {
+        let works = PathBuf::from(active_work_root);
+        if !works.is_dir() {
+            return Ok(());
+        }
+        for entry in fs::read_dir(&works).map_err(|error| format!("作品记忆树读取失败：{error}"))?
+        {
             let entry = entry.map_err(|error| format!("作品记忆树读取失败：{error}"))?;
             let path = entry.path();
             if !path.is_dir() {
@@ -316,13 +343,13 @@ fn ensure_memory_tree_files(data_dir: &Path) -> Result<(), String> {
 
 fn default_memory_tree_files() -> Vec<(&'static str, &'static str)> {
     vec![
-        ("SOUL.md", "# SOUL.md\n\nWridian 的图腾。这里定义底层灵魂、价值观和共创人格。稳定，不频繁变化。\n"),
+        ("SOUL.md", "# SOUL.md\n\nWridian 的图腾。这里定义底层灵魂、价值观和对话人格。稳定，不频繁变化。\n"),
         ("AGENTS.md", "# AGENTS.md\n\nWridian 的树根。这里定义如何行动、如何使用记忆树、哪些事必须问用户、哪些事不能自作主张。\n"),
         ("MEMORY.md", "# MEMORY.md\n\nWridian 记忆树主干。这里维护索引、上下文编译策略、分支说明和最近活跃叶子。\n\n## Context Compile\n\n- 先读 SOUL.md、AGENTS.md、MEMORY.md。\n- 再读命中分支的 branches/*.md。\n- 最后摘取最近、活跃、命中的 leaves。\n- 候选叶子必须经用户确认才写入 leaves。\n"),
         ("branches/SENSE.md", "# SENSE.md\n\n自我意识机制。定义什么样的 agent 自己想做的事可以长成叶子，且必须经过用户同意。\n"),
         ("branches/USER.md", "# USER.md\n\n用户画像准则。定义哪些创作之外的用户信息可以长成叶子，哪些不能写。\n"),
         ("branches/RELATIONSHIP.md", "# RELATIONSHIP.md\n\n关系准则。定义什么样的共处花絮值得记录，以及如何影响后续相处。\n"),
-        ("branches/JOURNEY.md", "# JOURNEY.md\n\n共创里程碑。定义小节点如何沉淀，如何汇总成里程碑。\n"),
+        ("branches/JOURNEY.md", "# JOURNEY.md\n\n创作里程碑。定义小节点如何沉淀，如何汇总成里程碑。\n"),
         ("branches/DRAMA.md", "# DRAMA.md\n\n剧本准则。定义剧本、短剧、分集、场景、对白相关记忆如何长叶。\n"),
         ("branches/NOVEL.md", "# NOVEL.md\n\n小说准则。定义小说、章节、人物、叙事、世界观相关记忆如何长叶。\n"),
         ("branches/KNOWLEDGE.md", "# KNOWLEDGE.md\n\n知识生产准则。定义知识卡、资料、设定、概念如何长叶。\n"),
@@ -331,7 +358,11 @@ fn default_memory_tree_files() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
-fn ensure_project_memory_files(root: &Path, project_path: &Path, project_name: &str) -> Result<(), String> {
+fn ensure_project_memory_files(
+    root: &Path,
+    project_path: &Path,
+    project_name: &str,
+) -> Result<(), String> {
     let branch = project_branch_for_path(project_path);
     let folder = root.join("leaves").join(branch).join(format!(
         "{}-{}",
@@ -358,19 +389,30 @@ fn memory_tree_files_root(data_dir: &Path) -> PathBuf {
     memory_folder_path(data_dir).join("memory-tree")
 }
 
-fn memory_file_node(root: &Path, relative: &str, label: &str, description: &str) -> Result<MemoryTreeNode, String> {
+fn memory_file_node(
+    root: &Path,
+    relative: &str,
+    label: &str,
+    description: &str,
+) -> Result<MemoryTreeNode, String> {
     let path = root.join(relative);
     arbitrary_file_node(&path, label.to_string(), description.to_string())
 }
 
-fn arbitrary_file_node(path: &Path, label: String, description: String) -> Result<MemoryTreeNode, String> {
+fn arbitrary_file_node(
+    path: &Path,
+    label: String,
+    description: String,
+) -> Result<MemoryTreeNode, String> {
     Ok(MemoryTreeNode {
         id: path.to_string_lossy().into_owned(),
         kind: "file".to_string(),
         label,
         description,
         path: Some(path.to_string_lossy().into_owned()),
-        content: Some(fs::read_to_string(path).map_err(|error| format!("记忆树文件读取失败：{error}"))?),
+        content: Some(
+            fs::read_to_string(path).map_err(|error| format!("记忆树文件读取失败：{error}"))?,
+        ),
         children: Vec::new(),
     })
 }
@@ -379,24 +421,26 @@ fn branch_nodes(root: &Path) -> Result<Vec<MemoryTreeNode>, String> {
     MEMORY_BRANCHES
         .iter()
         .map(|(_, file, description)| {
-            memory_file_node(
-                root,
-                &format!("branches/{file}"),
-                file,
-                description,
-            )
+            memory_file_node(root, &format!("branches/{file}"), file, description)
         })
         .collect()
 }
 
-fn leaf_nodes(root: &Path) -> Result<Vec<MemoryTreeNode>, String> {
+fn leaf_nodes(data_dir: &Path, root: &Path) -> Result<Vec<MemoryTreeNode>, String> {
     let mut nodes = Vec::new();
     for (branch, file, description) in MEMORY_BRANCHES {
-        nodes.push(folder_node(
+        let mut node = folder_node(
             &root.join("leaves").join(branch),
             branch.to_string(),
             format!("{description} 的具体叶子；规则见 branches/{file}。"),
-        )?);
+        )?;
+        if branch == "knowledge" {
+            node.children
+                .push(knowledge_cards_folder_node(data_dir, root)?);
+            node.children
+                .sort_by(|left, right| left.label.cmp(&right.label));
+        }
+        nodes.push(node);
     }
     Ok(nodes)
 }
@@ -404,7 +448,8 @@ fn leaf_nodes(root: &Path) -> Result<Vec<MemoryTreeNode>, String> {
 fn folder_node(path: &Path, label: String, description: String) -> Result<MemoryTreeNode, String> {
     let mut children = Vec::new();
     if path.is_dir() {
-        for entry in fs::read_dir(path).map_err(|error| format!("记忆树目录读取失败：{error}"))? {
+        for entry in fs::read_dir(path).map_err(|error| format!("记忆树目录读取失败：{error}"))?
+        {
             let entry = entry.map_err(|error| format!("记忆树目录读取失败：{error}"))?;
             let child = entry.path();
             if child.extension().and_then(|extension| extension.to_str()) == Some("md") {
@@ -428,34 +473,94 @@ fn folder_node(path: &Path, label: String, description: String) -> Result<Memory
     })
 }
 
-fn migrate_legacy_memory_files(data_dir: &Path, root: &Path) -> Result<(), String> {
+fn knowledge_cards_folder_node(data_dir: &Path, root: &Path) -> Result<MemoryTreeNode, String> {
+    let knowledge = read_active_knowledge_root(data_dir)?
+        .map(PathBuf::from)
+        .filter(|path| path.is_dir());
+    let mut children = Vec::new();
+    if let Some(knowledge_root) = &knowledge {
+        collect_knowledge_card_nodes(knowledge_root, &mut children)?;
+    }
+    children.sort_by(|left, right| left.label.cmp(&right.label));
+    Ok(MemoryTreeNode {
+        id: root
+            .join("leaves")
+            .join("knowledge")
+            .join("cards")
+            .to_string_lossy()
+            .into_owned(),
+        kind: "folder".to_string(),
+        label: "cards".to_string(),
+        description: "从当前知识库同步读取的知识卡。".to_string(),
+        path: knowledge.map(|path| path.to_string_lossy().into_owned()),
+        content: None,
+        children,
+    })
+}
+
+fn collect_knowledge_card_nodes(
+    root: &Path,
+    nodes: &mut Vec<MemoryTreeNode>,
+) -> Result<(), String> {
+    if !root.is_dir() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(root).map_err(|error| format!("知识卡目录读取失败：{error}"))?
+    {
+        let entry = entry.map_err(|error| format!("知识卡目录读取失败：{error}"))?;
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        if path.is_dir() {
+            collect_knowledge_card_nodes(&path, nodes)?;
+        } else if path.extension().and_then(|extension| extension.to_str()) == Some("md") {
+            let mut node =
+                arbitrary_file_node(&path, name, "当前知识库中的 Markdown 知识卡。".to_string())?;
+            node.kind = "knowledge-card".to_string();
+            nodes.push(node);
+        }
+    }
+    Ok(())
+}
+
+fn migrate_legacy_memory_files(_data_dir: &Path, root: &Path) -> Result<(), String> {
     copy_legacy_if_target_empty(&root.join("partner").join("soul.md"), &root.join("SOUL.md"))?;
-    copy_legacy_if_target_empty(&root.join("global").join("AGENTS.md"), &root.join("AGENTS.md"))?;
-    copy_legacy_if_target_empty(&root.join("global").join("MEMORY.md"), &root.join("MEMORY.md"))?;
+    copy_legacy_if_target_empty(
+        &root.join("global").join("AGENTS.md"),
+        &root.join("AGENTS.md"),
+    )?;
+    copy_legacy_if_target_empty(
+        &root.join("global").join("MEMORY.md"),
+        &root.join("MEMORY.md"),
+    )?;
     copy_legacy_if_target_empty(
         &root.join("partner").join("user.md"),
         &root.join("leaves").join("user").join("legacy-user.md"),
     )?;
     copy_legacy_if_target_empty(
         &root.join("partner").join("relationship.md"),
-        &root.join("leaves").join("relationship").join("legacy-relationship.md"),
+        &root
+            .join("leaves")
+            .join("relationship")
+            .join("legacy-relationship.md"),
     )?;
     copy_legacy_if_target_empty(
         &root.join("partner").join("partnermemory.md"),
-        &root.join("leaves").join("relationship").join("legacy-partnermemory.md"),
+        &root
+            .join("leaves")
+            .join("relationship")
+            .join("legacy-partnermemory.md"),
     )?;
     copy_legacy_if_target_empty(
         &root.join("global").join("AWARENESS.md"),
-        &root.join("leaves").join("awareness").join("legacy-awareness.md"),
+        &root
+            .join("leaves")
+            .join("awareness")
+            .join("legacy-awareness.md"),
     )?;
 
-    let knowledge = knowledge_root(data_dir);
-    if knowledge.is_dir() {
-        copy_markdown_folder_into_leaves(
-            &knowledge,
-            &root.join("leaves").join("knowledge").join("cards"),
-        )?;
-    }
     Ok(())
 }
 
@@ -473,18 +578,97 @@ fn copy_legacy_if_target_empty(source: &Path, target: &Path) -> Result<(), Strin
     fs::write(target, content).map_err(|error| format!("记忆树迁移写入失败：{error}"))
 }
 
-fn copy_markdown_folder_into_leaves(source_root: &Path, target_root: &Path) -> Result<(), String> {
-    for entry in fs::read_dir(source_root).map_err(|error| format!("知识卡迁移读取失败：{error}"))? {
-        let entry = entry.map_err(|error| format!("知识卡迁移读取失败：{error}"))?;
-        let path = entry.path();
-        let target = target_root.join(entry.file_name());
-        if path.is_dir() {
-            copy_markdown_folder_into_leaves(&path, &target)?;
-        } else if path.extension().and_then(|extension| extension.to_str()) == Some("md") {
-            copy_legacy_if_target_empty(&path, &target)?;
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_data_dir(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "wridian-memory-test-{}-{}",
+            name,
+            crate::runtime::iso_timestamp()
+        ));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).expect("create temp data dir");
+        path
     }
-    Ok(())
+
+    #[test]
+    fn memory_tree_reads_knowledge_cards_from_selected_source_without_mirror_copy() {
+        let data_dir = temp_data_dir("knowledge-sync");
+        let work_root = data_dir.join("works");
+        let knowledge_root = data_dir.join("knowledge");
+        fs::create_dir_all(&work_root).expect("create works");
+        fs::create_dir_all(&knowledge_root).expect("create knowledge");
+        fs::write(knowledge_root.join("人物.md"), "第一版").expect("write knowledge");
+        fs::create_dir_all(crate::runtime::runtime_root(&data_dir)).expect("create runtime");
+        fs::write(
+            crate::runtime::workspace_config_path(&data_dir),
+            serde_json::json!({
+                "schemaVersion": 1,
+                "activeWorkRoot": work_root.to_string_lossy(),
+                "knowledgeRoot": knowledge_root.to_string_lossy()
+            })
+            .to_string(),
+        )
+        .expect("write workspace config");
+
+        let first = read_memory_tree_files(&data_dir).expect("read first tree");
+        let knowledge_leaf =
+            find_node_by_label(&first.roots, "人物.md").expect("knowledge leaf exists");
+        assert_eq!(knowledge_leaf.kind, "knowledge-card");
+        assert_eq!(knowledge_leaf.content.as_deref(), Some("第一版"));
+
+        fs::write(knowledge_root.join("人物.md"), "第二版").expect("update knowledge");
+        let second = read_memory_tree_files(&data_dir).expect("read second tree");
+        let updated_leaf =
+            find_node_by_label(&second.roots, "人物.md").expect("updated leaf exists");
+
+        assert_eq!(updated_leaf.content.as_deref(), Some("第二版"));
+        assert!(!memory_tree_files_root(&data_dir)
+            .join("leaves/knowledge/cards/人物.md")
+            .exists());
+    }
+
+    #[test]
+    fn memory_tree_does_not_sync_default_libraries_before_user_selection() {
+        let data_dir = temp_data_dir("unselected-libraries");
+        let default_work = crate::runtime::vault_root(&data_dir)
+            .join("works")
+            .join("默认作品");
+        let default_knowledge = crate::runtime::knowledge_root(&data_dir);
+        fs::create_dir_all(&default_work).expect("create default work");
+        fs::create_dir_all(&default_knowledge).expect("create default knowledge");
+        fs::write(default_knowledge.join("默认知识.md"), "默认知识")
+            .expect("write default knowledge");
+
+        let tree = read_memory_tree_files(&data_dir).expect("read tree");
+        let novel_leaves = memory_tree_files_root(&data_dir)
+            .join("leaves")
+            .join("novel");
+        let novel_leaf_count = fs::read_dir(&novel_leaves)
+            .expect("read novel leaves")
+            .filter_map(Result::ok)
+            .count();
+
+        assert!(find_node_by_label(&tree.roots, "默认知识.md").is_none());
+        assert_eq!(novel_leaf_count, 0);
+    }
+
+    fn find_node_by_label<'a>(
+        nodes: &'a [MemoryTreeNode],
+        label: &str,
+    ) -> Option<&'a MemoryTreeNode> {
+        for node in nodes {
+            if node.label == label {
+                return Some(node);
+            }
+            if let Some(child) = find_node_by_label(&node.children, label) {
+                return Some(child);
+            }
+        }
+        None
+    }
 }
 
 fn context_files_for_source(data_dir: &Path, source_path: &str) -> Result<Vec<PathBuf>, String> {
@@ -499,24 +683,43 @@ fn context_files_for_source(data_dir: &Path, source_path: &str) -> Result<Vec<Pa
     ];
     if let Some((project_path, name)) = project_for_source(data_dir, source_path)? {
         let branch = project_branch_for_path(&project_path);
-        files.push(root.join("branches").join(if branch == "drama" { "DRAMA.md" } else { "NOVEL.md" }));
-        files.push(root.join("leaves").join(branch).join(format!(
-            "{}-{}",
-            sanitize_markdown_file_name(&name),
-            stable_scope_id(&project_path.to_string_lossy())
-        )).join("project.md"));
+        files.push(root.join("branches").join(if branch == "drama" {
+            "DRAMA.md"
+        } else {
+            "NOVEL.md"
+        }));
+        files.push(
+            root.join("leaves")
+                .join(branch)
+                .join(format!(
+                    "{}-{}",
+                    sanitize_markdown_file_name(&name),
+                    stable_scope_id(&project_path.to_string_lossy())
+                ))
+                .join("project.md"),
+        );
     }
     Ok(files)
 }
 
-fn project_for_source(data_dir: &Path, source_path: &str) -> Result<Option<(PathBuf, String)>, String> {
+fn project_for_source(
+    data_dir: &Path,
+    source_path: &str,
+) -> Result<Option<(PathBuf, String)>, String> {
     let trimmed = source_path.trim();
     if trimmed.is_empty() {
         return Ok(None);
     }
     let path = PathBuf::from(trimmed);
     let canonical = path.canonicalize().unwrap_or(path);
-    let works = works_root(data_dir)?.canonicalize().unwrap_or(works_root(data_dir)?);
+    let Some(active_work_root) = read_active_work_root(data_dir)? else {
+        return Ok(None);
+    };
+    let works_path = PathBuf::from(active_work_root);
+    if !works_path.is_dir() {
+        return Ok(None);
+    }
+    let works = works_path.canonicalize().unwrap_or(works_path);
     if !canonical.starts_with(&works) {
         return Ok(None);
     }
@@ -537,7 +740,11 @@ fn project_for_source(data_dir: &Path, source_path: &str) -> Result<Option<(Path
 
 fn project_branch_for_path(project_path: &Path) -> &'static str {
     let text = project_path.to_string_lossy().to_lowercase();
-    if text.contains("剧") || text.contains("短剧") || text.contains("drama") || text.contains("screenplay") {
+    if text.contains("剧")
+        || text.contains("短剧")
+        || text.contains("drama")
+        || text.contains("screenplay")
+    {
         "drama"
     } else {
         "novel"
@@ -561,14 +768,20 @@ fn propose_memory_leaf(
         .unwrap_or_else(|| candidate_title(&content, &intent));
     let title = format!("{} - {}", branch_label(branch), raw_title.trim());
     let summary = candidate_summary(&content, &intent);
-    let reason = format!("命中 {} 分支：本轮内容包含可复用的创作/共处/知识信号，需用户确认后才写入长期叶子。", branch_label(branch));
+    let reason = format!(
+        "命中 {} 分支：本轮内容包含可复用的创作/共处/知识信号，需用户确认后才写入长期叶子。",
+        branch_label(branch)
+    );
     let slug = sanitize_markdown_file_name(&format!("{}-{}", chrono_like_date(), raw_title));
     let target_path = memory_tree_files_root(data_dir)
         .join("leaves")
         .join(branch)
         .join(format!("{slug}.md"));
     Ok(Some(MemoryLeafCandidate {
-        id: format!("candidate:{branch}:{}", stable_scope_id(&format!("{source_path}:{summary}"))),
+        id: format!(
+            "candidate:{branch}:{}",
+            stable_scope_id(&format!("{source_path}:{summary}"))
+        ),
         branch: branch.to_string(),
         title,
         summary,
@@ -608,13 +821,30 @@ fn infer_leaf_branch<'a>(
     intent: &str,
 ) -> &'a str {
     let text = format!("{source_path}\n{draft_kind:?}\n{content}\n{intent}").to_lowercase();
-    if draft_kind == Some("screenplay") || text.contains("剧本") || text.contains("短剧") || text.contains("对白") || text.contains(".fountain") {
+    if draft_kind == Some("screenplay")
+        || text.contains("剧本")
+        || text.contains("短剧")
+        || text.contains("对白")
+        || text.contains(".fountain")
+    {
         "drama"
-    } else if text.contains("小说") || text.contains("章节") || text.contains("人物") || text.contains("世界观") {
+    } else if text.contains("小说")
+        || text.contains("章节")
+        || text.contains("人物")
+        || text.contains("世界观")
+    {
         "novel"
-    } else if text.contains("知识") || text.contains("资料") || text.contains("设定") || text.contains("概念") {
+    } else if text.contains("知识")
+        || text.contains("资料")
+        || text.contains("设定")
+        || text.contains("概念")
+    {
         "knowledge"
-    } else if text.contains("流程") || text.contains("技能") || text.contains("提示词") || text.contains("工具") {
+    } else if text.contains("流程")
+        || text.contains("技能")
+        || text.contains("提示词")
+        || text.contains("工具")
+    {
         "skill"
     } else if text.contains("关系") || text.contains("语气") || text.contains("情绪") {
         "relationship"
@@ -642,7 +872,7 @@ fn branch_label(branch: &str) -> &'static str {
         "sense" => "自我意识",
         "user" => "用户画像",
         "relationship" => "关系",
-        "journey" => "共创里程碑",
+        "journey" => "创作里程碑",
         "drama" => "剧本",
         "novel" => "小说",
         "knowledge" => "知识",
@@ -653,7 +883,11 @@ fn branch_label(branch: &str) -> &'static str {
 }
 
 fn candidate_title(content: &str, intent: &str) -> String {
-    let source = if intent.trim().is_empty() { content } else { intent };
+    let source = if intent.trim().is_empty() {
+        content
+    } else {
+        intent
+    };
     source
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -688,12 +922,18 @@ fn unique_markdown_path(folder: &Path, slug: &str) -> PathBuf {
             return path;
         }
     }
-    folder.join(format!("{slug}-{}", stable_scope_id(slug)))
+    folder
+        .join(format!("{slug}-{}", stable_scope_id(slug)))
         .with_extension("md")
 }
 
 fn compact_markdown(text: &str, max_chars: usize) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(max_chars).collect()
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(max_chars)
+        .collect()
 }
 
 fn sanitize_markdown_file_name(value: &str) -> String {

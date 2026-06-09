@@ -38,7 +38,6 @@ export function useChatManager({ onDraftEdits }: { onDraftEdits: (edits: ChatDra
       selectedText: input.selectedText,
       text: userInput,
     });
-    const selectedText = userMessage.selectedText ?? "";
     const messagesWithUser = [...messages, userMessage];
     setMessages(messagesWithUser);
     void persistChat(messagesWithUser, input, sessionIdRef.current, setError);
@@ -48,9 +47,10 @@ export function useChatManager({ onDraftEdits }: { onDraftEdits: (edits: ChatDra
         sourcePath: input.sourcePath,
         title: input.title,
         content: input.content,
+        contextItems: input.contextPills,
         draftKind: input.draftKind,
         userInput,
-        selectedText,
+        selectedText: input.selectedText ?? "",
       });
       const messagesWithAssistant = [...messagesWithUser, createAssistantChatMessage(response.reply)];
       setMessages(messagesWithAssistant);

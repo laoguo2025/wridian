@@ -1,5 +1,6 @@
 use crate::runtime::{
-    ensure_workspace, iso_timestamp, knowledge_root, vault_root, workspace_config_path, wridian_data_dir,
+    ensure_workspace, iso_timestamp, knowledge_root, vault_root, workspace_config_path,
+    wridian_data_dir,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -13,14 +14,23 @@ pub(crate) struct WorkspaceInfo {
     runtime_path: String,
     files_root_path: String,
     active_work_root: Option<String>,
+    work_root_configured: bool,
     files: Vec<WorkFileNode>,
     knowledge_root_path: String,
+    active_knowledge_root: Option<String>,
+    knowledge_root_configured: bool,
     knowledge_files: Vec<WorkFileNode>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SetWorkRootInput {
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SetKnowledgeRootInput {
     path: String,
 }
 
@@ -71,6 +81,8 @@ pub(crate) struct SaveFileResponse {
 pub(crate) struct WorkFileNode {
     name: String,
     path: String,
+    relative_path: String,
+    library: String,
     folder: bool,
     children: Vec<WorkFileNode>,
 }
@@ -90,7 +102,31 @@ pub(crate) fn wridian_set_work_root(input: SetWorkRootInput) -> Result<Workspace
     if !root.is_dir() {
         return Err("请选择一个存在的本地文件夹。".to_string());
     }
-    write_workspace_config(&data_dir, &root)?;
+    write_workspace_roots_config(
+        &data_dir,
+        Some(&root),
+        read_active_knowledge_root(&data_dir)?
+            .as_deref()
+            .map(Path::new),
+    )?;
+    workspace_info(&data_dir)
+}
+
+#[tauri::command]
+pub(crate) fn wridian_set_knowledge_root(
+    input: SetKnowledgeRootInput,
+) -> Result<WorkspaceInfo, String> {
+    let data_dir = wridian_data_dir()?;
+    ensure_workspace(&data_dir)?;
+    let root = PathBuf::from(input.path.trim());
+    if !root.is_dir() {
+        return Err("请选择一个存在的本地文件夹。".to_string());
+    }
+    write_workspace_roots_config(
+        &data_dir,
+        read_active_work_root(&data_dir)?.as_deref().map(Path::new),
+        Some(&root),
+    )?;
     workspace_info(&data_dir)
 }
 
@@ -209,30 +245,49 @@ pub(crate) fn wridian_trash_work_node(input: FilePathInput) -> Result<WorkspaceI
 
 fn workspace_info(data_dir: &Path) -> Result<WorkspaceInfo, String> {
     let files_root = files_root(data_dir)?;
+    let active_work_root = read_active_work_root(data_dir)?;
+    let resolved_knowledge = resolved_knowledge_root(data_dir)?;
+    let active_knowledge_root = read_active_knowledge_root(data_dir)?;
     Ok(WorkspaceInfo {
         vault_path: vault_root(data_dir).to_string_lossy().into_owned(),
         runtime_path: crate::runtime::runtime_root(data_dir)
             .to_string_lossy()
             .into_owned(),
         files_root_path: files_root.to_string_lossy().into_owned(),
-        active_work_root: read_active_work_root(data_dir)?,
-        files: read_work_tree(&files_root)?,
-        knowledge_root_path: knowledge_root(data_dir).to_string_lossy().into_owned(),
-        knowledge_files: read_work_tree(&knowledge_root(data_dir))?,
+        active_work_root: active_work_root.clone(),
+        work_root_configured: active_work_root.is_some(),
+        files: if active_work_root.is_some() {
+            read_work_tree(&files_root, &files_root, "works")?
+        } else {
+            Vec::new()
+        },
+        knowledge_root_path: resolved_knowledge.to_string_lossy().into_owned(),
+        active_knowledge_root: active_knowledge_root.clone(),
+        knowledge_root_configured: active_knowledge_root.is_some(),
+        knowledge_files: if active_knowledge_root.is_some() {
+            read_work_tree(&resolved_knowledge, &resolved_knowledge, "knowledge")?
+        } else {
+            Vec::new()
+        },
     })
 }
 
-fn write_workspace_config(data_dir: &Path, root: &Path) -> Result<(), String> {
+fn write_workspace_roots_config(
+    data_dir: &Path,
+    work_root: Option<&Path>,
+    knowledge_root: Option<&Path>,
+) -> Result<(), String> {
     let config = serde_json::to_string_pretty(&json!({
         "schemaVersion": 1,
-        "activeWorkRoot": root.to_string_lossy()
+        "activeWorkRoot": work_root.map(|root| root.to_string_lossy().into_owned()),
+        "knowledgeRoot": knowledge_root.map(|root| root.to_string_lossy().into_owned())
     }))
     .map_err(|error| error.to_string())?;
     fs::write(workspace_config_path(data_dir), config)
         .map_err(|error| format!("Wridian 工作区配置写入失败：{error}"))
 }
 
-fn read_active_work_root(data_dir: &Path) -> Result<Option<String>, String> {
+pub(crate) fn read_active_work_root(data_dir: &Path) -> Result<Option<String>, String> {
     let path = workspace_config_path(data_dir);
     if !path.exists() {
         return Ok(None);
@@ -249,6 +304,23 @@ fn read_active_work_root(data_dir: &Path) -> Result<Option<String>, String> {
         .map(ToOwned::to_owned))
 }
 
+pub(crate) fn read_active_knowledge_root(data_dir: &Path) -> Result<Option<String>, String> {
+    let path = workspace_config_path(data_dir);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("Wridian 工作区配置读取失败：{error}"))?;
+    let value: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|error| format!("Wridian 工作区配置格式损坏：{error}"))?;
+    Ok(value
+        .get("knowledgeRoot")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned))
+}
+
 fn files_root(data_dir: &Path) -> Result<PathBuf, String> {
     if let Some(root) = read_active_work_root(data_dir)? {
         let path = PathBuf::from(root);
@@ -259,7 +331,17 @@ fn files_root(data_dir: &Path) -> Result<PathBuf, String> {
     Ok(vault_root(data_dir).join("works"))
 }
 
-fn read_work_tree(root: &Path) -> Result<Vec<WorkFileNode>, String> {
+pub(crate) fn resolved_knowledge_root(data_dir: &Path) -> Result<PathBuf, String> {
+    if let Some(root) = read_active_knowledge_root(data_dir)? {
+        let path = PathBuf::from(root);
+        if path.is_dir() {
+            return Ok(path);
+        }
+    }
+    Ok(knowledge_root(data_dir))
+}
+
+fn read_work_tree(root: &Path, base: &Path, library: &str) -> Result<Vec<WorkFileNode>, String> {
     if !root.is_dir() {
         return Ok(Vec::new());
     }
@@ -273,10 +355,12 @@ fn read_work_tree(root: &Path) -> Result<Vec<WorkFileNode>, String> {
             continue;
         }
         if path.is_dir() {
-            let children = read_work_tree(&path)?;
+            let children = read_work_tree(&path, base, library)?;
             nodes.push(WorkFileNode {
                 name,
                 path: path.to_string_lossy().into_owned(),
+                relative_path: relative_path(base, &path),
+                library: library.to_string(),
                 folder: true,
                 children,
             });
@@ -284,6 +368,8 @@ fn read_work_tree(root: &Path) -> Result<Vec<WorkFileNode>, String> {
             nodes.push(WorkFileNode {
                 name,
                 path: path.to_string_lossy().into_owned(),
+                relative_path: relative_path(base, &path),
+                library: library.to_string(),
                 folder: false,
                 children: Vec::new(),
             });
@@ -366,23 +452,37 @@ fn resolve_allowed_existing_node(data_dir: &Path, raw_path: &str) -> Result<Path
 }
 
 pub(crate) fn allowed_work_roots(data_dir: &Path) -> Result<Vec<PathBuf>, String> {
-    let mut roots = vec![vault_root(data_dir)
-        .canonicalize()
-        .map_err(|error| format!("默认写作目录解析失败：{error}"))?];
-    let knowledge = knowledge_root(data_dir);
-    if knowledge.is_dir() {
-        roots.push(
-            knowledge
-                .canonicalize()
-                .map_err(|error| format!("知识库目录解析失败：{error}"))?,
-        );
-    }
+    let mut roots = Vec::new();
     if let Some(root) = read_active_work_root(data_dir)? {
         let path = PathBuf::from(root);
         if path.is_dir() {
             roots.push(
                 path.canonicalize()
                     .map_err(|error| format!("作品目录解析失败：{error}"))?,
+            );
+        }
+    }
+    if let Some(root) = read_active_knowledge_root(data_dir)? {
+        let path = PathBuf::from(root);
+        if path.is_dir() {
+            roots.push(
+                path.canonicalize()
+                    .map_err(|error| format!("知识库目录解析失败：{error}"))?,
+            );
+        }
+    }
+    if roots.is_empty() {
+        roots.push(
+            vault_root(data_dir)
+                .canonicalize()
+                .map_err(|error| format!("默认写作目录解析失败：{error}"))?,
+        );
+        let knowledge = knowledge_root(data_dir);
+        if knowledge.is_dir() {
+            roots.push(
+                knowledge
+                    .canonicalize()
+                    .map_err(|error| format!("知识库目录解析失败：{error}"))?,
             );
         }
     }
@@ -447,6 +547,13 @@ fn unique_child_path(parent: &Path, desired_name: &str) -> PathBuf {
     parent.join(format!("{stem} {}{extension}", iso_timestamp()))
 }
 
+fn relative_path(base: &Path, path: &Path) -> String {
+    path.strip_prefix(base)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
 fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), String> {
     fs::create_dir_all(target).map_err(|error| format!("文件夹副本创建失败：{error}"))?;
     for entry in fs::read_dir(source).map_err(|error| format!("文件夹读取失败：{error}"))? {
@@ -461,4 +568,51 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_data_dir(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "wridian-workspace-test-{}-{}",
+            name,
+            crate::runtime::iso_timestamp()
+        ));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).expect("create temp data dir");
+        path
+    }
+
+    #[test]
+    fn workspace_info_exposes_relative_paths_for_selected_libraries() {
+        let data_dir = temp_data_dir("relative-paths");
+        let work_root = data_dir.join("user-works");
+        let knowledge_root = data_dir.join("user-knowledge");
+        fs::create_dir_all(work_root.join("作品A")).expect("create work project");
+        fs::create_dir_all(&knowledge_root).expect("create knowledge root");
+        fs::write(work_root.join("作品A").join("第一章.md"), "正文").expect("write work file");
+        fs::write(knowledge_root.join("人物卡.md"), "人物").expect("write knowledge file");
+        fs::create_dir_all(crate::runtime::runtime_root(&data_dir)).expect("create runtime");
+        fs::write(
+            workspace_config_path(&data_dir),
+            serde_json::json!({
+                "schemaVersion": 1,
+                "activeWorkRoot": work_root.to_string_lossy(),
+                "knowledgeRoot": knowledge_root.to_string_lossy()
+            })
+            .to_string(),
+        )
+        .expect("write workspace config");
+
+        let info = workspace_info(&data_dir).expect("workspace info");
+        let work_file = &info.files[0].children[0];
+        let knowledge_file = &info.knowledge_files[0];
+
+        assert_eq!(work_file.relative_path, "作品A/第一章.md");
+        assert_eq!(knowledge_file.relative_path, "人物卡.md");
+        assert_eq!(work_file.library, "works");
+        assert_eq!(knowledge_file.library, "knowledge");
+    }
 }
