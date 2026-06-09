@@ -1062,6 +1062,12 @@ button {
   gap: 8px;
 }
 
+.knowledge-graph-drawer {
+  width: min(900px, calc(100vw - 24px));
+  height: min(736px, calc(100vh - 24px));
+  gap: 8px;
+}
+
 .settings-dialog {
   height: auto;
   max-height: min(680px, calc(100vh - 32px));
@@ -1689,6 +1695,140 @@ button {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: calc(13px * var(--ui-font-scale, 1));
   line-height: 1.6;
+}
+
+.knowledge-graph-stage {
+  position: relative;
+  min-height: 0;
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 44%, color-mix(in srgb, var(--accent), transparent 88%), transparent 30%),
+    radial-gradient(circle at 76% 28%, color-mix(in srgb, var(--focus), transparent 88%), transparent 24%),
+    color-mix(in srgb, var(--bg-selected), var(--bg-panel) 44%);
+}
+
+.knowledge-graph-stage::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--text-primary), transparent 96%) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--text-primary), transparent 96%) 1px, transparent 1px);
+  background-size: 44px 44px;
+  opacity: 0.34;
+  pointer-events: none;
+}
+
+.knowledge-graph-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+  font-size: calc(13px * var(--ui-font-scale, 1));
+}
+
+.knowledge-graph-edges {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.graph-edge {
+  stroke: color-mix(in srgb, var(--text-muted), transparent 56%);
+  stroke-width: 0.16;
+  vector-effect: non-scaling-stroke;
+}
+
+.graph-edge.edge-wikilink {
+  stroke: color-mix(in srgb, var(--accent), transparent 48%);
+  stroke-width: 0.22;
+}
+
+.knowledge-graph-nodes {
+  position: absolute;
+  inset: 0;
+}
+
+.graph-node {
+  position: absolute;
+  left: var(--graph-x);
+  top: var(--graph-y);
+  width: var(--graph-size);
+  height: var(--graph-size);
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-primary);
+  padding: 0;
+  transform: translate(-50%, -50%);
+  animation: graph-float 5.6s ease-in-out infinite;
+  animation-delay: var(--graph-delay);
+}
+
+.graph-node span {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--accent), white 14%);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--bg-panel), transparent 22%),
+    0 0 18px color-mix(in srgb, var(--accent), transparent 44%);
+}
+
+.graph-node.node-folder span {
+  background: color-mix(in srgb, var(--focus), var(--accent) 18%);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--bg-panel), transparent 24%),
+    0 0 22px color-mix(in srgb, var(--focus), transparent 48%);
+}
+
+.graph-node strong {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 5px);
+  max-width: 112px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: calc(10px * var(--ui-font-scale, 1));
+  font-weight: 500;
+  line-height: 13px;
+  opacity: 0;
+  text-overflow: ellipsis;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.graph-node:hover,
+.graph-node:focus-visible {
+  z-index: 4;
+}
+
+.graph-node:hover span,
+.graph-node:focus-visible span {
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--bg-panel), transparent 12%),
+    0 0 28px color-mix(in srgb, var(--accent), transparent 26%);
+}
+
+.graph-node:hover strong,
+.graph-node:focus-visible strong {
+  opacity: 1;
+}
+
+@keyframes graph-float {
+  0%,
+  100% {
+    transform: translate(-50%, -50%);
+  }
+  50% {
+    transform: translate(calc(-50% + 2px), calc(-50% - 3px));
+  }
 }
 
 .memory-tree-empty {

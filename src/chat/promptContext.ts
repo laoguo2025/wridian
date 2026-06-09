@@ -39,10 +39,19 @@ export type PromptSuggestion = {
 export type PromptSuggestionInput = {
   draftKind: DraftKind;
   knowledgeCards: PromptKnowledgeCardCandidate[];
+  knowledgeCategories?: PromptKnowledgeCategoryCandidate[];
+  selectedKnowledgeCategoryId?: string;
+};
+
+export type PromptKnowledgeCategoryCandidate = {
+  id: string;
+  title: string;
+  detail: string;
 };
 
 export type PromptKnowledgeCardCandidate = {
   category?: string;
+  categoryId?: string;
   id: string;
   relativePath?: string;
   sourcePath: string;
@@ -164,7 +173,22 @@ export function createPromptPillFromSuggestion(suggestion: PromptSuggestion): Pr
 export function buildPromptSuggestions(input: PromptSuggestionInput): PromptSuggestion[] {
   const suggestions: PromptSuggestion[] = [];
 
-  for (const card of input.knowledgeCards.slice(0, 40)) {
+  if (!input.selectedKnowledgeCategoryId) {
+    for (const category of input.knowledgeCategories ?? []) {
+      suggestions.push({
+        id: `knowledge-category:${category.id}`,
+        label: category.title,
+        detail: category.detail,
+        insertText: `category:${category.id}`,
+        kind: "context",
+        pillKind: "tool",
+      });
+    }
+  }
+
+  for (const card of input.knowledgeCards
+    .filter((card) => !input.selectedKnowledgeCategoryId || card.categoryId === input.selectedKnowledgeCategoryId)
+    .slice(0, 40)) {
     suggestions.push({
       id: `memory:${card.id}`,
       label: card.title || card.category || "知识卡",

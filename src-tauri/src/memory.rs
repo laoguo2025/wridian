@@ -13,7 +13,7 @@ const MEMORY_BRANCHES: [(&str, &str, &str); 9] = [
     ("journey", "JOURNEY.md", "创作里程碑"),
     ("drama", "DRAMA.md", "剧本准则"),
     ("novel", "NOVEL.md", "小说准则"),
-    ("knowledge", "KNOWLEDGE.md", "知识生产准则"),
+    ("knowledge", "KNOWLEDGE.md", "知识库调用机制"),
     ("skill", "SKILL.md", "技能生产准则"),
     ("awareness", "AWARENESS.md", "反思机制"),
 ];
@@ -188,6 +188,40 @@ pub(crate) fn read_relevant_memory_snippets(
     }
     snippets.truncate(limit);
     Ok(snippets)
+}
+
+pub(crate) fn read_project_compressed_memory(
+    data_dir: &Path,
+    project_id: &str,
+) -> Result<String, String> {
+    ensure_memory_tree_files(data_dir)?;
+    let project_path = PathBuf::from(project_id.trim());
+    if !project_path.is_dir() {
+        return Ok(String::new());
+    }
+    let name = project_path
+        .file_name()
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "作品项目".to_string());
+    let branch = project_branch_for_path(&project_path);
+    let path = memory_tree_files_root(data_dir)
+        .join("leaves")
+        .join(branch)
+        .join(format!(
+            "{}-{}",
+            sanitize_markdown_file_name(&name),
+            stable_scope_id(&project_path.to_string_lossy())
+        ))
+        .join("compressed.md");
+    fs::read_to_string(path)
+        .map(|content| compact_markdown(&content, 1400))
+        .or_else(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                Ok(String::new())
+            } else {
+                Err(format!("作品压缩记忆读取失败：{error}"))
+            }
+        })
 }
 
 fn read_memory_state_for_source(
@@ -373,7 +407,7 @@ fn default_memory_tree_files() -> Vec<(&'static str, &'static str)> {
         ("branches/JOURNEY.md", "# JOURNEY.md\n\n创作里程碑。定义小节点如何沉淀，如何汇总成里程碑。\n"),
         ("branches/DRAMA.md", "# DRAMA.md\n\n剧本准则。定义剧本、短剧、分集、场景、对白相关记忆如何长叶。\n"),
         ("branches/NOVEL.md", "# NOVEL.md\n\n小说准则。定义小说、章节、人物、叙事、世界观相关记忆如何长叶。\n"),
-        ("branches/KNOWLEDGE.md", "# KNOWLEDGE.md\n\n知识生产准则。定义知识卡、资料、设定、概念如何长叶。\n"),
+        ("branches/KNOWLEDGE.md", "# KNOWLEDGE.md\n\n知识库调用机制。这里只定义创作记忆树如何引用外部通用知识库、知识卡和知识图谱；不把通用知识沉淀写成作品项目记忆。\n\n- 知识卡通过显式 @ 引用进入本轮对话上下文。\n- 作品项目可以采纳知识卡内容，但采纳后应改写成作品设定或规则。\n- 通用知识的来源、实体、概念和图谱留在知识库，不在创作记忆树中复制成死副本。\n"),
         ("branches/SKILL.md", "# SKILL.md\n\n技能生产准则。定义可复用创作方法、工作流、提示词和工具能力如何长叶。\n"),
         ("branches/AWARENESS.md", "# AWARENESS.md\n\n反思机制。定义什么时候反思，什么时候沉默，反思如何反哺整棵树。\n"),
     ]
@@ -393,6 +427,10 @@ fn ensure_project_memory_files(
     write_memory_tree_file_if_missing(
         &folder.join("project.md"),
         &format!("# {}\n\nbranch: {}\nsource: {}\nstatus: alive\n\n## 作品记忆\n\n这里记录只属于这个作品的长期记忆、规则、禁区、人物边界和续接线索。\n", project_name, branch, project_path.to_string_lossy()),
+    )?;
+    write_memory_tree_file_if_missing(
+        &folder.join("compressed.md"),
+        &format!("# {} 压缩记忆\n\nbranch: {}\nsource: {}\nstatus: active\n\n## 压缩记忆\n\n这里写当前作品项目最应该被 Project Mode 常驻读取的压缩记忆：核心设定、人物边界、禁区、当前进度和下一步。\n", project_name, branch, project_path.to_string_lossy()),
     )
 }
 
@@ -733,6 +771,16 @@ fn context_files_for_source(data_dir: &Path, source_path: &str) -> Result<Vec<Pa
                     stable_scope_id(&project_path.to_string_lossy())
                 ))
                 .join("project.md"),
+        );
+        files.push(
+            root.join("leaves")
+                .join(branch)
+                .join(format!(
+                    "{}-{}",
+                    sanitize_markdown_file_name(&name),
+                    stable_scope_id(&project_path.to_string_lossy())
+                ))
+                .join("compressed.md"),
         );
     }
     Ok(files)

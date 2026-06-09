@@ -1,3 +1,4 @@
+use crate::memory::read_project_compressed_memory;
 use crate::runtime::{ensure_workspace, runtime_root, wridian_data_dir};
 use crate::workspace::{allowed_work_roots, is_supported_writing_file, read_active_work_root, works_root};
 use serde::{Deserialize, Serialize};
@@ -149,14 +150,21 @@ pub(crate) fn read_active_project_context(data_dir: &Path) -> Result<String, Str
     let Some(project) = state.projects.iter().find(|project| project.id == active_id) else {
         return Ok(String::new());
     };
+    let compressed_memory = read_project_compressed_memory(data_dir, &project.id)?;
+    let compressed_block = if compressed_memory.trim().is_empty() {
+        "暂无压缩记忆。".to_string()
+    } else {
+        compressed_memory
+    };
     Ok(format!(
-        "Project Mode：{}\n说明：{}\n项目系统提示：{}\n常驻来源：{}\n排除：{}\nURLs：{}",
+        "Project Mode：{}\n说明：{}\n项目系统提示：{}\n常驻来源：{}\n排除：{}\nURLs：{}\n作品压缩记忆：\n{}",
         project.name,
         project.description,
         project.system_prompt,
         project.inclusions.join(", "),
         project.exclusions.join(", "),
-        project.web_urls.join(", ")
+        project.web_urls.join(", "),
+        compressed_block
     ))
 }
 

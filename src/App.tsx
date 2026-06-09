@@ -109,6 +109,41 @@ type MemoryLeafCandidate = {
   targetPath: string;
 };
 
+type KnowledgeGraphNode = {
+  id: string;
+  label: string;
+  kind: "folder" | "card" | string;
+  path?: string | null;
+  group: string;
+  size: number;
+};
+
+type KnowledgeGraphEdge = {
+  source: string;
+  target: string;
+  kind: string;
+};
+
+type KnowledgeGraphState = {
+  nodes: KnowledgeGraphNode[];
+  edges: KnowledgeGraphEdge[];
+};
+
+type KnowledgeCategory = {
+  detail: string;
+  id: string;
+  title: string;
+};
+
+type KnowledgeCardSuggestion = {
+  category: string;
+  categoryId: string;
+  id: string;
+  relativePath: string;
+  sourcePath: string;
+  title: string;
+};
+
 type FileContextMenu = {
   node: WorkFileNode;
   x: number;
@@ -140,6 +175,9 @@ function App() {
   const [fontSizeMode, setFontSizeMode] = useState<FontSizeMode>("default");
   const [fontSizeMenuOpen, setFontSizeMenuOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
+  const [knowledgeGraphOpen, setKnowledgeGraphOpen] = useState(false);
+  const [knowledgeGraphState, setKnowledgeGraphState] = useState<KnowledgeGraphState>({ nodes: [], edges: [] });
+  const [knowledgeGraphError, setKnowledgeGraphError] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [workspace, setWorkspace] = useState<WorkspaceInfo | null>(null);
   const [workspaceError, setWorkspaceError] = useState("");
@@ -147,6 +185,7 @@ function App() {
   const [pendingEdits, setPendingEdits] = useState<DraftEdit[]>([]);
   const [promptPills, setPromptPills] = useState<PromptContextPill[]>([]);
   const [promptFileContentCache, setPromptFileContentCache] = useState<Record<string, string>>({});
+  const [selectedKnowledgeCategoryId, setSelectedKnowledgeCategoryId] = useState("");
   const [activeModelLabel, setActiveModelLabel] = useState("");
   const [projectState, setProjectState] = useState<ProjectState>({ projects: [] });
   const [relevantNotes, setRelevantNotes] = useState<RelevantNote[]>([]);
@@ -185,6 +224,16 @@ function App() {
       setMemoryError("");
     } catch (error) {
       setMemoryError(error instanceof Error ? error.message : String(error));
+    }
+  }, []);
+
+  const loadKnowledgeGraph = useCallback(async () => {
+    try {
+      const response = await invoke<KnowledgeGraphState>("wridian_get_knowledge_graph");
+      setKnowledgeGraphState(response);
+      setKnowledgeGraphError("");
+    } catch (error) {
+      setKnowledgeGraphError(error instanceof Error ? error.message : String(error));
     }
   }, []);
 
@@ -245,6 +294,11 @@ function App() {
     if (!memoryOpen) return;
     void loadMemoryTree();
   }, [loadMemoryTree, memoryOpen]);
+
+  useEffect(() => {
+    if (!knowledgeGraphOpen) return;
+    void loadKnowledgeGraph();
+  }, [knowledgeGraphOpen, loadKnowledgeGraph, workspace?.knowledgeFiles.length]);
 
   useEffect(() => {
     void invoke<CustomApiSettingsStatus>("wridian_get_custom_api_settings")
@@ -568,11 +622,13 @@ function App() {
     [editorContent, pendingDraftEdits],
   );
   const blockedDraftEditCount = draftReplaceGuardReport.skipped.length;
-  const knowledgeCardSuggestions = useMemo(() => flattenKnowledgeCards(knowledgeFiles), [knowledgeFiles]);
+  const knowledgeSuggestionIndex = useMemo(() => buildKnowledgeSuggestionIndex(knowledgeFiles), [knowledgeFiles]);
   const promptSuggestions = useMemo(() => buildPromptSuggestions({
     draftKind,
-    knowledgeCards: knowledgeCardSuggestions,
-  }), [draftKind, knowledgeCardSuggestions]);
+    knowledgeCards: knowledgeSuggestionIndex.cards,
+    knowledgeCategories: knowledgeSuggestionIndex.categories,
+    selectedKnowledgeCategoryId,
+  }), [draftKind, knowledgeSuggestionIndex, selectedKnowledgeCategoryId]);
 
   const statusLabel = useMemo(() => {
     if (saveStatus === "idle") return "读取中";
@@ -690,10 +746,13 @@ function App() {
           <span>Wridian</span>
         </div>
         <nav className="top-actions" aria-label="Wridian actions">
-          <button type="button" title="记忆树" aria-label="记忆树" onClick={() => {
+          <button type="button" title="创作记忆树" aria-label="创作记忆树" onClick={() => {
             setMemoryOpen(true);
           }}>
             <MemoryTreeIcon />
+          </button>
+          <button type="button" title="知识图谱" aria-label="知识图谱" onClick={() => setKnowledgeGraphOpen(true)}>
+            <KnowledgeGraphIcon />
           </button>
           <button type="button" title="模型配置" aria-label="模型配置" onClick={() => setSettingsOpen(true)}>
             <ModelConfigIcon />
@@ -889,9 +948,16 @@ function App() {
           onRemovePill={(id) => setPromptPills((current) => current.filter((pill) => pill.id !== id))}
           onSelectSuggestion={(suggestion) => {
             if (suggestion.kind !== "context") return;
+            if (suggestion.id.startsWith("knowledge-category:")) {
+              const categoryId = suggestion.insertText.slice("category:".length);
+              setSelectedKnowledgeCategoryId(categoryId);
+              setPrompt("@");
+              return;
+            }
             if (suggestion.pillKind === "memory" && suggestion.insertText.startsWith("path:")) {
               const path = suggestion.insertText.slice("path:".length);
               void addFileToPrompt(suggestion.label, path, suggestion.relativePath ?? "");
+              setSelectedKnowledgeCategoryId("");
               return;
             }
             setPromptPills((current) => upsertPromptContextPill(current, createPromptPillFromSuggestion(suggestion)));
@@ -911,6 +977,15 @@ function App() {
           onRejectCandidate={() => setMemoryLeafCandidate(null)}
           onSaveFile={saveMemoryTreeFile}
           saving={savingMemoryTree}
+        />
+      ) : null}
+      {knowledgeGraphOpen ? (
+        <KnowledgeGraphDrawer
+          graph={knowledgeGraphState}
+          graphError={knowledgeGraphError}
+          knowledgeRootConfigured={Boolean(workspace?.knowledgeRootConfigured)}
+          onClose={() => setKnowledgeGraphOpen(false)}
+          onRefresh={loadKnowledgeGraph}
         />
       ) : null}
       {settingsOpen ? <ModelSettingsDialog onClose={() => setSettingsOpen(false)} /> : null}
@@ -1128,6 +1203,23 @@ function MemoryTreeIcon() {
       <path d="M24 28L29 23" />
       <path d="M24 25L18 19" />
       <path d="M24 44V18" />
+    </svg>
+  );
+}
+
+function KnowledgeGraphIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 48 48">
+      <circle cx="10" cy="24" r="4" />
+      <circle cx="24" cy="10" r="4" />
+      <circle cx="38" cy="24" r="4" />
+      <circle cx="24" cy="38" r="4" />
+      <path d="M13 21L21 13" />
+      <path d="M27 13L35 21" />
+      <path d="M35 27L27 35" />
+      <path d="M21 35L13 27" />
+      <path d="M15 24H33" />
+      <path d="M24 15V33" />
     </svg>
   );
 }
@@ -1400,10 +1492,10 @@ function MemoryDrawer({
 
   return (
     <div className="drawer-backdrop" onMouseDown={() => void closeDrawer()} role="presentation">
-      <aside className="memory-drawer memory-tree-drawer" role="dialog" aria-modal="true" aria-label="记忆树" onMouseDown={(event) => event.stopPropagation()}>
+      <aside className="memory-drawer memory-tree-drawer" role="dialog" aria-modal="true" aria-label="创作记忆树" onMouseDown={(event) => event.stopPropagation()}>
         <div className="drawer-header">
           <div>
-            <div className="drawer-title">记忆树</div>
+            <div className="drawer-title">创作记忆树</div>
           </div>
           <div className="drawer-header-actions">
             <button type="button" className="small-action" onClick={onOpenMemoryFolder} disabled={isBusy}>
@@ -1417,8 +1509,8 @@ function MemoryDrawer({
 
         {memoryError ? <div className="rail-error">{memoryError}</div> : null}
 
-        <div className="memory-forest-shell" aria-label="记忆树仿真视图">
-          <div className="memory-forest" aria-label="记忆树" onMouseDown={() => void closeEditorFromBlank()}>
+        <div className="memory-forest-shell" aria-label="创作记忆树仿真视图">
+          <div className="memory-forest" aria-label="创作记忆树" onMouseDown={() => void closeEditorFromBlank()}>
             <img className="memory-tree-base" src={memoryTreeBase} alt="" aria-hidden="true" />
             <div className="memory-tree-roots">
               <button
@@ -1527,7 +1619,7 @@ const MEMORY_BRANCH_LAYOUT = [
   { key: "journey", label: "JOURNEY.md", labelCn: "创作旅程" },
   { key: "drama", label: "DRAMA.md", labelCn: "剧本记忆" },
   { key: "novel", label: "NOVEL.md", labelCn: "小说记忆" },
-  { key: "knowledge", label: "KNOWLEDGE.md", labelCn: "知识生产" },
+  { key: "knowledge", label: "KNOWLEDGE.md", labelCn: "知识调用" },
   { key: "skill", label: "SKILL.md", labelCn: "技能方法" },
   { key: "awareness", label: "AWARENESS.md", labelCn: "复盘反思" },
 ] as const;
@@ -1667,24 +1759,173 @@ function findMemoryNodeByPath(nodes: MemoryTreeNode[], path: string): MemoryTree
   return undefined;
 }
 
-function flattenKnowledgeCards(nodes: WorkFileNode[]) {
-  const cards: { id: string; category: string; relativePath: string; sourcePath: string; title: string }[] = [];
-  const visit = (node: WorkFileNode) => {
+function KnowledgeGraphDrawer({
+  graph,
+  graphError,
+  knowledgeRootConfigured,
+  onClose,
+  onRefresh,
+}: {
+  graph: KnowledgeGraphState;
+  graphError: string;
+  knowledgeRootConfigured: boolean;
+  onClose: () => void;
+  onRefresh: () => void;
+}) {
+  const layout = useMemo(() => buildKnowledgeGraphLayout(graph), [graph]);
+
+  return (
+    <div className="drawer-backdrop" onMouseDown={onClose} role="presentation">
+      <aside className="memory-drawer knowledge-graph-drawer" role="dialog" aria-modal="true" aria-label="知识图谱" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="drawer-header">
+          <div>
+            <div className="drawer-title">知识图谱</div>
+          </div>
+          <div className="drawer-header-actions">
+            <button type="button" className="small-action" onClick={onRefresh}>
+              刷新
+            </button>
+            <button type="button" className="icon-button" onClick={onClose} aria-label="关闭">
+              ×
+            </button>
+          </div>
+        </div>
+
+        {graphError ? <div className="rail-error">{graphError}</div> : null}
+
+        <div className="knowledge-graph-stage" aria-label="知识库动态图谱">
+          {!knowledgeRootConfigured ? (
+            <div className="knowledge-graph-empty">先选择知识库文件夹</div>
+          ) : graph.nodes.length ? (
+            <>
+              <svg className="knowledge-graph-edges" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                {layout.edges.map((edge) => (
+                  <line
+                    key={`${edge.source.id}-${edge.target.id}-${edge.kind}`}
+                    x1={edge.source.x}
+                    y1={edge.source.y}
+                    x2={edge.target.x}
+                    y2={edge.target.y}
+                    className={`graph-edge edge-${edge.kind}`}
+                  />
+                ))}
+              </svg>
+              <div className="knowledge-graph-nodes">
+                {layout.nodes.map((node) => (
+                  <button
+                    type="button"
+                    key={node.id}
+                    className={`graph-node node-${node.kind}`}
+                    style={{
+                      "--graph-x": `${node.x}%`,
+                      "--graph-y": `${node.y}%`,
+                      "--graph-size": `${node.radius}px`,
+                      "--graph-delay": `${node.delay}s`,
+                    } as React.CSSProperties}
+                    title={node.path ?? node.label}
+                    aria-label={`${node.kind === "folder" ? "分类" : "知识卡"} ${node.label}`}
+                  >
+                    <span />
+                    <strong>{node.label}</strong>
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="knowledge-graph-empty">知识库里还没有 Markdown 知识卡</div>
+          )}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+type KnowledgeGraphLayoutNode = KnowledgeGraphNode & {
+  delay: number;
+  radius: number;
+  x: number;
+  y: number;
+};
+
+function buildKnowledgeGraphLayout(graph: KnowledgeGraphState) {
+  const nodes = graph.nodes.slice(0, 180).map((node, index): KnowledgeGraphLayoutNode => {
+    const groupHash = stableNumber(node.group || node.id);
+    const ring = node.kind === "folder" ? 18 + (groupHash % 3) * 8 : 28 + (groupHash % 4) * 7;
+    const angle = (index * 137.508 + groupHash * 11) * (Math.PI / 180);
+    const radius = node.kind === "folder" ? 13 + Math.min(8, node.size) : 7 + Math.min(8, node.size);
+    return {
+      ...node,
+      delay: (index % 12) * 0.09,
+      radius,
+      x: clamp(50 + Math.cos(angle) * ring, 7, 93),
+      y: clamp(50 + Math.sin(angle) * ring, 8, 92),
+    };
+  });
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const edges = graph.edges
+    .map((edge) => ({
+      kind: edge.kind,
+      source: byId.get(edge.source),
+      target: byId.get(edge.target),
+    }))
+    .filter((edge): edge is { kind: string; source: KnowledgeGraphLayoutNode; target: KnowledgeGraphLayoutNode } => Boolean(edge.source && edge.target))
+    .slice(0, 260);
+  return { edges, nodes };
+}
+
+function stableNumber(value: string) {
+  let hash = 2166136261;
+  for (const character of value) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return Math.abs(hash);
+}
+
+function buildKnowledgeSuggestionIndex(nodes: WorkFileNode[]) {
+  const categories = new Map<string, KnowledgeCategory>();
+  const cards: KnowledgeCardSuggestion[] = [];
+  const visit = (node: WorkFileNode, categoryId = "") => {
     if (node.folder) {
-      node.children.forEach(visit);
+      const id = node.relativePath || node.path;
+      categories.set(id, {
+        detail: `${countMarkdownCards(node)} 张知识卡`,
+        id,
+        title: node.name,
+      });
+      node.children.forEach((child) => visit(child, id));
       return;
     }
     if (!/\.(md|markdown)$/i.test(node.name)) return;
+    const fallbackCategory = categoryId || "__root__";
+    if (!categoryId && !categories.has(fallbackCategory)) {
+      categories.set(fallbackCategory, {
+        detail: "知识库根目录",
+        id: fallbackCategory,
+        title: "根目录",
+      });
+    }
     cards.push({
+      category: categories.get(fallbackCategory)?.title ?? "知识卡",
+      categoryId: fallbackCategory,
       id: node.path,
-      category: "知识卡",
       relativePath: node.relativePath,
       sourcePath: node.path,
       title: node.name.replace(/\.(md|markdown)$/i, ""),
     });
   };
-  nodes.forEach(visit);
-  return cards;
+  nodes.forEach((node) => visit(node));
+  return {
+    cards,
+    categories: [...categories.values()].filter((category) =>
+      cards.some((card) => card.categoryId === category.id),
+    ),
+  };
+}
+
+function countMarkdownCards(node: WorkFileNode): number {
+  if (!node.folder) return /\.(md|markdown)$/i.test(node.name) ? 1 : 0;
+  return node.children.reduce((total, child) => total + countMarkdownCards(child), 0);
 }
 
 function ModelSettingsDialog({ onClose }: { onClose: () => void }) {

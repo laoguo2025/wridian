@@ -39,7 +39,8 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 - 左侧文件区分为“作品库 / 知识库”标签页：作品库放作品项目、章节、剧本、分集、场景稿；知识库放人物、地点、设定、世界观、风格、禁区和资料摘录等知识卡。
 - 文件区“移到回收站”只移动到当前工作根目录 `.wridian-trash/`，不做永久删除。
 - 模型接入先支持一个 OpenAI-compatible 自定义 API。
-- 记忆系统以 `.wridian/memory-tree/` 下的 Markdown 文件树为主入口；用户在“记忆树”抽屉直接查看和编辑全局层、伙伴层、作品层和知识层文件。
+- 记忆系统以 `.wridian/memory-tree/` 下的 Markdown 文件树为主入口；用户在“创作记忆树”抽屉直接查看和编辑全局层、伙伴层、作品层和知识调用机制文件。
+- 知识、知识库、知识卡和知识图谱属于作品项目之外的通用知识积累；作品项目可显式引用知识卡，但知识卡不自动变成作品记忆。
 - 暂不接入生图、生视频和复杂模型网关。
 
 ## 交互边界
@@ -53,7 +54,7 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 - 当前对齐的 `obsidian-copilot` 源码基线：
   - `ChatInput.tsx`：带边框的底部输入容器、上下文 pill 区、中间约 60px 起步输入区、24px 底部工具栏、小发送/停止动作。
   - `LexicalEditor.tsx`：输入区内部滚动，长文本不撑高右栏；Wridian 聊天输入区已从 textarea 切换为 Lexical `ContentEditable`，使用受控文本同步、历史插件和 Enter 发送；实现入口为 `src/chat/CopilotPromptEditor.tsx`。
-  - `AtMentionCommandPlugin.tsx` / `SlashCommandPlugin.tsx`：Wridian 已接入本地第一版 `@` 知识卡选择和 `/` 写作命令提示，实现在 `src/chat/CopilotPromptEditor.tsx` 内。`@` 菜单只显示知识库 Markdown 卡片，选中后读取文件内容并以 memory pill 注入上下文；`/` 可插入改对白、增强冲突、加结尾钩子、检查角色口吻、批量改角色名、整理到记忆树等小说和短剧共用命令。
+  - `AtMentionCommandPlugin.tsx` / `SlashCommandPlugin.tsx`：Wridian 已接入本地第一版 `@` 知识卡选择和 `/` 写作命令提示，实现在 `src/chat/CopilotPromptEditor.tsx` 内。`@` 菜单只选择知识库内容，先显示知识库下含 Markdown 知识卡的分类文件夹，选中分类后再显示该分类下的知识卡；选中知识卡后读取文件内容并以 memory pill 注入上下文。`/` 可插入改对白、增强冲突、加结尾钩子、检查角色口吻、批量改角色名、整理到记忆树等小说和短剧共用命令。
     - 剧本模式：前端按 `.fountain` 扩展名、内景/外景/集/场信号和角色对白行识别短剧/剧本稿件；识别后 `/` 命令额外显示拆分分集节奏、强化场景钩子、对白口语化和场景成本检查，对话请求会把稿件类型传给后端 prompt。
   - 文件/上下文检索：右键文件或点击相关稿件仍可把文件内容作为 `file` pill 注入；`@` 菜单不再搜索作品文件，只搜索知识卡。
   - `ContextManager.ts` / `PromptContextTypes.ts`：Wridian 已开始拆出聊天上下文边界，`src/chat/promptContext.ts` 负责 prompt pill 类型、序列化、上下文建议构造和写作命令建议；消息仓库只保存消息和已绑定的上下文快照。
@@ -63,8 +64,9 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
   - `ChatSingleMessage.tsx` / `ChatButtons.tsx`：用户消息使用浅边框背景，AI 消息不做重卡片；消息动作放在底部紧凑行。
   - pill 节点：Wridian 已按 Copilot 的 `BasePillNode` / `URLPillNode` / `ToolPillNode` / `PastePlugin` / `GenericPillSyncPlugin` 形态引入本地 `PromptPillNode`，真实注册到 Lexical 编辑树；URL、工具、文件、图片、记忆等上下文会从 Lexical 树同步回 prompt pill 状态。
   - 输入控制：Wridian 底部控制条只显示当前模型或当前项目名，不再提供 Project / Relevant / Vault 这类泛化工具按钮；文件 pill 会优先读取并缓存文件内容再注入上下文；粘贴 URL、保留的工具标记和图片会生成结构化 pill。
-  - Project Mode / Relevant Notes：Wridian 的 Project Mode 已对齐作品项目，右侧下拉来自作品库顶层作品文件夹，不再提供手动“新建 Project”；打开作品文件时自动切换到所属作品项目。Relevant Notes 使用工作区本地全文词项重合 + wikilink/backlink 加权召回，点击可把相关稿件作为 file pill 注入。
-- 记忆命中、注入和上下文选择默认在后台执行，不在右侧对话区常驻展示“本次使用的记忆”等系统说明；记忆树只由顶部“记忆树”动作打开。
+  - Project Mode / Relevant Notes：Wridian 的 Project Mode 已对齐作品项目，右侧下拉只提供“普通聊天”和作品项目文件夹名，不再提供手动“新建 Project”；打开作品文件时自动切换到所属作品项目。选择作品项目后，对话请求会读取创作记忆树中该项目的 `compressed.md` 压缩记忆。Relevant Notes 使用工作区本地全文词项重合 + wikilink/backlink 加权召回，点击可把相关稿件作为 file pill 注入。
+- 记忆命中、注入和上下文选择默认在后台执行，不在右侧对话区常驻展示“本次使用的记忆”等系统说明；创作记忆树只由顶部“创作记忆树”动作打开。
+- 工作界面右上角在创作记忆树图标右侧提供“知识图谱”入口；弹窗尺寸与创作记忆树一致，当前根据用户选择的知识库 Markdown 分类、知识卡和 wikilink 生成只读动态图谱视图。
 - 右侧侧边面板应保持“对话”语义，入口文案统一为“对话”。
 - 记忆提取是显式动作；模型不得在普通对话发送时直接写长期记忆。
 - 当前已完成最小对话/记忆分离：底部输入调用对话命令，不再创建候选记忆；顶部“记忆树”按钮打开结构化 Markdown 记忆树。
@@ -81,7 +83,7 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 ## 借鉴边界
 
 - `obsidian-copilot`：只借交互模型。正文稳定，AI 在侧栏/命令中辅助；参考 Vault QA、Relevant Notes、选中文本命令、Project Mode 和上下文选择。
-- `claude-obsidian`：借 Markdown 知识图谱和 ingest 方法。作品稿件作为 sources，人物/地点/物件作为 entities，主题/风格/规则作为 concepts，使用交叉引用、索引和 hot context 辅助召回。
+- `claude-obsidian`：借 Markdown 知识图谱和 ingest 方法。通用知识库中的资料作为 sources，实体/概念拆分到知识图谱；作品项目只显式引用或采纳知识卡，不把通用知识自动写入创作记忆树。
 - `OpenHuman`：只借 Memory Tree、Markdown vault、本地优先桌面结构；不借托管登录、OAuth、复杂集成、搜索代理和通用个人 AI OS 方向。
 - `holaOS`：借 continuity 分层。当前写作现场、长期写作记忆、工作区/作品规则必须分开。
 - `SillyTavern`：借 World Info、角色卡和插入规则，用在人物、设定、伏笔、禁区和风格条目上；不借角色聊天/RP 产品形态。
@@ -92,14 +94,14 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 ## 记忆存储
 
 - 记忆文件夹：Wridian 数据目录下的 `.wridian/memory-tree/`。
-- 记忆树是用户可见、可编辑的 Markdown 生命树，主结构为根文件、九个分支文件和 leaves 叶子目录。
+- 创作记忆树是用户可见、可编辑的 Markdown 生命树，主结构为根文件、九个分支文件和 leaves 叶子目录。
 - 根文件：`.wridian/memory-tree/SOUL.md`、`AGENTS.md`、`MEMORY.md`。
   - `SOUL.md` 是图腾，记录 Wridian 的底层灵魂、价值观和对话人格。
   - `AGENTS.md` 是树根，记录 Wridian 如何行动、如何使用记忆树、哪些事必须问用户、哪些事不能自作主张。
   - `MEMORY.md` 是主干，记录索引、上下文编译策略、分支说明和最近活跃叶子。
-- 分支文件：`.wridian/memory-tree/branches/` 下固定有 `SENSE.md`、`USER.md`、`RELATIONSHIP.md`、`JOURNEY.md`、`DRAMA.md`、`NOVEL.md`、`KNOWLEDGE.md`、`SKILL.md`、`AWARENESS.md`。分支文件只写机制、准则和如何长叶子，不写具体事件。
+- 分支文件：`.wridian/memory-tree/branches/` 下固定有 `SENSE.md`、`USER.md`、`RELATIONSHIP.md`、`JOURNEY.md`、`DRAMA.md`、`NOVEL.md`、`KNOWLEDGE.md`、`SKILL.md`、`AWARENESS.md`。分支文件只写机制、准则和如何长叶子，不写具体事件；其中 `KNOWLEDGE.md` 的中文名是“知识调用”，只记录创作记忆树如何调用外部知识库和知识图谱。
 - 叶子目录：`.wridian/memory-tree/leaves/` 下按 `sense/user/relationship/journey/drama/novel/knowledge/skill/awareness` 分类。叶子文件才写具体生命记录、作品记忆、知识卡、技能和反思。
-- 作品项目会自动在 `leaves/drama/` 或 `leaves/novel/` 下生成对应项目叶子文件；知识库 Markdown 不再复制成死副本，而是在记忆树视图中作为 `leaves/knowledge/cards/` 的同步读取叶子展示，编辑时写回当前用户选择的知识库源文件。
+- 作品项目会自动在 `leaves/drama/` 或 `leaves/novel/` 下生成对应项目叶子文件和 `compressed.md` 压缩记忆文件；知识库 Markdown 不再复制成死副本，也不作为创作记忆树叶子展示，知识卡通过 `@` 显式选择和知识图谱入口读取。
 - 记忆树画布中所有叶子文件显示为暖橙色 `#dc7d57` 小圆点，围绕对应分支主标签展示；悬浮提示文件名，点击后在画布左侧或右侧打开与主标签相同样式的内容编辑窗。
 - 旧迁移主文件或 `legacy-*.md` 不能显示为叶子点；主标签文件内容未确定时，不用迁移文件伪造叶子。
 - 记忆弹窗内部使用仿真树画布展示根、枝、叶；工作界面左侧作品库/知识库文件树不参与这套视觉变化。
