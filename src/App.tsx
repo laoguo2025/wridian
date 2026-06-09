@@ -1,4 +1,4 @@
-import { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   restorePromptPillsFromMessage,
@@ -502,11 +502,9 @@ function App() {
     };
   }, [fileMenu]);
 
-  const openFile = async (node: WorkFileNode) => {
-    if (node.folder) return;
-    const requestedPath = node.path;
+  const openFilePath = async (requestedPath: string, fallbackName = "") => {
     setLoadingPath(requestedPath);
-    setEditorTitle(node.name);
+    setEditorTitle(fallbackName || requestedPath.split(/[\\/]/).pop() || "未命名文件");
     setSaveError("");
     setSaveStatus("idle");
     try {
@@ -533,6 +531,16 @@ function App() {
     } finally {
       setLoadingPath((current) => (current === requestedPath ? "" : current));
     }
+  };
+
+  const openFile = async (node: WorkFileNode) => {
+    if (node.folder) return;
+    await openFilePath(node.path, node.name);
+  };
+
+  const openKnowledgeGraphFile = (path: string) => {
+    setKnowledgeGraphOpen(false);
+    void openFilePath(path);
   };
 
   const handleDraftKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
@@ -997,6 +1005,7 @@ function App() {
           graphError={knowledgeGraphError}
           knowledgeRootConfigured={Boolean(workspace?.knowledgeRootConfigured)}
           onClose={() => setKnowledgeGraphOpen(false)}
+          onOpenFile={openKnowledgeGraphFile}
           onRefresh={loadKnowledgeGraph}
         />
       ) : null}
@@ -1790,15 +1799,93 @@ function KnowledgeGraphDrawer({
   graphError,
   knowledgeRootConfigured,
   onClose,
+  onOpenFile,
   onRefresh,
 }: {
   graph: KnowledgeGraphState;
   graphError: string;
   knowledgeRootConfigured: boolean;
   onClose: () => void;
+  onOpenFile: (path: string) => void;
   onRefresh: () => void;
 }) {
   const layout = useMemo(() => buildKnowledgeGraphLayout(graph), [graph]);
+  const [viewport, setViewport] = useState({ scale: 1, x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
+  const dragStateRef = useRef<{
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    startX: number;
+    startY: number;
+    moved: boolean;
+  } | null>(null);
+  const suppressGraphClickRef = useRef(false);
+
+  const handleWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
+    if (!graph.nodes.length) return;
+    event.preventDefault();
+    setViewport((current) => ({
+      ...current,
+      scale: clamp(current.scale * (event.deltaY > 0 ? 0.9 : 1.1), 0.6, 3.2),
+    }));
+  };
+
+  const handleGraphPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!graph.nodes.length || event.button !== 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragStateRef.current = {
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startX: viewport.x,
+      startY: viewport.y,
+      moved: false,
+    };
+    setDragging(true);
+  };
+
+  const handleGraphPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const dragState = dragStateRef.current;
+    if (!dragState || dragState.pointerId !== event.pointerId) return;
+    const deltaX = event.clientX - dragState.startClientX;
+    const deltaY = event.clientY - dragState.startClientY;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const svgDeltaX = (deltaX / Math.max(1, bounds.width)) * 100;
+    const svgDeltaY = (deltaY / Math.max(1, bounds.height)) * 100;
+    if (Math.abs(deltaX) + Math.abs(deltaY) > 4) dragState.moved = true;
+    setViewport((current) => ({
+      ...current,
+      x: dragState.startX + svgDeltaX,
+      y: dragState.startY + svgDeltaY,
+    }));
+  };
+
+  const handleGraphPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const dragState = dragStateRef.current;
+    if (dragState?.pointerId === event.pointerId) {
+      if (dragState.moved) {
+        suppressGraphClickRef.current = true;
+        window.setTimeout(() => {
+          suppressGraphClickRef.current = false;
+        }, 120);
+      }
+      dragStateRef.current = null;
+      setDragging(false);
+    }
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
+
+  const openGraphNode = (node: KnowledgeGraphLayoutNode) => {
+    if (suppressGraphClickRef.current) {
+      suppressGraphClickRef.current = false;
+      return;
+    }
+    if (node.kind === "folder" || !node.path) return;
+    onOpenFile(node.path);
+  };
 
   return (
     <div className="drawer-backdrop" onMouseDown={onClose} role="presentation">
@@ -1819,12 +1906,20 @@ function KnowledgeGraphDrawer({
 
         {graphError ? <div className="rail-error">{graphError}</div> : null}
 
-        <div className="knowledge-graph-stage" aria-label="知识库动态图谱">
+        <div
+          className={dragging ? "knowledge-graph-stage dragging" : "knowledge-graph-stage"}
+          aria-label="知识库动态图谱"
+          onPointerDown={handleGraphPointerDown}
+          onPointerMove={handleGraphPointerMove}
+          onPointerUp={handleGraphPointerUp}
+          onPointerCancel={handleGraphPointerUp}
+          onWheel={handleWheel}
+        >
           {!knowledgeRootConfigured ? (
             <div className="knowledge-graph-empty">先选择知识库文件夹</div>
           ) : graph.nodes.length ? (
             <svg className="knowledge-graph-canvas" viewBox="0 0 100 100" role="img" aria-label="知识库动态图谱">
-              <g className="graph-drift graph-drift-slow">
+              <g transform={`translate(${viewport.x} ${viewport.y}) translate(50 50) scale(${viewport.scale}) translate(-50 -50)`}>
                 {layout.edges.map((edge) => (
                   <line
                     key={`${edge.source.id}-${edge.target.id}-${edge.kind}`}
@@ -1836,29 +1931,19 @@ function KnowledgeGraphDrawer({
                   />
                 ))}
                 {layout.nodes.map((node) => (
-                  <g key={node.id} className={`graph-node node-${node.kind}`}>
+                  <g
+                    key={node.id}
+                    className={`graph-node node-${node.kind}`}
+                    onClick={() => openGraphNode(node)}
+                    style={{ "--node-fill": node.color } as CSSProperties}
+                  >
                     <title>{node.path ?? node.label}</title>
                     <circle cx={node.x} cy={node.y} r={node.radius} />
                     {node.showLabel ? (
-                      <text x={node.x} y={node.y + node.radius + 2.5}>{node.label}</text>
+                      <text x={node.x} y={node.y + node.radius + 1.8}>{node.label}</text>
                     ) : null}
-                    <animateTransform
-                      attributeName="transform"
-                      type="translate"
-                      values={`0 0; ${node.floatX} ${node.floatY}; 0 0`}
-                      dur={`${node.duration}s`}
-                      begin={`${node.delay}s`}
-                      repeatCount="indefinite"
-                    />
                   </g>
                 ))}
-                <animateTransform
-                  attributeName="transform"
-                  type="rotate"
-                  values="0 50 50; 1.6 50 50; -1.2 50 50; 0 50 50"
-                  dur="18s"
-                  repeatCount="indefinite"
-                />
               </g>
             </svg>
           ) : (
@@ -1917,10 +2002,9 @@ function CreativeSkillsDrawer({
 }
 
 type KnowledgeGraphLayoutNode = KnowledgeGraphNode & {
-  delay: number;
-  duration: number;
-  floatX: number;
-  floatY: number;
+  color: string;
+  collisionRadius: number;
+  depth: number;
   radius: number;
   showLabel: boolean;
   x: number;
@@ -1928,22 +2012,27 @@ type KnowledgeGraphLayoutNode = KnowledgeGraphNode & {
 };
 
 function buildKnowledgeGraphLayout(graph: KnowledgeGraphState) {
-  const nodes = graph.nodes.slice(0, 180).map((node, index): KnowledgeGraphLayoutNode => {
-    const groupHash = stableNumber(node.group || node.id);
-    const ring = node.kind === "folder" ? 18 + (groupHash % 3) * 8 : 28 + (groupHash % 4) * 7;
-    const angle = (index * 137.508 + groupHash * 11) * (Math.PI / 180);
-    const radius = node.kind === "folder" ? 1.9 + Math.min(0.8, node.size / 20) : 0.9 + Math.min(0.7, node.size / 16);
-    const floatAngle = (groupHash % 360) * (Math.PI / 180);
+  const limited = graph.nodes.slice(0, 180);
+  const nodes = limited.map((node, index): KnowledgeGraphLayoutNode => {
+    const depth = knowledgeGraphNodeDepth(node);
+    const depthSiblings = limited.filter((candidate) => knowledgeGraphNodeDepth(candidate) === depth);
+    const siblingIndex = depthSiblings.findIndex((candidate) => candidate.id === node.id);
+    const siblingCount = Math.max(1, depthSiblings.length);
+    const groupHash = stableNumber(`${node.group}:${node.id}`);
+    const depthRing = 9 + Math.min(depth, 5) * 8.4 + (node.kind === "folder" ? 0 : 4.8);
+    const angle = ((siblingIndex / siblingCount) * 360 + (depth % 2) * 23 + (groupHash % 18)) * (Math.PI / 180);
+    const radius = node.kind === "folder" ? 1.28 + Math.min(0.38, node.size / 42) : 0.78 + Math.min(0.32, node.size / 42);
+    const showLabel = node.kind === "folder" || index < 38;
+    const labelRadius = showLabel ? Math.min(10.5, Math.max(3.8, node.label.length * 0.46)) : 0;
     return {
       ...node,
-      delay: (index % 12) * 0.09,
-      duration: 6 + (groupHash % 7),
-      floatX: Number((Math.cos(floatAngle) * (0.55 + (index % 5) * 0.11)).toFixed(2)),
-      floatY: Number((Math.sin(floatAngle) * (0.55 + (index % 4) * 0.13)).toFixed(2)),
+      collisionRadius: radius + labelRadius + 1.25,
+      color: knowledgeGraphNodeColor(depth),
+      depth,
       radius,
-      showLabel: node.kind === "folder" || index < 12,
-      x: clamp(50 + Math.cos(angle) * ring, 7, 93),
-      y: clamp(50 + Math.sin(angle) * ring, 8, 92),
+      showLabel,
+      x: clamp(50 + Math.cos(angle) * depthRing, 8, 92),
+      y: clamp(50 + Math.sin(angle) * depthRing, 9, 91),
     };
   });
   const byId = new Map(nodes.map((node) => [node.id, node]));
@@ -1955,7 +2044,74 @@ function buildKnowledgeGraphLayout(graph: KnowledgeGraphState) {
     }))
     .filter((edge): edge is { kind: string; source: KnowledgeGraphLayoutNode; target: KnowledgeGraphLayoutNode } => Boolean(edge.source && edge.target))
     .slice(0, 260);
+  relaxKnowledgeGraphLayout(nodes, edges);
   return { edges, nodes };
+}
+
+function relaxKnowledgeGraphLayout(
+  nodes: KnowledgeGraphLayoutNode[],
+  edges: { kind: string; source: KnowledgeGraphLayoutNode; target: KnowledgeGraphLayoutNode }[],
+) {
+  const centerX = 50;
+  const centerY = 50;
+  for (let iteration = 0; iteration < 90; iteration += 1) {
+    for (const edge of edges) {
+      const targetDistance = edge.kind === "contains" ? 12 + edge.target.depth * 1.6 : 18;
+      const dx = edge.target.x - edge.source.x;
+      const dy = edge.target.y - edge.source.y;
+      const distance = Math.max(0.01, Math.hypot(dx, dy));
+      const pull = (distance - targetDistance) * (edge.kind === "contains" ? 0.012 : 0.006);
+      const moveX = (dx / distance) * pull;
+      const moveY = (dy / distance) * pull;
+      edge.source.x += moveX;
+      edge.source.y += moveY;
+      edge.target.x -= moveX;
+      edge.target.y -= moveY;
+    }
+
+    for (let index = 0; index < nodes.length; index += 1) {
+      const node = nodes[index];
+      for (let otherIndex = index + 1; otherIndex < nodes.length; otherIndex += 1) {
+        const other = nodes[otherIndex];
+        let dx = other.x - node.x;
+        let dy = other.y - node.y;
+        let distance = Math.hypot(dx, dy);
+        if (distance < 0.01) {
+          const angle = ((stableNumber(`${node.id}:${other.id}`) % 360) * Math.PI) / 180;
+          dx = Math.cos(angle) * 0.01;
+          dy = Math.sin(angle) * 0.01;
+          distance = 0.01;
+        }
+        const minimumDistance = node.collisionRadius + other.collisionRadius;
+        if (distance >= minimumDistance) continue;
+        const push = (minimumDistance - distance) * 0.48;
+        const pushX = (dx / distance) * push;
+        const pushY = (dy / distance) * push;
+        node.x -= pushX;
+        node.y -= pushY;
+        other.x += pushX;
+        other.y += pushY;
+      }
+    }
+
+    for (const node of nodes) {
+      const returnForce = node.kind === "folder" ? 0.006 : 0.003;
+      node.x += (centerX - node.x) * returnForce;
+      node.y += (centerY - node.y) * returnForce;
+      node.x = clamp(node.x, node.collisionRadius, 100 - node.collisionRadius);
+      node.y = clamp(node.y, node.collisionRadius + 1.8, 100 - node.collisionRadius);
+    }
+  }
+}
+
+function knowledgeGraphNodeDepth(node: KnowledgeGraphNode) {
+  const source = node.id.replace(/^(folder|card):/, "");
+  return Math.min(6, source.split(/[\\/]/).filter(Boolean).length);
+}
+
+function knowledgeGraphNodeColor(depth: number) {
+  const colors = ["#b85d3f", "#c96b49", "#dc7d57", "#e49472", "#eeaa8a", "#f1bca3", "#d1714e"];
+  return colors[Math.min(colors.length - 1, Math.max(0, depth))];
 }
 
 function stableNumber(value: string) {

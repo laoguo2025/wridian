@@ -1678,6 +1678,13 @@ button {
   border-radius: 8px;
   overflow: hidden;
   background: color-mix(in srgb, var(--bg-selected), var(--bg-panel) 44%);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.knowledge-graph-stage.dragging {
+  cursor: grabbing;
 }
 
 .knowledge-graph-stage::before {
@@ -1708,19 +1715,15 @@ button {
   height: 100%;
 }
 
-.graph-drift {
-  transform-origin: 50% 50%;
-}
-
 .graph-edge {
-  stroke: color-mix(in srgb, var(--text-muted), transparent 56%);
-  stroke-width: 0.18;
+  stroke: color-mix(in srgb, var(--text-muted), transparent 28%);
+  stroke-width: 0.24;
   vector-effect: non-scaling-stroke;
 }
 
 .graph-edge.edge-wikilink {
-  stroke: color-mix(in srgb, var(--accent), transparent 48%);
-  stroke-width: 0.24;
+  stroke: color-mix(in srgb, #dc7d57, var(--text-muted) 32%);
+  stroke-width: 0.3;
 }
 
 .graph-node {
@@ -1729,22 +1732,26 @@ button {
 }
 
 .graph-node circle {
-  background: color-mix(in srgb, var(--accent), white 14%);
-  fill: color-mix(in srgb, var(--accent), white 14%);
+  background: var(--node-fill, #dc7d57);
+  fill: var(--node-fill, #dc7d57);
   stroke: color-mix(in srgb, var(--bg-panel), transparent 22%);
-  stroke-width: 0.26;
+  stroke-width: 0.22;
   vector-effect: non-scaling-stroke;
 }
 
 .graph-node.node-folder circle {
-  fill: color-mix(in srgb, var(--focus), var(--accent) 18%);
+  fill: var(--node-fill, #dc7d57);
   stroke: color-mix(in srgb, var(--bg-panel), transparent 24%);
+}
+
+.graph-node.node-card {
+  cursor: pointer;
 }
 
 .graph-node text {
   color: var(--text-muted);
   fill: var(--text-muted);
-  font-size: 2.2px;
+  font-size: 1.74px;
   font-weight: 500;
   pointer-events: none;
   text-anchor: middle;
