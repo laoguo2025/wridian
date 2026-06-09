@@ -1172,8 +1172,8 @@ function MemoryDrawer({
                   className={`memory-trunk-card ${node.path === selectedPath ? "active" : ""}`}
                   onClick={() => node.path ? setSelectedPath(node.path) : undefined}
                 >
-                  <strong>{node.label}</strong>
-                  <small>{node.description}</small>
+                  <strong>{trunkTitleCn(node.label)}</strong>
+                  <small>{node.label}</small>
                 </button>
               ))}
             </div>
@@ -1253,21 +1253,22 @@ function MemoryDrawer({
 type MemoryBranchView = {
   branchNode?: MemoryTreeNode;
   key: string;
+  labelCn: string;
   label: string;
   rule?: MemoryTreeNode;
   leaves: MemoryTreeNode[];
 };
 
 const MEMORY_BRANCH_LAYOUT = [
-  { key: "sense", label: "SENSE" },
-  { key: "user", label: "USER" },
-  { key: "relationship", label: "RELATIONSHIP" },
-  { key: "journey", label: "JOURNEY" },
-  { key: "drama", label: "DRAMA" },
-  { key: "novel", label: "NOVEL" },
-  { key: "knowledge", label: "KNOWLEDGE" },
-  { key: "skill", label: "SKILL" },
-  { key: "awareness", label: "AWARENESS" },
+  { key: "sense", label: "SENSE", labelCn: "自我意识" },
+  { key: "user", label: "USER", labelCn: "用户画像" },
+  { key: "relationship", label: "RELATIONSHIP", labelCn: "关系准则" },
+  { key: "journey", label: "JOURNEY", labelCn: "共创旅程" },
+  { key: "drama", label: "DRAMA", labelCn: "剧本记忆" },
+  { key: "novel", label: "NOVEL", labelCn: "小说记忆" },
+  { key: "knowledge", label: "KNOWLEDGE", labelCn: "知识生产" },
+  { key: "skill", label: "SKILL", labelCn: "技能方法" },
+  { key: "awareness", label: "AWARENESS", labelCn: "反思机制" },
 ] as const;
 
 function buildMemoryTreeViewModel(roots: MemoryTreeNode[]) {
@@ -1275,13 +1276,14 @@ function buildMemoryTreeViewModel(roots: MemoryTreeNode[]) {
   const branchLayer = roots.find((node) => node.id === "branches");
   const leavesLayer = roots.find((node) => node.id === "leaves");
   const trunk = rootLayer?.children ?? [];
-  const branches = MEMORY_BRANCH_LAYOUT.map(({ key, label }) => {
+  const branches = MEMORY_BRANCH_LAYOUT.map(({ key, label, labelCn }) => {
     const rule = branchLayer?.children.find((node) => node.label.toLowerCase().startsWith(key));
     const leafFolder = leavesLayer?.children.find((node) => node.label.toLowerCase() === key);
     return {
       branchNode: leafFolder,
       key,
       label,
+      labelCn,
       rule,
       leaves: collectLeafFiles(leafFolder).slice(0, 4),
     };
@@ -1352,8 +1354,8 @@ function MemoryBranchArm({
         className={`memory-branch-card ${active ? "active" : ""}`}
         onClick={() => branch.rule ? onSelect(branch.rule) : undefined}
       >
-        <strong>{branch.label}</strong>
-        <small>{branch.rule?.description ?? "分支机制"}</small>
+        <strong>{branch.labelCn}</strong>
+        <small>{branch.label}</small>
       </button>
       <div className="memory-leaf-cluster">
         {branch.leaves.length ? branch.leaves.map((leaf) => (
@@ -1364,17 +1366,37 @@ function MemoryBranchArm({
             onClick={() => onSelect(leaf)}
           >
             <span>.md</span>
-            <strong>{leaf.label}</strong>
+            <strong>{leafTitleEn(leaf.label)}</strong>
+            <small>{leafTitleCn(leaf)}</small>
           </button>
         )) : (
           <div className="memory-leaf-placeholder">
             <span />
             <strong>等待长叶</strong>
+            <small>empty</small>
           </div>
         )}
       </div>
     </div>
   );
+}
+
+function trunkTitleCn(label: string) {
+  if (label === "SOUL.md") return "图腾";
+  if (label === "AGENTS.md") return "树根";
+  if (label === "MEMORY.md") return "主干";
+  return "根文件";
+}
+
+function leafTitleEn(label: string) {
+  return label.replace(/\.md$/i, "");
+}
+
+function leafTitleCn(node: MemoryTreeNode) {
+  if (node.description && node.description !== "Markdown 记忆文件") {
+    return node.description;
+  }
+  return "记忆叶";
 }
 
 function findMemoryNodeByPath(nodes: MemoryTreeNode[], path: string): MemoryTreeNode | undefined {

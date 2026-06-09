@@ -1187,10 +1187,10 @@ button {
 
 .memory-forest {
   position: relative;
-  min-width: 780px;
+  min-width: 820px;
   min-height: 100%;
   overflow: auto;
-  padding: 24px 28px 40px;
+  padding: 24px 28px 32px;
   background:
     radial-gradient(circle at 50% 8%, color-mix(in srgb, var(--accent), transparent 86%), transparent 24%),
     linear-gradient(180deg, color-mix(in srgb, var(--bg-panel), var(--bg-selected) 24%), var(--bg-panel));
@@ -1200,9 +1200,9 @@ button {
   content: "";
   position: absolute;
   left: 50%;
-  bottom: 28px;
-  width: 320px;
-  height: 42px;
+  bottom: 24px;
+  width: 280px;
+  height: 34px;
   border-radius: 50%;
   border: 1px solid color-mix(in srgb, var(--border), transparent 20%);
   box-shadow: 0 0 20px color-mix(in srgb, var(--accent), transparent 82%);
@@ -1213,9 +1213,9 @@ button {
 .memory-forest-ground {
   position: absolute;
   left: 50%;
-  top: 34px;
+  top: 32px;
   bottom: 56px;
-  width: 10px;
+  width: 8px;
   border-radius: 12px 12px 4px 4px;
   background:
     linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent), var(--bg-panel) 34%), transparent),
@@ -1244,8 +1244,8 @@ button {
 .memory-tree-trunk span {
   position: absolute;
   left: 50%;
-  width: 120px;
-  height: 20px;
+  width: 136px;
+  height: 22px;
   border-top: 2px solid color-mix(in srgb, var(--accent), var(--text-muted) 28%);
   border-radius: 50%;
   filter: drop-shadow(0 0 7px color-mix(in srgb, var(--accent), transparent 72%));
@@ -1253,29 +1253,29 @@ button {
 }
 
 .memory-tree-trunk span:nth-child(1) {
-  top: 148px;
-  transform: translateX(-96%) rotate(-28deg);
+  top: 106px;
+  transform: translateX(-96%) rotate(-25deg);
 }
 
 .memory-tree-trunk span:nth-child(2) {
-  top: 268px;
+  top: 228px;
   transform: translateX(-4%) rotate(24deg);
 }
 
 .memory-tree-trunk span:nth-child(3) {
-  top: 390px;
+  top: 350px;
   transform: translateX(-96%) rotate(-18deg);
 }
 
 .memory-tree-roots {
   position: absolute;
   left: 50%;
-  bottom: 14px;
+  top: 236px;
   z-index: 2;
   display: grid;
   justify-items: center;
-  gap: 6px;
-  width: 190px;
+  gap: 8px;
+  width: 116px;
   transform: translateX(-50%);
 }
 
@@ -1283,21 +1283,24 @@ button {
   position: relative;
   display: grid;
   justify-items: center;
-  gap: 2px;
-  width: 156px;
-  min-height: 42px;
+  gap: 1px;
+  width: 112px;
+  min-height: 38px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: color-mix(in srgb, var(--bg-panel), var(--bg-selected) 18%);
   color: var(--text-primary);
-  padding: 7px 10px;
+  padding: 5px 8px;
   box-shadow: 0 8px 18px color-mix(in srgb, var(--text-primary), transparent 94%);
   text-align: center;
 }
 
 .memory-trunk-card strong,
+.memory-trunk-card small,
 .memory-branch-card strong,
-.memory-leaf-card strong {
+.memory-branch-card small,
+.memory-leaf-card strong,
+.memory-leaf-card small {
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1306,11 +1309,13 @@ button {
 
 .memory-trunk-card strong {
   font-size: 12px;
-  line-height: 16px;
+  line-height: 15px;
 }
 
 .memory-trunk-card small {
-  display: none;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 12px;
 }
 
 .memory-trunk-card:hover,
@@ -1320,46 +1325,46 @@ button {
 }
 
 .memory-branch-arm {
-  --branch-y: calc(56px + var(--branch-index) * 56px);
+  --branch-y: calc(34px + var(--branch-index) * 52px);
   position: absolute;
   top: var(--branch-y);
   z-index: 2;
   display: grid;
   align-items: center;
-  width: 330px;
-  min-height: 76px;
+  width: 335px;
+  min-height: 68px;
 }
 
 .memory-branch-arm.left {
-  left: calc(50% - 360px);
-  grid-template-columns: minmax(132px, 176px) minmax(92px, 1fr);
+  left: calc(50% - 374px);
+  grid-template-columns: 146px 1fr;
 }
 
 .memory-branch-arm.right {
-  right: calc(50% - 360px);
-  grid-template-columns: minmax(92px, 1fr) minmax(132px, 176px);
+  right: calc(50% - 374px);
+  grid-template-columns: 1fr 146px;
 }
 
 .memory-branch-line {
   position: absolute;
-  top: 31px;
-  width: 166px;
-  height: 44px;
+  top: 30px;
+  width: 186px;
+  height: 42px;
   pointer-events: none;
 }
 
 .memory-branch-arm.left .memory-branch-line {
-  right: 56px;
+  right: 50px;
   border-top: 2px solid color-mix(in srgb, var(--accent), var(--border) 38%);
   border-radius: 0 90px 0 0;
-  transform: rotate(-9deg);
+  transform: rotate(-7deg);
 }
 
 .memory-branch-arm.right .memory-branch-line {
-  left: 56px;
+  left: 50px;
   border-top: 2px solid color-mix(in srgb, var(--accent), var(--border) 38%);
   border-radius: 90px 0 0 0;
-  transform: rotate(9deg);
+  transform: rotate(7deg);
 }
 
 .memory-branch-line span {
@@ -1390,13 +1395,13 @@ button {
   position: relative;
   z-index: 2;
   display: grid;
-  gap: 3px;
-  min-height: 54px;
+  gap: 1px;
+  min-height: 50px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: color-mix(in srgb, var(--bg-panel), var(--bg-selected) 12%);
   color: var(--text-primary);
-  padding: 8px 10px;
+  padding: 7px 10px;
   box-shadow: 0 8px 18px color-mix(in srgb, var(--text-primary), transparent 95%);
   text-align: left;
 }
@@ -1411,14 +1416,14 @@ button {
 
 .memory-branch-card strong {
   font-size: 13px;
-  line-height: 17px;
+  line-height: 16px;
 }
 
 .memory-branch-card small {
   overflow: hidden;
   color: var(--text-muted);
-  font-size: 11px;
-  line-height: 14px;
+  font-size: 10px;
+  line-height: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1434,7 +1439,7 @@ button {
   position: relative;
   z-index: 2;
   display: grid;
-  gap: 5px;
+  gap: 4px;
 }
 
 .memory-branch-arm.left .memory-leaf-cluster {
@@ -1452,9 +1457,9 @@ button {
   display: inline-grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  gap: 5px;
-  max-width: 142px;
-  min-height: 25px;
+  gap: 4px;
+  width: 128px;
+  min-height: 30px;
   border: 0;
   border-radius: 5px;
   background: transparent;
@@ -1467,7 +1472,7 @@ button {
 .memory-leaf-placeholder span {
   display: inline-grid;
   place-items: center;
-  width: 24px;
+  width: 22px;
   height: 22px;
   border-radius: 3px;
   background: var(--bg-selected);
@@ -1478,9 +1483,20 @@ button {
 
 .memory-leaf-card strong,
 .memory-leaf-placeholder strong {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 500;
-  line-height: 14px;
+  line-height: 12px;
+}
+
+.memory-leaf-card small,
+.memory-leaf-placeholder small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 9px;
+  line-height: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .memory-leaf-card:hover,
