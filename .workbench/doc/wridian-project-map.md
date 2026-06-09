@@ -45,6 +45,7 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 
 ## 作品域与知识域
 
+- Frontmatter 关系协议唯一 owner：`.workbench/doc/wridian-frontmatter-relation-protocol.md`。
 - 作品域负责正在写的东西：作品项目、作品库、稿件、相关元素、创作记忆树、Project Mode、Relevant Notes、选区命令和上下文选择。
 - 创作记忆树是作品项目的记忆与规则树；它保存作品连续性、项目规则、人物边界、禁区、当前进度和项目压缩记忆。
 - 作品相关元素可以引用知识卡，但不拥有知识卡；引用知识卡不等于把知识卡写成作品记忆。

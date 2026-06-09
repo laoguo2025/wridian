@@ -3,6 +3,7 @@
 ## 导航
 
 - 项目地图：`.workbench/doc/wridian-project-map.md`
+- Frontmatter 关系协议：`.workbench/doc/wridian-frontmatter-relation-protocol.md`
 - 长期文档登记：`.workbench/doc/workbench-longterm-doc-registry.md`
 - 近期过程留痕：
   - `.workbench/governance/2026-06-10-high-priority-audit-fixes.md`
@@ -10,3 +11,4 @@
   - `.workbench/governance/2026-06-10-low-priority-debt-fixes.md`
   - `.workbench/governance/2026-06-10-creative-memory-knowledge-graph.md`
   - `.workbench/governance/2026-06-10-domain-boundary-confirmation.md`
+  - `.workbench/governance/2026-06-10-frontmatter-relation-protocol.md`
