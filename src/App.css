@@ -1713,62 +1713,7 @@ button {
   inset: 0;
   width: 100%;
   height: 100%;
-}
-
-.graph-motion {
-  transform-box: view-box;
-  transform-origin: 50% 50%;
-}
-
-.graph-edge {
-  stroke: color-mix(in srgb, var(--text-muted), transparent 8%);
-  stroke-linecap: round;
-  stroke-width: 0.58;
-  stroke-dasharray: 3.2 2.2;
-  animation: graph-edge-flow 4.8s linear infinite;
-  vector-effect: non-scaling-stroke;
-}
-
-.graph-edge.edge-wikilink {
-  stroke: color-mix(in srgb, #dc7d57, var(--text-muted) 18%);
-  stroke-width: 0.72;
-}
-
-.graph-node {
-  transform-box: fill-box;
-  transform-origin: center;
-}
-
-.graph-node circle {
-  background: var(--node-fill, #dc7d57);
-  fill: var(--node-fill, #dc7d57);
-  stroke: color-mix(in srgb, var(--bg-panel), transparent 22%);
-  stroke-width: 0.22;
-  vector-effect: non-scaling-stroke;
-  animation: graph-node-breathe 5.6s ease-in-out infinite;
-}
-
-.graph-node.node-folder circle {
-  fill: var(--node-fill, #dc7d57);
-  stroke: color-mix(in srgb, var(--bg-panel), transparent 24%);
-}
-
-.graph-node.node-card {
   cursor: pointer;
-}
-
-.graph-node text {
-  color: var(--text-muted);
-  fill: var(--text-muted);
-  font-size: 1.74px;
-  font-weight: 500;
-  pointer-events: none;
-  text-anchor: middle;
-}
-
-.graph-node:hover circle {
-  stroke: color-mix(in srgb, var(--text-primary), transparent 26%);
-  stroke-width: 0.44;
 }
 
 .knowledge-graph-preview {
@@ -1817,24 +1762,6 @@ button {
   white-space: pre-wrap;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 4;
-}
-
-@keyframes graph-edge-flow {
-  to {
-    stroke-dashoffset: -5.4;
-  }
-}
-
-@keyframes graph-node-breathe {
-  0%,
-  100% {
-    opacity: 0.9;
-    stroke-width: 0.22;
-  }
-  50% {
-    opacity: 1;
-    stroke-width: 0.34;
-  }
 }
 
 .creative-skills-list {

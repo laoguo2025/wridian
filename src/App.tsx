@@ -1,4 +1,4 @@
-import { type CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   restorePromptPillsFromMessage,
@@ -1810,13 +1810,15 @@ function KnowledgeGraphDrawer({
   onRefresh: () => void;
 }) {
   const layout = useMemo(() => buildKnowledgeGraphLayout(graph), [graph]);
-  const defaultViewport = useMemo(() => fitKnowledgeGraphViewport(layout.nodes), [layout.nodes]);
-  const [viewport, setViewport] = useState(defaultViewport);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [stageSize, setStageSize] = useState({ height: 520, width: 780 });
+  const defaultCamera = useMemo(() => fitKnowledgeGraphCamera(layout.nodes, stageSize), [layout.nodes, stageSize]);
+  const [camera, setCamera] = useState(defaultCamera);
   const [hoveredNode, setHoveredNode] = useState<KnowledgeGraphLayoutNode | null>(null);
   const [nodePreview, setNodePreview] = useState<{ path: string; content: string; error: string } | null>(null);
-  const [, forceGraphRender] = useState(0);
+  const [graphRenderTick, forceGraphRender] = useState(0);
   const [dragging, setDragging] = useState(false);
-  const safeViewport = sanitizeKnowledgeGraphViewport(viewport, defaultViewport);
+  const safeCamera = sanitizeKnowledgeGraphCamera(camera, defaultCamera);
   const dragStateRef = useRef<{
     kind: "pan" | "node";
     pointerId: number;
@@ -1827,15 +1829,35 @@ function KnowledgeGraphDrawer({
     startNodeX?: number;
     startNodeY?: number;
     node?: KnowledgeGraphLayoutNode;
-    startX: number;
-    startY: number;
+    startOffsetX: number;
+    startOffsetY: number;
     moved: boolean;
   } | null>(null);
   const suppressGraphClickRef = useRef(false);
 
   useEffect(() => {
-    setViewport(defaultViewport);
-  }, [defaultViewport]);
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const updateSize = () => {
+      const bounds = canvas.getBoundingClientRect();
+      setStageSize({
+        height: Math.max(1, Math.round(bounds.height)),
+        width: Math.max(1, Math.round(bounds.width)),
+      });
+    };
+    updateSize();
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, [knowledgeRootConfigured, graph.nodes.length]);
+
+  useEffect(() => {
+    setCamera(defaultCamera);
+  }, [defaultCamera]);
+
+  useEffect(() => {
+    drawKnowledgeGraphCanvas(canvasRef.current, layout, safeCamera, hoveredNode?.id ?? null);
+  }, [graphRenderTick, layout, safeCamera, hoveredNode?.id]);
 
   useEffect(() => {
     if (!hoveredNode || hoveredNode.kind === "folder" || !hoveredNode.path) {
@@ -1859,32 +1881,36 @@ function KnowledgeGraphDrawer({
     };
   }, [hoveredNode]);
 
-  const clientToViewBox = (event: ReactPointerEvent<HTMLDivElement> | ReactWheelEvent<HTMLDivElement>) => {
+  const clientToCanvasPoint = (event: ReactPointerEvent<HTMLDivElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect();
     return {
-      x: ((event.clientX - bounds.left) / Math.max(1, bounds.width)) * 100,
-      y: ((event.clientY - bounds.top) / Math.max(1, bounds.height)) * 100,
+      x: event.clientX - bounds.left,
+      y: event.clientY - bounds.top,
     };
   };
 
-  const viewBoxToGraph = (point: { x: number; y: number }, view = safeViewport) => ({
-    x: 50 + (point.x - view.x - 50) / view.scale,
-    y: 50 + (point.y - view.y - 50) / view.scale,
-  });
+  const clientToGraph = (event: ReactPointerEvent<HTMLDivElement>, view = safeCamera) => {
+    const point = clientToCanvasPoint(event);
+    return canvasPointToKnowledgeGraph(point, view);
+  };
 
   const findEventNode = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const target = event.target instanceof Element ? event.target.closest<SVGGElement>(".graph-node") : null;
-    const nodeId = target?.dataset.nodeId;
-    return nodeId ? layout.nodes.find((node) => node.id === nodeId) : undefined;
+    const graphPoint = clientToGraph(event);
+    return pickKnowledgeGraphNode(layout.nodes, graphPoint);
   };
 
   const handleWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
     if (!graph.nodes.length) return;
     event.preventDefault();
-    setViewport((current) =>
-      zoomKnowledgeGraphViewport(
-        sanitizeKnowledgeGraphViewport(current, defaultViewport),
-        clientToViewBox(event),
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const anchor = {
+      x: event.clientX - bounds.left,
+      y: event.clientY - bounds.top,
+    };
+    setCamera((current) =>
+      zoomKnowledgeGraphCamera(
+        sanitizeKnowledgeGraphCamera(current, defaultCamera),
+        anchor,
         Math.exp(-event.deltaY * 0.0015),
       ),
     );
@@ -1892,7 +1918,7 @@ function KnowledgeGraphDrawer({
 
   const handleGraphPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!graph.nodes.length || event.button !== 0) return;
-    const graphPoint = viewBoxToGraph(clientToViewBox(event));
+    const graphPoint = clientToGraph(event);
     const node = findEventNode(event);
     event.currentTarget.setPointerCapture(event.pointerId);
     dragStateRef.current = {
@@ -1905,8 +1931,8 @@ function KnowledgeGraphDrawer({
       startNodeX: node?.x,
       startNodeY: node?.y,
       node,
-      startX: safeViewport.x,
-      startY: safeViewport.y,
+      startOffsetX: safeCamera.offsetX,
+      startOffsetY: safeCamera.offsetY,
       moved: false,
     };
     setDragging(true);
@@ -1915,31 +1941,28 @@ function KnowledgeGraphDrawer({
   const handleGraphPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     const dragState = dragStateRef.current;
     if (!dragState) {
-      if (!findEventNode(event)) setHoveredNode(null);
+      setHoveredNode(findEventNode(event) ?? null);
       return;
     }
     if (dragState.pointerId !== event.pointerId) return;
     const deltaX = event.clientX - dragState.startClientX;
     const deltaY = event.clientY - dragState.startClientY;
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const svgDeltaX = (deltaX / Math.max(1, bounds.width)) * 100;
-    const svgDeltaY = (deltaY / Math.max(1, bounds.height)) * 100;
     if (Math.abs(deltaX) + Math.abs(deltaY) > 4) dragState.moved = true;
     if (dragState.kind === "node" && dragState.node && dragState.startNodeX != null && dragState.startNodeY != null) {
-      const graphPoint = viewBoxToGraph(clientToViewBox(event));
+      const graphPoint = clientToGraph(event);
       dragState.node.x = clamp(dragState.startNodeX + graphPoint.x - dragState.startGraphX, dragState.node.collisionRadius, 100 - dragState.node.collisionRadius);
       dragState.node.y = clamp(dragState.startNodeY + graphPoint.y - dragState.startGraphY, dragState.node.collisionRadius + 1.8, 100 - dragState.node.collisionRadius);
       forceGraphRender((tick) => tick + 1);
       return;
     }
-    setViewport((current) =>
-      sanitizeKnowledgeGraphViewport(
+    setCamera((current) =>
+      sanitizeKnowledgeGraphCamera(
         {
           ...current,
-          x: dragState.startX + svgDeltaX,
-          y: dragState.startY + svgDeltaY,
+          offsetX: dragState.startOffsetX + deltaX,
+          offsetY: dragState.startOffsetY + deltaY,
         },
-        defaultViewport,
+        defaultCamera,
       ),
     );
   };
@@ -1947,6 +1970,9 @@ function KnowledgeGraphDrawer({
   const handleGraphPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
     const dragState = dragStateRef.current;
     if (dragState?.pointerId === event.pointerId) {
+      if (!dragState.moved && dragState.node) {
+        openGraphNode(dragState.node);
+      }
       if (dragState.moved) {
         suppressGraphClickRef.current = true;
         window.setTimeout(() => {
@@ -1971,7 +1997,7 @@ function KnowledgeGraphDrawer({
   };
 
   const resetGraphView = () => {
-    setViewport(fitKnowledgeGraphViewport(layout.nodes));
+    setCamera(fitKnowledgeGraphCamera(layout.nodes, stageSize));
   };
   const activePreview = hoveredNode?.path && nodePreview?.path === hoveredNode.path ? nodePreview : null;
 
@@ -2010,38 +2036,7 @@ function KnowledgeGraphDrawer({
           {!knowledgeRootConfigured ? (
             <div className="knowledge-graph-empty">先选择知识库文件夹</div>
           ) : graph.nodes.length ? (
-            <svg className="knowledge-graph-canvas" viewBox="0 0 100 100" role="img" aria-label="知识库动态图谱">
-              <g className="graph-viewport" transform={`translate(${safeViewport.x} ${safeViewport.y}) translate(50 50) scale(${safeViewport.scale}) translate(-50 -50)`}>
-                <g className="graph-motion">
-                  {layout.edges.map((edge) => (
-                    <line
-                      key={`${edge.source.id}-${edge.target.id}-${edge.kind}`}
-                      x1={edge.source.x}
-                      y1={edge.source.y}
-                      x2={edge.target.x}
-                      y2={edge.target.y}
-                      className={`graph-edge edge-${edge.kind}`}
-                    />
-                  ))}
-                  {layout.nodes.map((node) => (
-                    <g
-                      key={node.id}
-                      className={`graph-node node-${node.kind}`}
-                      data-node-id={node.id}
-                      onClick={() => openGraphNode(node)}
-                      onMouseEnter={() => setHoveredNode(node)}
-                      style={{ "--node-fill": node.color } as CSSProperties}
-                    >
-                      <title>{node.path ?? node.label}</title>
-                      <circle cx={node.x} cy={node.y} r={node.radius} />
-                      {node.showLabel ? (
-                        <text x={node.x} y={node.y + node.radius + 1.8}>{node.label}</text>
-                      ) : null}
-                    </g>
-                  ))}
-                </g>
-              </g>
-            </svg>
+            <canvas ref={canvasRef} className="knowledge-graph-canvas" aria-label="知识库动态图谱" />
           ) : (
             <div className="knowledge-graph-empty">知识库里还没有 Markdown 知识卡</div>
           )}
@@ -2122,10 +2117,10 @@ type KnowledgeGraphLayoutNode = KnowledgeGraphNode & {
   y: number;
 };
 
-type KnowledgeGraphViewport = {
+type KnowledgeGraphCamera = {
+  offsetX: number;
+  offsetY: number;
   scale: number;
-  x: number;
-  y: number;
 };
 
 function buildKnowledgeGraphLayout(graph: KnowledgeGraphState) {
@@ -2231,62 +2226,184 @@ function knowledgeGraphNodeColor(depth: number) {
   return colors[Math.min(colors.length - 1, Math.max(0, depth))];
 }
 
-function fitKnowledgeGraphViewport(nodes: KnowledgeGraphLayoutNode[]): KnowledgeGraphViewport {
-  if (!nodes.length) return { scale: 1, x: 0, y: 0 };
+function fitKnowledgeGraphCamera(nodes: KnowledgeGraphLayoutNode[], size = { height: 520, width: 780 }): KnowledgeGraphCamera {
+  const width = Math.max(1, size.width);
+  const height = Math.max(1, size.height);
+  if (!nodes.length) return { offsetX: width / 2, offsetY: height / 2, scale: 1 };
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
   for (const node of nodes) {
-    const padding = node.collisionRadius + 1.5;
+    const padding = node.collisionRadius + 2.5;
     minX = Math.min(minX, node.x - padding);
     minY = Math.min(minY, node.y - padding);
     maxX = Math.max(maxX, node.x + padding);
     maxY = Math.max(maxY, node.y + padding);
   }
-  if (!Number.isFinite(minX)) return { scale: 1, x: 0, y: 0 };
+  if (!Number.isFinite(minX)) return { offsetX: width / 2, offsetY: height / 2, scale: 1 };
   const graphWidth = Math.max(1, maxX - minX);
   const graphHeight = Math.max(1, maxY - minY);
-  const scale = clamp(Math.min(88 / graphWidth, 88 / graphHeight), 0.52, 2.4);
+  const scale = clamp(Math.min((width - 52) / graphWidth, (height - 52) / graphHeight), 3.2, 12);
   const centerX = (minX + maxX) / 2;
   const centerY = (minY + maxY) / 2;
   return {
+    offsetX: width / 2 - centerX * scale,
+    offsetY: height / 2 - centerY * scale,
     scale,
-    x: scale * (50 - centerX),
-    y: scale * (50 - centerY),
   };
 }
 
-function sanitizeKnowledgeGraphViewport(
-  viewport: KnowledgeGraphViewport,
-  fallback: KnowledgeGraphViewport = { scale: 1, x: 0, y: 0 },
-): KnowledgeGraphViewport {
-  const fallbackScale = Number.isFinite(fallback.scale) && fallback.scale > 0 ? fallback.scale : 1;
-  const fallbackX = Number.isFinite(fallback.x) ? fallback.x : 0;
-  const fallbackY = Number.isFinite(fallback.y) ? fallback.y : 0;
-  const scale = Number.isFinite(viewport.scale) && viewport.scale > 0 ? clamp(viewport.scale, 0.52, 3.2) : fallbackScale;
-  const x = Number.isFinite(viewport.x) ? clamp(viewport.x, -180, 180) : fallbackX;
-  const y = Number.isFinite(viewport.y) ? clamp(viewport.y, -180, 180) : fallbackY;
-  return { scale, x, y };
+function sanitizeKnowledgeGraphCamera(
+  camera: KnowledgeGraphCamera,
+  fallback: KnowledgeGraphCamera = { offsetX: 390, offsetY: 260, scale: 6 },
+): KnowledgeGraphCamera {
+  const fallbackScale = Number.isFinite(fallback.scale) && fallback.scale > 0 ? fallback.scale : 6;
+  const fallbackOffsetX = Number.isFinite(fallback.offsetX) ? fallback.offsetX : 390;
+  const fallbackOffsetY = Number.isFinite(fallback.offsetY) ? fallback.offsetY : 260;
+  const scale = Number.isFinite(camera.scale) && camera.scale > 0 ? clamp(camera.scale, 2.4, 32) : fallbackScale;
+  const offsetX = Number.isFinite(camera.offsetX) ? clamp(camera.offsetX, -6000, 6000) : fallbackOffsetX;
+  const offsetY = Number.isFinite(camera.offsetY) ? clamp(camera.offsetY, -6000, 6000) : fallbackOffsetY;
+  return { offsetX, offsetY, scale };
 }
 
-function zoomKnowledgeGraphViewport(
-  viewport: KnowledgeGraphViewport,
-  viewBoxPoint: { x: number; y: number },
+function zoomKnowledgeGraphCamera(
+  camera: KnowledgeGraphCamera,
+  anchor: { x: number; y: number },
   factor: number,
-): KnowledgeGraphViewport {
-  const base = sanitizeKnowledgeGraphViewport(viewport);
+): KnowledgeGraphCamera {
+  const base = sanitizeKnowledgeGraphCamera(camera);
   const safeFactor = Number.isFinite(factor) && factor > 0 ? clamp(factor, 0.25, 4) : 1;
-  const anchorX = Number.isFinite(viewBoxPoint.x) ? clamp(viewBoxPoint.x, 0, 100) : 50;
-  const anchorY = Number.isFinite(viewBoxPoint.y) ? clamp(viewBoxPoint.y, 0, 100) : 50;
-  const scale = clamp(base.scale * safeFactor, 0.52, 3.2);
-  const graphX = 50 + (anchorX - base.x - 50) / base.scale;
-  const graphY = 50 + (anchorY - base.y - 50) / base.scale;
-  return sanitizeKnowledgeGraphViewport({
+  const anchorX = Number.isFinite(anchor.x) ? anchor.x : 390;
+  const anchorY = Number.isFinite(anchor.y) ? anchor.y : 260;
+  const graphPoint = canvasPointToKnowledgeGraph({ x: anchorX, y: anchorY }, base);
+  const scale = clamp(base.scale * safeFactor, 2.4, 32);
+  return sanitizeKnowledgeGraphCamera({
+    offsetX: anchorX - graphPoint.x * scale,
+    offsetY: anchorY - graphPoint.y * scale,
     scale,
-    x: anchorX - 50 - scale * (graphX - 50),
-    y: anchorY - 50 - scale * (graphY - 50),
   });
+}
+
+function canvasPointToKnowledgeGraph(point: { x: number; y: number }, camera: KnowledgeGraphCamera) {
+  const safe = sanitizeKnowledgeGraphCamera(camera);
+  return {
+    x: (point.x - safe.offsetX) / safe.scale,
+    y: (point.y - safe.offsetY) / safe.scale,
+  };
+}
+
+function knowledgeGraphToCanvasPoint(node: { x: number; y: number }, camera: KnowledgeGraphCamera) {
+  return {
+    x: node.x * camera.scale + camera.offsetX,
+    y: node.y * camera.scale + camera.offsetY,
+  };
+}
+
+function pickKnowledgeGraphNode(nodes: KnowledgeGraphLayoutNode[], point: { x: number; y: number }) {
+  let best: KnowledgeGraphLayoutNode | undefined;
+  let bestDistance = Infinity;
+  for (const node of nodes) {
+    const radius = node.radius + 1.8;
+    const dx = node.x - point.x;
+    const dy = node.y - point.y;
+    const distance = dx * dx + dy * dy;
+    if (distance <= radius * radius && distance < bestDistance) {
+      best = node;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+function drawKnowledgeGraphCanvas(
+  canvas: HTMLCanvasElement | null,
+  layout: ReturnType<typeof buildKnowledgeGraphLayout>,
+  camera: KnowledgeGraphCamera,
+  hoveredNodeId: string | null,
+) {
+  if (!canvas) return;
+  const bounds = canvas.getBoundingClientRect();
+  const width = Math.max(1, Math.round(bounds.width));
+  const height = Math.max(1, Math.round(bounds.height));
+  const ratio = window.devicePixelRatio || 1;
+  const pixelWidth = Math.max(1, Math.round(width * ratio));
+  const pixelHeight = Math.max(1, Math.round(height * ratio));
+  if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+    canvas.width = pixelWidth;
+    canvas.height = pixelHeight;
+  }
+  const context = canvas.getContext("2d");
+  if (!context) return;
+  context.setTransform(ratio, 0, 0, ratio, 0, 0);
+  context.clearRect(0, 0, width, height);
+  const safeCamera = sanitizeKnowledgeGraphCamera(camera);
+
+  context.save();
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  for (const edge of layout.edges) {
+    const source = knowledgeGraphToCanvasPoint(edge.source, safeCamera);
+    const target = knowledgeGraphToCanvasPoint(edge.target, safeCamera);
+    context.beginPath();
+    context.moveTo(source.x, source.y);
+    context.lineTo(target.x, target.y);
+    context.strokeStyle = edge.kind === "wikilink" ? "rgba(220, 125, 87, 0.78)" : "rgba(138, 129, 118, 0.72)";
+    context.lineWidth = edge.kind === "wikilink" ? 1.45 : 1.2;
+    context.setLineDash(edge.kind === "wikilink" ? [5, 4] : [4, 4]);
+    context.stroke();
+  }
+  context.setLineDash([]);
+
+  for (const node of layout.nodes) {
+    const point = knowledgeGraphToCanvasPoint(node, safeCamera);
+    const radius = Math.max(3.4, node.radius * safeCamera.scale);
+    const hovered = hoveredNodeId === node.id;
+    if (node.kind !== "card" || hovered) {
+      context.beginPath();
+      context.arc(point.x, point.y, radius + (hovered ? 8 : 5), 0, Math.PI * 2);
+      context.fillStyle = hexToRgba(node.color, hovered ? 0.22 : 0.12);
+      context.fill();
+    }
+    context.beginPath();
+    context.arc(point.x, point.y, radius + (hovered ? 1.4 : 0), 0, Math.PI * 2);
+    context.fillStyle = node.color;
+    context.fill();
+    context.lineWidth = hovered ? 1.6 : 1;
+    context.strokeStyle = hovered ? "rgba(248, 245, 238, 0.92)" : "rgba(248, 245, 238, 0.68)";
+    context.stroke();
+  }
+
+  context.textAlign = "center";
+  context.textBaseline = "top";
+  context.font = "11px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+  for (const node of layout.nodes) {
+    if (!node.showLabel && hoveredNodeId !== node.id) continue;
+    const point = knowledgeGraphToCanvasPoint(node, safeCamera);
+    const radius = Math.max(3.4, node.radius * safeCamera.scale);
+    const label = ellipsizeCanvasLabel(node.label, hoveredNodeId === node.id ? 22 : 14);
+    context.lineWidth = 3;
+    context.strokeStyle = "rgba(31, 29, 26, 0.72)";
+    context.strokeText(label, point.x, point.y + radius + 5);
+    context.fillStyle = "rgba(236, 229, 219, 0.86)";
+    context.fillText(label, point.x, point.y + radius + 5);
+  }
+  context.restore();
+}
+
+function hexToRgba(hex: string, alpha: number) {
+  const normalized = hex.replace("#", "");
+  const value = Number.parseInt(normalized, 16);
+  if (!Number.isFinite(value)) return `rgba(220, 125, 87, ${alpha})`;
+  const red = (value >> 16) & 255;
+  const green = (value >> 8) & 255;
+  const blue = value & 255;
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
+function ellipsizeCanvasLabel(label: string, maxLength: number) {
+  if (label.length <= maxLength) return label;
+  return `${label.slice(0, Math.max(1, maxLength - 1))}…`;
 }
 
 function stableNumber(value: string) {

@@ -17,3 +17,4 @@
   - `.workbench/governance/2026-06-10-knowledge-graph-motion-visibility.md`
   - `.workbench/governance/2026-06-10-openhuman-graph-gap-fill.md`
   - `.workbench/governance/2026-06-10-knowledge-graph-zoom-black-screen.md`
+  - `.workbench/governance/2026-06-10-knowledge-graph-canvas-renderer.md`
