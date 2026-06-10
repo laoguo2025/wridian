@@ -174,7 +174,9 @@ function PromptTypeaheadPlugin({
     editor.update(() => {
       replacePromptTrigger(currentTrigger, suggestion);
     });
-    onSelectSuggestion(suggestion);
+    if (suggestion.kind === "context") {
+      onSelectSuggestion(suggestion);
+    }
     closeMenu();
   }, [closeMenu, editor, onSelectSuggestion]);
 
@@ -286,7 +288,7 @@ function replacePromptTrigger(trigger: PromptTriggerState, suggestion: PromptSug
   const afterText = text.slice(trigger.end);
   const nodes: LexicalNode[] = [];
   if (beforeText) nodes.push($createTextNode(beforeText));
-  if (suggestion.kind === "context" || suggestion.kind === "command") {
+  if (suggestion.kind === "context") {
     nodes.push($createPromptPillNode(createPromptPillFromSuggestion(suggestion)));
     nodes.push($createTextNode(afterText ? ` ${afterText}` : " "));
   } else {

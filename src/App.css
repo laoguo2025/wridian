@@ -1787,16 +1787,6 @@ button {
   white-space: nowrap;
 }
 
-.creative-skill-source {
-  max-width: 100%;
-  overflow: hidden;
-  color: var(--text-faint);
-  font-size: calc(11px * var(--ui-font-scale, 1));
-  line-height: 15px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .skill-toggle {
   width: 36px;
   height: 20px;
@@ -1936,12 +1926,6 @@ button {
   padding: 9px 10px;
 }
 
-.settings-note {
-  color: var(--text-muted);
-  font-size: calc(12px * var(--ui-font-scale, 1));
-  line-height: 18px;
-}
-
 .settings-actions {
   display: flex;
   justify-content: flex-end;
@@ -1949,8 +1933,7 @@ button {
 }
 
 .primary-action,
-.secondary-action,
-.danger-action {
+.secondary-action {
   min-height: 34px;
   border: 0;
   border-radius: 8px;
@@ -1968,14 +1951,8 @@ button {
   color: var(--text-primary);
 }
 
-.danger-action {
-  background: color-mix(in srgb, #b42318, transparent 88%);
-  color: #b42318;
-}
-
 .primary-action:disabled,
-.secondary-action:disabled,
-.danger-action:disabled {
+.secondary-action:disabled {
   opacity: 0.46;
 }
 

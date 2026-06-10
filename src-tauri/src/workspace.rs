@@ -626,5 +626,4 @@ mod tests {
             .iter()
             .any(|node| node.folder && node.name == "00知识库治理"));
     }
-
 }

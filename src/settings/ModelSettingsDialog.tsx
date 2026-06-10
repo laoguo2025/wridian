@@ -55,28 +55,6 @@ export function ModelSettingsDialog({ onClose }: { onClose: () => void }) {
     }
   };
 
-  const clearSettings = async () => {
-    const confirmed = window.confirm("确定清除本机保存的模型账户配置和 API Key 凭据吗？");
-    if (!confirmed) {
-      return;
-    }
-    setBusy(true);
-    setMessage("");
-    try {
-      const status = await invoke<CustomApiSettingsStatus>("wridian_clear_custom_api_settings");
-      setConfigured(status.configured);
-      setBaseUrl("");
-      setModel("");
-      setMaskedKey("");
-      setApiKey("");
-      setMessage("已清除本机模型账户配置和系统凭据。");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <div className="modal-backdrop" onMouseDown={onClose} role="presentation">
       <section className="settings-dialog" role="dialog" aria-modal="true" aria-label="模型账户" onMouseDown={(event) => event.stopPropagation()}>
@@ -104,7 +82,6 @@ export function ModelSettingsDialog({ onClose }: { onClose: () => void }) {
               type="password"
             />
           </label>
-          <div className="settings-note">API Key 只保存在本机系统凭据，不会写入安装包。</div>
           <label>
             <span>Model</span>
             <input value={model} onChange={(event) => setModel(event.currentTarget.value)} placeholder="gpt-4o-mini" />
@@ -114,9 +91,6 @@ export function ModelSettingsDialog({ onClose }: { onClose: () => void }) {
         {message ? <div className="settings-message">{message}</div> : null}
 
         <div className="settings-actions">
-          <button type="button" className="danger-action" onClick={() => void clearSettings()} disabled={busy}>
-            清除本机凭据
-          </button>
           <button type="button" className="secondary-action" onClick={() => void testSettings()} disabled={busy || !configured}>
             测试连接
           </button>

@@ -534,18 +534,14 @@ function drawKnowledgeGraphCanvas(
   for (const edge of layout.edges) {
     const source = knowledgeGraphToCanvasPoint(edge.source, safeCamera);
     const target = knowledgeGraphToCanvasPoint(edge.target, safeCamera);
-    const relationKind = knowledgeGraphRelationKind(edge.kind);
     context.beginPath();
     context.moveTo(source.x, source.y);
     context.lineTo(target.x, target.y);
-    context.strokeStyle = knowledgeGraphEdgeColor(relationKind);
-    context.lineWidth = knowledgeGraphEdgeWidth(relationKind);
-    context.setLineDash(knowledgeGraphEdgeDash(relationKind));
-    context.lineDashOffset = relationKind === "contains" ? edgeDashOffset : relationKind === "wikilink" ? edgeDashOffset * 0.7 : 0;
+    context.strokeStyle = edge.kind === "wikilink" ? "rgba(220, 125, 87, 0.78)" : "rgba(138, 129, 118, 0.72)";
+    context.lineWidth = edge.kind === "wikilink" ? 1.45 : 1.2;
+    context.setLineDash(edge.kind === "wikilink" ? [5, 4] : [4, 4]);
+    context.lineDashOffset = edgeDashOffset;
     context.stroke();
-    if (relationKind === "frontmatter") {
-      drawKnowledgeGraphEdgeLabel(context, source, target, knowledgeGraphRelationLabel(edge.kind));
-    }
   }
   context.setLineDash([]);
   context.lineDashOffset = 0;
@@ -585,76 +581,6 @@ function drawKnowledgeGraphCanvas(
     context.fillText(label, point.x, point.y + radius + 5);
   }
   context.restore();
-}
-
-function knowledgeGraphRelationKind(kind: string) {
-  if (kind.startsWith("frontmatter:")) return "frontmatter";
-  if (kind === "wikilink") return "wikilink";
-  return "contains";
-}
-
-function knowledgeGraphRelationLabel(kind: string) {
-  return kind
-    .replace(/^frontmatter:/, "")
-    .replace(/_/g, " ")
-    .slice(0, 22);
-}
-
-function knowledgeGraphEdgeColor(kind: string) {
-  if (kind === "frontmatter") return "rgba(220, 125, 87, 0.88)";
-  if (kind === "wikilink") return "rgba(220, 125, 87, 0.7)";
-  return "rgba(138, 129, 118, 0.62)";
-}
-
-function knowledgeGraphEdgeWidth(kind: string) {
-  if (kind === "frontmatter") return 1.85;
-  if (kind === "wikilink") return 1.35;
-  return 1.1;
-}
-
-function knowledgeGraphEdgeDash(kind: string) {
-  if (kind === "frontmatter") return [];
-  if (kind === "wikilink") return [5, 4];
-  return [4, 5];
-}
-
-function drawKnowledgeGraphEdgeLabel(
-  context: CanvasRenderingContext2D,
-  source: { x: number; y: number },
-  target: { x: number; y: number },
-  label: string,
-) {
-  if (!label) return;
-  const midX = (source.x + target.x) / 2;
-  const midY = (source.y + target.y) / 2;
-  context.save();
-  context.font = "10px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
-  const width = Math.min(122, Math.max(34, context.measureText(label).width + 10));
-  context.fillStyle = "rgba(36, 32, 28, 0.76)";
-  context.strokeStyle = "rgba(220, 125, 87, 0.5)";
-  context.lineWidth = 1;
-  roundRectPath(context, midX - width / 2, midY - 8, width, 16, 6);
-  context.fill();
-  context.stroke();
-  context.textAlign = "center";
-  context.textBaseline = "middle";
-  context.fillStyle = "rgba(248, 238, 229, 0.88)";
-  context.fillText(label, midX, midY + 0.5, width - 8);
-  context.restore();
-}
-
-function roundRectPath(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {
-  const safeRadius = Math.min(radius, width / 2, height / 2);
-  context.beginPath();
-  context.moveTo(x + safeRadius, y);
-  context.lineTo(x + width - safeRadius, y);
-  context.quadraticCurveTo(x + width, y, x + width, y + safeRadius);
-  context.lineTo(x + width, y + height - safeRadius);
-  context.quadraticCurveTo(x + width, y + height, x + width - safeRadius, y + height);
-  context.lineTo(x + safeRadius, y + height);
-  context.quadraticCurveTo(x, y + height, x, y + height - safeRadius);
-  context.lineTo(x, y + safeRadius);
-  context.quadraticCurveTo(x, y, x + safeRadius, y);
 }
 
 function hexToRgba(hex: string, alpha: number) {

@@ -21,7 +21,6 @@ import {
   createSelectionPromptPill,
   upsertPromptContextPill,
   type PromptContextPill,
-  type PromptSuggestion,
 } from "./chat/promptContext";
 import {
   createDraftReplaceGuardReport,
@@ -31,7 +30,6 @@ import { DraftEditor, readContentEditableSelection, setContentEditableCaret, typ
 import { baseName, detectDraftKind } from "./editor/draftKind";
 import { libraryFolderPath, libraryFolderTooltip } from "./libraryToolbar";
 import {
-  buildCreativeSkillContext,
   CREATIVE_SKILLS,
   DEFAULT_CREATIVE_SKILL_STATE,
   type CreativeSkillId,
@@ -70,7 +68,6 @@ import {
 import type {
   KnowledgeGraphState,
   MemoryTreeState,
-  CreativeSkillSources,
   CustomApiSettingsStatus,
   WorkFileNode,
   WorkspaceInfo,
@@ -97,7 +94,6 @@ const FONT_SIZE_SCALE: Record<FontSizeMode, number> = {
   large: 1.12,
   max: 1.25,
 };
-
 function App() {
   const [theme, setTheme] = useState<Theme>("light");
   const [fontSizeMode, setFontSizeMode] = useState<FontSizeMode>("default");
@@ -108,7 +104,6 @@ function App() {
   const [knowledgeGraphState, setKnowledgeGraphState] = useState<KnowledgeGraphState>({ nodes: [], edges: [], warnings: [] });
   const [knowledgeGraphError, setKnowledgeGraphError] = useState("");
   const [creativeSkillEnabled, setCreativeSkillEnabled] = useState<Record<CreativeSkillId, boolean>>(DEFAULT_CREATIVE_SKILL_STATE);
-  const [creativeSkillSources, setCreativeSkillSources] = useState<CreativeSkillSources>({ knowledgeOps: { available: false } });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [workspace, setWorkspace] = useState<WorkspaceInfo | null>(null);
   const [workspaceError, setWorkspaceError] = useState("");
@@ -252,12 +247,6 @@ function App() {
     void invoke<CustomApiSettingsStatus>("wridian_get_custom_api_settings")
       .then((status) => setActiveModelLabel(status.model ?? "未配置模型"))
       .catch(() => setActiveModelLabel("未配置模型"));
-  }, []);
-
-  useEffect(() => {
-    void invoke<CreativeSkillSources>("wridian_get_creative_skill_sources")
-      .then(setCreativeSkillSources)
-      .catch(() => setCreativeSkillSources({ knowledgeOps: { available: false } }));
   }, []);
 
   useEffect(() => {
@@ -569,38 +558,13 @@ function App() {
     () => CREATIVE_SKILLS.filter((skill) => creativeSkillEnabled[skill.id]),
     [creativeSkillEnabled],
   );
-  const withCreativeSkillContext = useCallback((suggestion: PromptSuggestion): PromptSuggestion => {
-    const skillId = suggestion.id.slice("creative-skill:".length) as CreativeSkillId;
-    const skill = CREATIVE_SKILLS.find((item) => item.id === skillId);
-    if (!skill) return suggestion;
-    const skillSource = skill.id === "knowledgeOps" ? creativeSkillSources.knowledgeOps : undefined;
-    const context = buildCreativeSkillContext(skill, {
-      knowledgeRootPath: workspace?.knowledgeRootPath,
-      skillAvailable: Boolean(skillSource?.available),
-      skillPath: skillSource?.path ?? undefined,
-    });
-    if (!context) return suggestion;
-    return {
-      ...suggestion,
-      insertText: context,
-      pillKind: "tool",
-    };
-  }, [creativeSkillSources, workspace?.knowledgeRootPath]);
-
   const promptSuggestions = useMemo(() => buildPromptSuggestions({
     creativeSkills: enabledCreativeSkills,
     draftKind,
     knowledgeCards: knowledgeSuggestionIndex.cards,
     knowledgeCategories: knowledgeSuggestionIndex.categories,
     selectedKnowledgeCategoryId,
-  }).map((suggestion) => suggestion.kind === "command" ? withCreativeSkillContext(suggestion) : suggestion), [
-    creativeSkillSources,
-    draftKind,
-    enabledCreativeSkills,
-    withCreativeSkillContext,
-    knowledgeSuggestionIndex,
-    selectedKnowledgeCategoryId,
-  ]);
+  }), [draftKind, enabledCreativeSkills, knowledgeSuggestionIndex, selectedKnowledgeCategoryId]);
 
   const statusLabel = useMemo(() => {
     if (saveStatus === "idle") return "读取中";
@@ -807,7 +771,6 @@ function App() {
             </div>
           </div>
           {workspaceError ? <div className="rail-error">{workspaceError}</div> : null}
-
           <div className="file-tree">
             {visibleFiles.length ? (
               visibleFiles.map((node) => (
@@ -919,7 +882,6 @@ function App() {
           }}
           onRemovePill={(id) => setPromptPills((current) => current.filter((pill) => pill.id !== id))}
           onSelectSuggestion={(suggestion) => {
-            if (suggestion.kind === "command") return;
             if (suggestion.kind !== "context") return;
             if (suggestion.id.startsWith("knowledge-category:")) {
               const categoryId = suggestion.insertText.slice("category:".length);
@@ -967,7 +929,6 @@ function App() {
           onToggle={(id) => {
             setCreativeSkillEnabled((current) => ({ ...current, [id]: !current[id] }));
           }}
-          sources={creativeSkillSources}
           skills={CREATIVE_SKILLS}
         />
       ) : null}

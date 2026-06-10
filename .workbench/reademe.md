@@ -22,9 +22,4 @@
   - `.workbench/governance/2026-06-10-app-component-extraction.md`
   - `.workbench/governance/2026-06-10-app-shell-secondary-extraction.md`
   - `.workbench/governance/2026-06-10-workspace-client-extraction.md`
-  - `.workbench/governance/2026-06-10-knowledge-inbox-derived-state.md`
-  - `.workbench/governance/2026-06-10-revert-knowledge-inbox.md`
-  - `.workbench/governance/2026-06-10-default-knowledge-governance-files.md`
-  - `.workbench/governance/2026-06-10-knowledge-ops-skill-context.md`
-  - `.workbench/governance/2026-06-10-model-account-secret-hardening.md`
   - `.workbench/governance/2026-06-10-dialog-folder-selection-fix.md`
