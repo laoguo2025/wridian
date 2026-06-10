@@ -1919,6 +1919,12 @@ button {
   padding: 9px 10px;
 }
 
+.settings-note {
+  color: var(--text-muted);
+  font-size: calc(12px * var(--ui-font-scale, 1));
+  line-height: 18px;
+}
+
 .settings-actions {
   display: flex;
   justify-content: flex-end;
@@ -1926,7 +1932,8 @@ button {
 }
 
 .primary-action,
-.secondary-action {
+.secondary-action,
+.danger-action {
   min-height: 34px;
   border: 0;
   border-radius: 8px;
@@ -1944,8 +1951,14 @@ button {
   color: var(--text-primary);
 }
 
+.danger-action {
+  background: color-mix(in srgb, #b42318, transparent 88%);
+  color: #b42318;
+}
+
 .primary-action:disabled,
-.secondary-action:disabled {
+.secondary-action:disabled,
+.danger-action:disabled {
   opacity: 0.46;
 }
 

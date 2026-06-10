@@ -50,7 +50,7 @@ struct StoredCustomApiSettingsFile {
     model: String,
     #[serde(default)]
     key_stored: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     api_key: Option<String>,
 }
 
@@ -96,6 +96,23 @@ pub(crate) async fn wridian_test_custom_api() -> Result<TestCustomApiResponse, S
     let settings = read_custom_api_settings(&data_dir)?
         .ok_or_else(|| "请先保存自定义 API 配置。".to_string())?;
     test_openai_compatible_chat(&settings).await
+}
+
+#[tauri::command]
+pub(crate) fn wridian_clear_custom_api_settings() -> Result<CustomApiSettingsStatus, String> {
+    let data_dir = wridian_data_dir()?;
+    ensure_workspace(&data_dir)?;
+    clear_api_key()?;
+    let path = model_accounts_path(&data_dir);
+    if path.exists() {
+        fs::remove_file(&path).map_err(|error| format!("模型账户配置清除失败：{error}"))?;
+    }
+    Ok(CustomApiSettingsStatus {
+        configured: false,
+        base_url: None,
+        model: None,
+        masked_key: None,
+    })
 }
 
 fn normalize_custom_api_settings(
@@ -214,6 +231,13 @@ fn store_api_key(api_key: &str) -> Result<(), String> {
         .map_err(|error| format!("API Key 写入系统凭据失败：{error}"))
 }
 
+fn clear_api_key() -> Result<(), String> {
+    match api_key_entry()?.delete_credential() {
+        Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
+        Err(error) => Err(format!("API Key 清除失败：{error}")),
+    }
+}
+
 fn read_api_key() -> Result<String, String> {
     match api_key_entry()?.get_password() {
         Ok(api_key) => Ok(api_key),
@@ -312,6 +336,8 @@ async fn test_openai_compatible_chat(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::unique_test_suffix;
+    use std::env;
 
     #[test]
     fn custom_api_base_url_requires_https_except_localhost() {
@@ -320,5 +346,39 @@ mod tests {
         assert!(validate_base_url("http://127.0.0.1:8080/v1").is_ok());
         assert!(validate_base_url("http://[::1]:8080/v1").is_ok());
         assert!(validate_base_url("http://api.example.com/v1").is_err());
+    }
+
+    #[test]
+    fn custom_api_settings_file_omits_api_key_field() {
+        let data_dir =
+            env::temp_dir().join(format!("wridian-model-settings-{}", unique_test_suffix()));
+        ensure_workspace(&data_dir).expect("workspace");
+        write_custom_api_settings_file(
+            &data_dir,
+            &StoredCustomApiSettingsFile {
+                base_url: "https://api.example.com/v1".to_string(),
+                model: "example-model".to_string(),
+                key_stored: true,
+                api_key: None,
+            },
+        )
+        .expect("write settings");
+
+        let content = fs::read_to_string(model_accounts_path(&data_dir)).expect("read settings");
+        let value: serde_json::Value = serde_json::from_str(&content).expect("json");
+        let custom_api = value
+            .get("customApi")
+            .and_then(serde_json::Value::as_object)
+            .expect("customApi object");
+
+        assert_eq!(
+            custom_api
+                .get("keyStored")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        assert!(!custom_api.contains_key("apiKey"));
+
+        let _ = fs::remove_dir_all(data_dir);
     }
 }

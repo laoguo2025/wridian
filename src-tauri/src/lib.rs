@@ -27,6 +27,7 @@ pub fn run() {
             model_accounts::wridian_get_custom_api_settings,
             model_accounts::wridian_save_custom_api_settings,
             model_accounts::wridian_test_custom_api,
+            model_accounts::wridian_clear_custom_api_settings,
             projects::wridian_get_project_state,
             projects::wridian_save_project,
             projects::wridian_select_project,
