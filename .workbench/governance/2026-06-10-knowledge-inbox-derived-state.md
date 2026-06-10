@@ -1,5 +1,9 @@
 # Knowledge Inbox Derived State
 
+Status: Reverted by `.workbench/governance/2026-06-10-revert-knowledge-inbox.md`.
+
+Reason: `zhishiku-skill` defines `01原始资料` as intentionally unprocessed material and `02拆解报告` as the place for analysis outputs and A/B/C candidates. A generic derived inbox based on missing frontmatter or wikilinks conflicts with that workflow.
+
 ## Scope
 
 - Add a derived knowledge inbox to surface Markdown files that likely need organizing.

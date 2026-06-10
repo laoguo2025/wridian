@@ -68,7 +68,7 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 - `obsidian-copilot` 只借给作品域：Project Mode、Relevant Notes、选区命令、上下文选择。
 - `claude-obsidian` 只借给知识域：ingest、sources/entities/concepts、交叉引用、hot cache。
 - `tolaria` 借给作品域和知识域之间的边界：frontmatter 关系、capture/organize、文件系统唯一真相。
-- 知识库候选箱是从当前知识库派生出来的整理视图，不是真实文件夹；它优先提示默认分类外的 Markdown，以及默认分类内还没有 frontmatter 和 wikilink 的 Markdown。候选文件仍以原路径打开和保存，补齐分类、frontmatter 或交叉引用后会在刷新后自然离开候选箱。
+- 知识库不使用“未结构化文件候选箱”判定知识卡是否正式。`01原始资料` 本来就是未加工素材，`02拆解报告` 保存分析产物和 A/B/C 候选，只有通过 `zhishiku-skill` / `tilian-skill` 质量闸门的 S 级卡才能写入 `03-07` 成为正式知识卡。
 
 ## 交互边界
 

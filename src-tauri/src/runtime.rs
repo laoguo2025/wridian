@@ -24,12 +24,6 @@ const DEFAULT_KNOWLEDGE_CATEGORIES: &[(&str, Option<&str>)] = &[
     ("09文件归档", None),
 ];
 
-pub(crate) fn default_knowledge_category_names() -> impl Iterator<Item = &'static str> {
-    DEFAULT_KNOWLEDGE_CATEGORIES
-        .iter()
-        .map(|(name, _readme)| *name)
-}
-
 pub(crate) fn wridian_data_dir() -> Result<PathBuf, String> {
     dirs::data_dir()
         .map(|path| path.join(WRIDIAN_DATA_DIR_NAME))

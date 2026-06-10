@@ -9,7 +9,6 @@ export type WorkspaceInfo = {
   activeKnowledgeRoot?: string | null;
   knowledgeRootConfigured: boolean;
   knowledgeFiles: WorkFileNode[];
-  knowledgeInboxFiles: WorkFileNode[];
 };
 
 export type WorkFileNode = {

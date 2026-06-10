@@ -1,6 +1,6 @@
 use crate::runtime::{
-    default_knowledge_category_names, default_knowledge_root, ensure_workspace, iso_timestamp,
-    vault_root, workspace_config_path, wridian_data_dir,
+    default_knowledge_root, ensure_workspace, iso_timestamp, vault_root, workspace_config_path,
+    wridian_data_dir,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -20,7 +20,6 @@ pub(crate) struct WorkspaceInfo {
     active_knowledge_root: Option<String>,
     knowledge_root_configured: bool,
     knowledge_files: Vec<WorkFileNode>,
-    knowledge_inbox_files: Vec<WorkFileNode>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -266,7 +265,6 @@ fn workspace_info(data_dir: &Path) -> Result<WorkspaceInfo, String> {
         active_knowledge_root: active_knowledge_root.clone(),
         knowledge_root_configured: true,
         knowledge_files: read_work_tree(&resolved_knowledge, &resolved_knowledge, "knowledge")?,
-        knowledge_inbox_files: read_knowledge_inbox_files(&resolved_knowledge)?,
     })
 }
 
@@ -381,74 +379,6 @@ fn read_work_tree(root: &Path, base: &Path, library: &str) -> Result<Vec<WorkFil
     Ok(nodes)
 }
 
-fn read_knowledge_inbox_files(root: &Path) -> Result<Vec<WorkFileNode>, String> {
-    if !root.is_dir() {
-        return Ok(Vec::new());
-    }
-    let mut nodes = Vec::new();
-    collect_knowledge_inbox_files(root, root, &mut nodes)?;
-    nodes.sort_by(|a, b| {
-        a.relative_path
-            .to_lowercase()
-            .cmp(&b.relative_path.to_lowercase())
-    });
-    Ok(nodes)
-}
-
-fn collect_knowledge_inbox_files(
-    root: &Path,
-    base: &Path,
-    nodes: &mut Vec<WorkFileNode>,
-) -> Result<(), String> {
-    let entries = fs::read_dir(root).map_err(|error| format!("知识库目录读取失败：{error}"))?;
-    for entry in entries {
-        let entry = entry.map_err(|error| format!("知识库目录读取失败：{error}"))?;
-        let path = entry.path();
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if should_skip_entry(&name) {
-            continue;
-        }
-        if path.is_dir() {
-            collect_knowledge_inbox_files(&path, base, nodes)?;
-        } else if is_markdown_file(&path) && is_knowledge_inbox_candidate(base, &path)? {
-            nodes.push(WorkFileNode {
-                name,
-                path: path.to_string_lossy().into_owned(),
-                relative_path: relative_path(base, &path),
-                library: "knowledge".to_string(),
-                folder: false,
-                children: Vec::new(),
-            });
-        }
-    }
-    Ok(())
-}
-
-fn is_knowledge_inbox_candidate(base: &Path, path: &Path) -> Result<bool, String> {
-    let relative = relative_path(base, path);
-    if is_outside_default_knowledge_category(&relative) {
-        return Ok(true);
-    }
-    let content = fs::read_to_string(path).map_err(|error| format!("知识卡读取失败：{error}"))?;
-    Ok(!has_frontmatter_block(&content) && !content.contains("[["))
-}
-
-fn is_outside_default_knowledge_category(relative: &str) -> bool {
-    let first_segment = relative.split('/').next().unwrap_or("");
-    !default_knowledge_category_names().any(|category| category == first_segment)
-}
-
-fn has_frontmatter_block(content: &str) -> bool {
-    let normalized = content.strip_prefix('\u{feff}').unwrap_or(content);
-    if !normalized.starts_with("---\n") && !normalized.starts_with("---\r\n") {
-        return false;
-    }
-    normalized
-        .lines()
-        .skip(1)
-        .any(|line| line.trim_end() == "---")
-}
-
 fn should_skip_entry(name: &str) -> bool {
     matches!(
         name,
@@ -465,13 +395,6 @@ pub(crate) fn is_supported_writing_file(path: &Path) -> bool {
                 "md" | "markdown" | "txt" | "fountain"
             )
         })
-        .unwrap_or(false)
-}
-
-fn is_markdown_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| matches!(extension.to_ascii_lowercase().as_str(), "md" | "markdown"))
         .unwrap_or(false)
 }
 
@@ -704,54 +627,4 @@ mod tests {
             .any(|node| node.folder && node.name == "00知识库治理"));
     }
 
-    #[test]
-    fn workspace_info_exposes_derived_knowledge_inbox_files() {
-        let data_dir = temp_data_dir("knowledge-inbox");
-        let knowledge_root = data_dir.join("user-knowledge");
-        fs::create_dir_all(knowledge_root.join("03故事模型")).expect("create default category");
-        fs::create_dir_all(knowledge_root.join("临时资料")).expect("create custom category");
-        fs::write(
-            knowledge_root.join("03故事模型").join("结构卡.md"),
-            "---\ntags: [story]\n---\n关联 [[人物卡]]",
-        )
-        .expect("write structured card");
-        fs::write(
-            knowledge_root.join("03故事模型").join("无结构.md"),
-            "一段还没整理的资料",
-        )
-        .expect("write unstructured card");
-        fs::write(
-            knowledge_root.join("临时资料").join("外部资料.md"),
-            "---\ntags: [source]\n---\n",
-        )
-        .expect("write outside default category card");
-        fs::create_dir_all(crate::runtime::runtime_root(&data_dir)).expect("create runtime");
-        fs::write(
-            workspace_config_path(&data_dir),
-            serde_json::json!({
-                "schemaVersion": 1,
-                "knowledgeRoot": knowledge_root.to_string_lossy()
-            })
-            .to_string(),
-        )
-        .expect("write workspace config");
-
-        let info = workspace_info(&data_dir).expect("workspace info");
-        let inbox_paths = info
-            .knowledge_inbox_files
-            .iter()
-            .map(|node| node.relative_path.as_str())
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            inbox_paths,
-            vec!["03故事模型/无结构.md", "临时资料/外部资料.md"]
-        );
-        assert!(!inbox_paths.contains(&"03故事模型/结构卡.md"));
-        assert!(info.knowledge_inbox_files.iter().all(|node| !node.folder));
-        assert!(info
-            .knowledge_inbox_files
-            .iter()
-            .all(|node| node.library == "knowledge"));
-    }
 }
