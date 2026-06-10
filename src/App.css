@@ -430,6 +430,23 @@ button {
   padding: 8px;
 }
 
+.library-empty-action {
+  width: 100%;
+  border: 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent), transparent 88%);
+  color: var(--text-body);
+  padding: 9px 10px;
+  text-align: left;
+  font-size: calc(12px * var(--ui-font-scale, 1));
+  line-height: 18px;
+}
+
+.library-empty-action:hover {
+  background: color-mix(in srgb, var(--accent), transparent 80%);
+  color: var(--text-primary);
+}
+
 .file-tree {
   min-height: 0;
   overflow: auto;

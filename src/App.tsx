@@ -820,7 +820,11 @@ function App() {
                   onOpenMenu={openFileContextMenu}
                 />
               ))
-            ) : null}
+            ) : (
+              <button type="button" className="library-empty-action" onClick={() => void chooseLibraryRoot(libraryTab)}>
+                {libraryTab === "knowledge" ? "选择知识库文件夹" : "选择作品库文件夹"}
+              </button>
+            )}
           </div>
 
           <div className="rail-bottom">

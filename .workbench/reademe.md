@@ -27,3 +27,4 @@
   - `.workbench/governance/2026-06-10-default-knowledge-governance-files.md`
   - `.workbench/governance/2026-06-10-knowledge-ops-skill-context.md`
   - `.workbench/governance/2026-06-10-model-account-secret-hardening.md`
+  - `.workbench/governance/2026-06-10-dialog-folder-selection-fix.md`
