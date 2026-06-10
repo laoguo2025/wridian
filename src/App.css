@@ -1792,12 +1792,13 @@ button {
 }
 
 .skill-toggle.active {
-  background: color-mix(in srgb, var(--focus), transparent 72%);
-  border-color: color-mix(in srgb, var(--focus), transparent 42%);
+  background: color-mix(in srgb, var(--accent), transparent 72%);
+  border-color: color-mix(in srgb, var(--accent), transparent 35%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent), transparent 84%);
 }
 
 .skill-toggle.active span {
-  background: var(--focus);
+  background: var(--accent);
   transform: translateX(16px);
 }
 
