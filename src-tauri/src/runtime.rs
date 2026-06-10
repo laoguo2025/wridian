@@ -6,23 +6,22 @@ const WRIDIAN_DATA_DIR_NAME: &str = "Wridian";
 const WRIDIAN_VAULT_DIR_NAME: &str = "Wridian Vault";
 const WRIDIAN_RUNTIME_DIR_NAME: &str = ".wridian";
 const DEFAULT_KNOWLEDGE_DIR_NAME: &str = "Wridian知识库";
-const DEFAULT_KNOWLEDGE_CATEGORIES: &[(&str, Option<&str>)] = &[
-    (
-        "00知识库治理",
-        Some(
-            "# Wridian 知识库使用说明\n\n这个文件夹用于保存知识库规则、运营记录、体检结果和分类说明。\n\n- `01原始资料`：存放未加工的一手资料。\n- `02拆解报告`：存放作品拆解、案例分析和中间报告。\n- `03故事模型`：存放可复用的故事结构、叙事模型和判断框架。\n- `04人物原型`：存放人物类型、关系模式、角色弧光和人设参考。\n- `05情节方程`：存放冲突、反转、钩子、节奏和情节公式。\n- `06写作技法`：存放对白、场景、风格、爽点、短剧卡点等技法卡。\n- `07综合素材`：存放可复用素材、清单、灵感和跨分类资料。\n- `08大神蒸馏`：存放作者方法论、作者 skill 和版本记录。\n- `09文件归档`：存放废弃、过期或待删除文件。\n\n这些分类只是默认模板。你可以在 Wridian 里新增、改名或移除分类文件夹；知识库运营 skill 体检时应按实际目录修正。\n",
-        ),
-    ),
-    ("01原始资料", None),
-    ("02拆解报告", None),
-    ("03故事模型", None),
-    ("04人物原型", None),
-    ("05情节方程", None),
-    ("06写作技法", None),
-    ("07综合素材", None),
-    ("08大神蒸馏", None),
-    ("09文件归档", None),
+const DEFAULT_KNOWLEDGE_CATEGORIES: &[&str] = &[
+    "00知识库治理",
+    "01原始资料",
+    "02拆解报告",
+    "03故事模型",
+    "04人物原型",
+    "05情节方程",
+    "06写作技法",
+    "07综合素材",
+    "08大神蒸馏",
+    "09文件归档",
 ];
+const DEFAULT_KNOWLEDGE_GOVERNANCE: &str = "# 知识库治理说明\n\n## 常用口令\n\n```text\n搭建知识库\n拆解作品\n提炼知识卡\n蒸馏大神作者\n安装大神skill\n体检知识库\n进化skill\n清理知识库\n```\n\n## 一级目录\n\n- `00知识库治理`：治理说明、调用记录台账、体检结果和运营记录。\n- `01原始资料`：待处理素材。\n- `02拆解报告`：作品拆解笔记与综合报告。\n- `03故事模型`：可复用故事运行机制。\n- `04人物原型`：人物位置、关系功能和精神内核。\n- `05情节方程`：场景、桥段和情绪触发公式。\n- `06写作技法`：可执行写作技法、组合流程和审美法则。\n- `07综合素材`：设定、道具、机构、术语、场景和金句。\n- `08大神蒸馏`：作者方法论和可复用 skill。\n- `09文件归档`：备份、迁移记录、待清理文件和旧版本。\n\n## 知识治理\n\n1. 文件系统是唯一事实来源。\n2. 用户可以增、改、删分类目录，体检时按实际目录修正。\n3. 知识卡可以被多个作品引用，但不会自动变成作品记忆。\n4. 从知识到作品，通过引用、采纳或改写成作品设定进入项目。\n5. 从作品到知识，通过摘录、抽象或沉淀为知识卡离开项目。\n\n## 知识卡结构\n\n知识卡应写清四件事：\n\n- 输入：什么场景、材料或问题可以调用这张卡。\n- 处理逻辑：卡片如何判断、拆解或生成方案。\n- 输出：调用后能得到什么结果。\n- 边界：什么情况下会失效、误用或需要回源复查。\n\n## 旧目录处理\n\n发现旧版 00-11、重名目录或已被合并的分类时，先迁移到当前 00-09 结构；不能确认归属的文件先放入 `09文件归档`，不要直接物理删除。\n\n## 重要规则\n\n- 拆解产物进 `02拆解报告`。\n- 知识卡进 `03-07`，只保留 S 级。\n- 作者 skill 由蒸馏流程生成，存入 `08大神蒸馏`。\n- 清理默认归档，不直接物理删除。\n";
+const DEFAULT_KNOWLEDGE_CALL_LOG: &str = "# Wridian知识库 · 调用记录台账\n\n> 本台账记录知识卡被真实使用后的表现，用于统计调用频率、最近调用、调用表现和进化方向。字段是管理台账字段，不是知识卡 frontmatter。\n\n## 记录规则\n\n1. 只有知识卡被真实用于拆解、创作、诊断、改写或方案判断时，才记录一次调用。\n2. 同一任务里同一张知识卡多次被参考，默认记为一次；若不同环节发挥不同作用，可以拆成多条。\n3. 调用表现只看本次任务效果，不看卡片文字是否漂亮。\n4. 进化方向必须写成可执行动作，避免只写“优化”“完善”。\n5. 如果一张卡误导判断，必须记录，后续全库体检优先处理。\n\n## 调用记录表\n\n| 日期 | 调用作品 | 知识卡 | 调用频率 | 最近调用 | 调用表现 | 关联卡片 | 进化方向 | 备注 |\n|---|---|---|---:|---|---|---|---|---|\n|  |  |  |  |  |  |  |  |  |\n\n## 质量 × 频率四象限\n\n| 质量 | 频率 | 结果 | 处理原则 |\n|---|---|---|---|\n| 低质量 | 低频 | 垃圾 | 废弃、合并或封存。 |\n| 低质量 | 高频 | 内耗 | 优先重写或降评级。 |\n| 高质量 | 低频 | 浪费 | 补入口、补关联卡片、补适用场景。 |\n| 高质量 | 高频 | 杠杆 | 评为金卡，重点维护，优先产品化和系统化。 |\n";
+const DEFAULT_DASHEN_INDEX: &str = "# 大神索引\n\n记录由 `zhengliu-skill` 蒸馏出的作者小 skill。\n\n| 作者 | Skill | 状态 | 安装位置 | 更新时间 |\n|---|---|---|---|---|\n";
+const DEFAULT_DASHEN_INSTALL_LOG: &str = "# 安装记录\n\n记录从 `08大神蒸馏` 安装到 skill 根目录的作者小 skill。\n\n| 时间 | Skill | 来源 | 目标 | 操作 |\n|---|---|---|---|---|\n";
 
 pub(crate) fn wridian_data_dir() -> Result<PathBuf, String> {
     dirs::data_dir()
@@ -165,13 +164,26 @@ pub(crate) fn ensure_default_knowledge_categories(root: &Path) -> Result<(), Str
     if !should_seed {
         return Ok(());
     }
-    for (name, readme) in DEFAULT_KNOWLEDGE_CATEGORIES {
+    for name in DEFAULT_KNOWLEDGE_CATEGORIES {
         let dir = root.join(name);
         fs::create_dir_all(&dir).map_err(|error| format!("知识库分类目录创建失败：{error}"))?;
-        if let Some(content) = readme {
-            write_if_missing(&dir.join("使用说明.md"), content)?;
-        }
     }
+    write_if_missing(
+        &root.join("00知识库治理").join("治理说明.md"),
+        DEFAULT_KNOWLEDGE_GOVERNANCE,
+    )?;
+    write_if_missing(
+        &root.join("00知识库治理").join("调用记录台账.md"),
+        DEFAULT_KNOWLEDGE_CALL_LOG,
+    )?;
+    write_if_missing(
+        &root.join("08大神蒸馏").join("大神索引.md"),
+        DEFAULT_DASHEN_INDEX,
+    )?;
+    write_if_missing(
+        &root.join("08大神蒸馏").join("_安装记录.md"),
+        DEFAULT_DASHEN_INSTALL_LOG,
+    )?;
     Ok(())
 }
 
@@ -234,7 +246,11 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
 
         ensure_default_knowledge_categories(&root).expect("seed missing root");
-        assert!(root.join("00知识库治理").join("使用说明.md").is_file());
+        assert!(root.join("00知识库治理").join("治理说明.md").is_file());
+        assert!(root.join("00知识库治理").join("调用记录台账.md").is_file());
+        assert!(root.join("08大神蒸馏").join("大神索引.md").is_file());
+        assert!(root.join("08大神蒸馏").join("_安装记录.md").is_file());
+        assert!(!root.join("知识库使用说明.md").exists());
 
         let _ = fs::remove_dir_all(&root);
     }
