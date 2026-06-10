@@ -70,17 +70,14 @@ pub(crate) struct MemoryTreeNode {
     children: Vec<MemoryTreeNode>,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct MemoryLeafCandidate {
-    id: String,
-    branch: String,
-    title: String,
-    summary: String,
-    reason: String,
-    status: String,
-    source_path: String,
-    target_path: String,
+pub(crate) struct MemoryLeafDraft {
+    pub(crate) branch: String,
+    pub(crate) title: String,
+    pub(crate) summary: String,
+    pub(crate) reason: Option<String>,
+    pub(crate) source_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -92,22 +89,8 @@ pub(crate) struct SaveMemoryTreeFileInput {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct ProposeMemoryLeafInput {
-    source_path: Option<String>,
-    title: Option<String>,
-    content: String,
-    user_intent: Option<String>,
-    draft_kind: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct PlantMemoryLeafInput {
-    branch: String,
-    title: String,
-    summary: String,
-    reason: Option<String>,
-    source_path: Option<String>,
+pub(crate) struct DeleteMemoryTreeFileInput {
+    path: String,
 }
 
 #[tauri::command]
@@ -144,23 +127,12 @@ pub(crate) fn wridian_save_memory_tree_file(
 }
 
 #[tauri::command]
-pub(crate) fn wridian_propose_memory_leaf(
-    input: ProposeMemoryLeafInput,
-) -> Result<Option<MemoryLeafCandidate>, String> {
-    let data_dir = wridian_data_dir()?;
-    ensure_workspace(&data_dir)?;
-    ensure_memory_tree_files(&data_dir)?;
-    propose_memory_leaf(&data_dir, input)
-}
-
-#[tauri::command]
-pub(crate) fn wridian_plant_memory_leaf(
-    input: PlantMemoryLeafInput,
+pub(crate) fn wridian_delete_memory_tree_file(
+    input: DeleteMemoryTreeFileInput,
 ) -> Result<MemoryTreeResponse, String> {
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
-    ensure_memory_tree_files(&data_dir)?;
-    plant_memory_leaf(&data_dir, input)?;
+    delete_memory_tree_file(&data_dir, &input.path)?;
     read_memory_tree_files(&data_dir)
 }
 
@@ -309,7 +281,7 @@ fn read_memory_tree_files(data_dir: &Path) -> Result<MemoryTreeResponse, String>
             id: "leaves-empty".to_string(),
             kind: "empty".to_string(),
             label: "暂无叶子".to_string(),
-            description: "确认候选叶子或手动新增 Markdown 后，这里会长出叶子。".to_string(),
+            description: "对话自动沉淀或手动新增 Markdown 后，这里会长出叶子。".to_string(),
             path: None,
             content: None,
             children: Vec::new(),
@@ -362,6 +334,51 @@ fn save_memory_tree_file(data_dir: &Path, path: &str, content: &str) -> Result<(
     fs::write(target, content).map_err(|error| format!("记忆树文件写入失败：{error}"))
 }
 
+fn delete_memory_tree_file(data_dir: &Path, path: &str) -> Result<(), String> {
+    ensure_memory_tree_files(data_dir)?;
+    let target = resolve_deletable_memory_tree_file(data_dir, path)?;
+    fs::remove_file(target).map_err(|error| format!("记忆树文件删除失败：{error}"))
+}
+
+fn resolve_deletable_memory_tree_file(data_dir: &Path, path: &str) -> Result<PathBuf, String> {
+    let target = PathBuf::from(path.trim());
+    if !target.is_absolute() {
+        return Err("记忆树文件路径必须是绝对路径。".to_string());
+    }
+    let metadata =
+        fs::symlink_metadata(&target).map_err(|error| format!("记忆树文件不存在：{error}"))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err("只能删除记忆树里的普通 Markdown 叶子文件。".to_string());
+    }
+    if target
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_lowercase)
+        .as_deref()
+        != Some("md")
+    {
+        return Err("记忆树只允许删除 Markdown 文件。".to_string());
+    }
+    let canonical_target = target
+        .canonicalize()
+        .map_err(|error| format!("记忆树文件路径无效：{error}"))?;
+    let leaves_root = memory_tree_files_root(data_dir)
+        .join("leaves")
+        .canonicalize()
+        .map_err(|error| format!("记忆树叶子目录不存在：{error}"))?;
+    if !canonical_target.starts_with(&leaves_root) {
+        return Err("只能删除记忆树 leaves 下的叶子文件。".to_string());
+    }
+    let file_name = canonical_target
+        .file_name()
+        .map(|name| name.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if matches!(file_name.as_str(), "project.md" | "compressed.md") {
+        return Err("作品项目主记忆和压缩记忆不能删除，只能编辑。".to_string());
+    }
+    Ok(canonical_target)
+}
+
 fn ensure_memory_tree_files(data_dir: &Path) -> Result<(), String> {
     let root = memory_tree_files_root(data_dir);
     for (relative, content) in default_memory_tree_files() {
@@ -398,8 +415,8 @@ fn default_memory_tree_files() -> Vec<(&'static str, &'static str)> {
     vec![
         ("SOUL.md", "# SOUL.md\n\nWridian 的图腾。这里定义底层灵魂、价值观和对话人格。稳定，不频繁变化。\n"),
         ("AGENTS.md", "# AGENTS.md\n\nWridian 的树根。这里定义如何行动、如何使用记忆树、哪些事必须问用户、哪些事不能自作主张。\n"),
-        ("MEMORY.md", "# MEMORY.md\n\nWridian 记忆树主干。这里维护索引、上下文编译策略、分支说明和最近活跃叶子。\n\n## Context Compile\n\n- 先读 SOUL.md、AGENTS.md、MEMORY.md。\n- 再读命中分支的 branches/*.md。\n- 最后摘取最近、活跃、命中的 leaves。\n- 候选叶子必须经用户确认才写入 leaves。\n"),
-        ("branches/SENSE.md", "# SENSE.md\n\n自我意识机制。定义什么样的 agent 自己想做的事可以长成叶子，且必须经过用户同意。\n"),
+        ("MEMORY.md", "# MEMORY.md\n\nWridian 记忆树主干。这里维护索引、上下文编译策略、分支说明和最近活跃叶子。\n\n## Context Compile\n\n- 先读 SOUL.md、AGENTS.md、MEMORY.md。\n- 再读命中分支的 branches/*.md。\n- 最后摘取最近、活跃、命中的 leaves。\n- 对话完成后可由模型返回结构化 memories，Wridian 自动写入 leaves；用户在创作记忆树里编辑或删除。\n"),
+        ("branches/SENSE.md", "# SENSE.md\n\n自我意识机制。定义什么样的 agent 自己想做的事可以长成叶子，以及写入后如何被用户审阅、编辑和删除。\n"),
         ("branches/USER.md", "# USER.md\n\n用户画像准则。定义哪些创作之外的用户信息可以长成叶子，哪些不能写。\n"),
         ("branches/RELATIONSHIP.md", "# RELATIONSHIP.md\n\n关系准则。定义什么样的共处花絮值得记录，以及如何影响后续相处。\n"),
         ("branches/JOURNEY.md", "# JOURNEY.md\n\n创作里程碑。定义小节点如何沉淀，如何汇总成里程碑。\n"),
@@ -725,6 +742,64 @@ mod tests {
         assert!(!outside_file.exists());
     }
 
+    #[test]
+    fn write_memory_leaves_creates_editable_leaf_file() {
+        let data_dir = temp_data_dir("auto-leaf");
+        crate::runtime::ensure_workspace(&data_dir).expect("ensure workspace");
+
+        let paths = write_memory_leaves(
+            &data_dir,
+            &[MemoryLeafDraft {
+                branch: "novel".to_string(),
+                title: "人物禁区".to_string(),
+                summary: "女主不能主动说出真相。".to_string(),
+                reason: Some("模型从本轮对话提取。".to_string()),
+                source_path: Some("chapter.md".to_string()),
+            }],
+        )
+        .expect("write leaf");
+
+        assert_eq!(paths.len(), 1);
+        let content = fs::read_to_string(&paths[0]).expect("read leaf");
+        assert!(content.contains("# 人物禁区"));
+        assert!(content.contains("女主不能主动说出真相。"));
+    }
+
+    #[test]
+    fn delete_memory_tree_file_rejects_project_core_files() {
+        let data_dir = temp_data_dir("delete-core");
+        let work_root = data_dir.join("works");
+        let project = work_root.join("作品A");
+        fs::create_dir_all(&project).expect("create project");
+        fs::create_dir_all(crate::runtime::runtime_root(&data_dir)).expect("create runtime");
+        fs::write(
+            crate::runtime::workspace_config_path(&data_dir),
+            serde_json::json!({
+                "schemaVersion": 1,
+                "activeWorkRoot": work_root.to_string_lossy(),
+                "knowledgeRoot": data_dir.join("knowledge").to_string_lossy()
+            })
+            .to_string(),
+        )
+        .expect("write workspace config");
+        ensure_memory_tree_files(&data_dir).expect("ensure tree");
+        let core_file = memory_tree_files_root(&data_dir)
+            .join("leaves")
+            .join("novel")
+            .join(format!(
+                "{}-{}",
+                sanitize_markdown_file_name("作品A"),
+                stable_scope_id(&project.to_string_lossy())
+            ))
+            .join("project.md");
+
+        let error = delete_memory_tree_file(&data_dir, &core_file.to_string_lossy())
+            .expect_err("core file delete should be rejected");
+
+        assert!(error.contains("不能删除"));
+        assert!(core_file.exists());
+    }
+
     fn find_node_by_label<'a>(
         nodes: &'a [MemoryTreeNode],
         label: &str,
@@ -831,51 +906,21 @@ fn project_branch_for_path(project_path: &Path) -> &'static str {
     }
 }
 
-fn propose_memory_leaf(
+pub(crate) fn write_memory_leaves(
     data_dir: &Path,
-    input: ProposeMemoryLeafInput,
-) -> Result<Option<MemoryLeafCandidate>, String> {
-    let content = input.content.trim();
-    let intent = input.user_intent.unwrap_or_default();
-    if content.chars().count() < 18 && intent.chars().count() < 8 {
-        return Ok(None);
-    }
-    let source_path = input.source_path.unwrap_or_default();
-    let branch = infer_leaf_branch(&source_path, input.draft_kind.as_deref(), &content, &intent);
-    let raw_title = input
-        .title
-        .filter(|title| !title.trim().is_empty())
-        .unwrap_or_else(|| candidate_title(&content, &intent));
-    let title = format!("{} - {}", branch_label(branch), raw_title.trim());
-    let summary = candidate_summary(&content, &intent);
-    let reason = format!(
-        "命中 {} 分支：本轮内容包含可复用的创作/共处/知识信号，需用户确认后才写入长期叶子。",
-        branch_label(branch)
-    );
-    let slug = sanitize_markdown_file_name(&format!("{}-{}", chrono_like_date(), raw_title));
-    let target_path = memory_tree_files_root(data_dir)
-        .join("leaves")
-        .join(branch)
-        .join(format!("{slug}.md"));
-    Ok(Some(MemoryLeafCandidate {
-        id: format!(
-            "candidate:{branch}:{}",
-            stable_scope_id(&format!("{source_path}:{summary}"))
-        ),
-        branch: branch.to_string(),
-        title,
-        summary,
-        reason,
-        status: "candidate".to_string(),
-        source_path,
-        target_path: target_path.to_string_lossy().into_owned(),
-    }))
+    leaves: &[MemoryLeafDraft],
+) -> Result<Vec<PathBuf>, String> {
+    ensure_memory_tree_files(data_dir)?;
+    leaves
+        .iter()
+        .map(|leaf| write_memory_leaf(data_dir, leaf))
+        .collect()
 }
 
-fn plant_memory_leaf(data_dir: &Path, input: PlantMemoryLeafInput) -> Result<(), String> {
-    let branch = normalize_branch(&input.branch)?;
-    let title = input.title.trim();
-    let summary = input.summary.trim();
+fn write_memory_leaf(data_dir: &Path, leaf: &MemoryLeafDraft) -> Result<PathBuf, String> {
+    let branch = normalize_branch(&leaf.branch)?;
+    let title = leaf.title.trim();
+    let summary = leaf.summary.trim();
     if title.is_empty() || summary.is_empty() {
         return Err("叶子标题和内容不能为空。".to_string());
     }
@@ -884,59 +929,15 @@ fn plant_memory_leaf(data_dir: &Path, input: PlantMemoryLeafInput) -> Result<(),
     fs::create_dir_all(&folder).map_err(|error| format!("叶子目录创建失败：{error}"))?;
     let slug = sanitize_markdown_file_name(&format!("{}-{}", chrono_like_date(), title));
     let path = unique_markdown_path(&folder, &slug);
-    let reason = input.reason.unwrap_or_default();
-    let source = input.source_path.unwrap_or_default();
+    let reason = leaf.reason.as_deref().unwrap_or_default();
+    let source = leaf.source_path.as_deref().unwrap_or_default();
     let content = format!(
         "# {title}\n\nbranch: {branch}\nstatus: alive\ncreated: {}\nsource: {source}\n\n## Record\n\n{summary}\n\n## Why It Grew\n\n{}\n",
         crate::runtime::iso_timestamp(),
-        if reason.trim().is_empty() { "用户确认这片候选叶子值得沉淀。" } else { reason.trim() }
+        if reason.trim().is_empty() { "模型从本轮对话中提取出可复用长期记忆。" } else { reason.trim() }
     );
-    fs::write(path, content).map_err(|error| format!("叶子写入失败：{error}"))
-}
-
-fn infer_leaf_branch<'a>(
-    source_path: &str,
-    draft_kind: Option<&str>,
-    content: &str,
-    intent: &str,
-) -> &'a str {
-    let text = format!("{source_path}\n{draft_kind:?}\n{content}\n{intent}").to_lowercase();
-    if draft_kind == Some("screenplay")
-        || text.contains("剧本")
-        || text.contains("短剧")
-        || text.contains("对白")
-        || text.contains(".fountain")
-    {
-        "drama"
-    } else if text.contains("小说")
-        || text.contains("章节")
-        || text.contains("人物")
-        || text.contains("世界观")
-    {
-        "novel"
-    } else if text.contains("知识")
-        || text.contains("资料")
-        || text.contains("设定")
-        || text.contains("概念")
-    {
-        "knowledge"
-    } else if text.contains("流程")
-        || text.contains("技能")
-        || text.contains("提示词")
-        || text.contains("工具")
-    {
-        "skill"
-    } else if text.contains("关系") || text.contains("语气") || text.contains("情绪") {
-        "relationship"
-    } else if text.contains("反思") || text.contains("意识") || text.contains("沉默") {
-        "awareness"
-    } else if text.contains("用户") || text.contains("偏好") || text.contains("习惯") {
-        "user"
-    } else if text.contains("里程碑") || text.contains("确定") || text.contains("完成") {
-        "journey"
-    } else {
-        "journey"
-    }
+    fs::write(&path, content).map_err(|error| format!("叶子写入失败：{error}"))?;
+    Ok(path)
 }
 
 fn normalize_branch(branch: &str) -> Result<&'static str, String> {
@@ -945,50 +946,6 @@ fn normalize_branch(branch: &str) -> Result<&'static str, String> {
         .iter()
         .find_map(|(key, _, _)| if *key == lowered { Some(*key) } else { None })
         .ok_or_else(|| "未知记忆分支。".to_string())
-}
-
-fn branch_label(branch: &str) -> &'static str {
-    match branch {
-        "sense" => "自我意识",
-        "user" => "用户画像",
-        "relationship" => "关系",
-        "journey" => "创作里程碑",
-        "drama" => "剧本",
-        "novel" => "小说",
-        "knowledge" => "知识",
-        "skill" => "技能",
-        "awareness" => "反思",
-        _ => "记忆",
-    }
-}
-
-fn candidate_title(content: &str, intent: &str) -> String {
-    let source = if intent.trim().is_empty() {
-        content
-    } else {
-        intent
-    };
-    source
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .take(24)
-        .collect::<String>()
-        .trim()
-        .trim_matches(['#', '-', '，', '。', ' '])
-        .to_string()
-}
-
-fn candidate_summary(content: &str, intent: &str) -> String {
-    let mut parts = Vec::new();
-    if !intent.trim().is_empty() {
-        parts.push(format!("用户意图：{}", compact_markdown(intent, 260)));
-    }
-    if !content.trim().is_empty() {
-        parts.push(format!("现场内容：{}", compact_markdown(content, 520)));
-    }
-    parts.join("\n\n")
 }
 
 fn unique_markdown_path(folder: &Path, slug: &str) -> PathBuf {

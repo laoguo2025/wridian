@@ -11,6 +11,7 @@ export type CoCreateResponse = {
   reply: string;
   edits: CoCreateEdit[];
   memoriesUsed: string[];
+  memoriesWritten: string[];
 };
 
 export type CoCreateRequest = {

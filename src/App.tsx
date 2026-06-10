@@ -102,17 +102,6 @@ type MemoryTreeState = {
   roots: MemoryTreeNode[];
 };
 
-type MemoryLeafCandidate = {
-  id: string;
-  branch: string;
-  title: string;
-  summary: string;
-  reason: string;
-  status: string;
-  sourcePath: string;
-  targetPath: string;
-};
-
 type KnowledgeGraphNode = {
   id: string;
   label: string;
@@ -204,7 +193,6 @@ function App() {
   const [saveError, setSaveError] = useState("");
   const [memoryError, setMemoryError] = useState("");
   const [memoryTreeState, setMemoryTreeState] = useState<MemoryTreeState>({ roots: [] });
-  const [memoryLeafCandidate, setMemoryLeafCandidate] = useState<MemoryLeafCandidate | null>(null);
   const [savingMemoryTree, setSavingMemoryTree] = useState(false);
   const [fileMenu, setFileMenu] = useState<FileContextMenu | null>(null);
   const [libraryTab, setLibraryTab] = useState<"works" | "knowledge">("works");
@@ -674,23 +662,18 @@ function App() {
     }
   };
 
-  const plantMemoryLeaf = async (candidate: MemoryLeafCandidate) => {
+  const deleteMemoryTreeFile = async (path: string): Promise<boolean> => {
     setSavingMemoryTree(true);
     try {
-      const response = await invoke<MemoryTreeState>("wridian_plant_memory_leaf", {
-        input: {
-          branch: candidate.branch,
-          reason: candidate.reason,
-          sourcePath: candidate.sourcePath,
-          summary: candidate.summary,
-          title: candidate.title,
-        },
+      const response = await invoke<MemoryTreeState>("wridian_delete_memory_tree_file", {
+        input: { path },
       });
       setMemoryTreeState(response);
-      setMemoryLeafCandidate(null);
       setMemoryError("");
+      return true;
     } catch (error) {
       setMemoryError(error instanceof Error ? error.message : String(error));
+      return false;
     } finally {
       setSavingMemoryTree(false);
     }
@@ -989,12 +972,10 @@ function App() {
       {memoryOpen ? (
         <MemoryDrawer
           memoryError={memoryError}
-          candidate={memoryLeafCandidate}
           memoryTree={memoryTreeState}
           onClose={() => setMemoryOpen(false)}
+          onDeleteFile={deleteMemoryTreeFile}
           onOpenMemoryFolder={openMemoryFolder}
-          onPlantCandidate={plantMemoryLeaf}
-          onRejectCandidate={() => setMemoryLeafCandidate(null)}
           onSaveFile={saveMemoryTreeFile}
           saving={savingMemoryTree}
         />
@@ -1448,23 +1429,19 @@ function buildDraftSuggestionChunks(content: string, edits: DraftEdit[]): DraftS
 }
 
 function MemoryDrawer({
-  candidate,
   memoryError,
   memoryTree,
   onClose,
+  onDeleteFile,
   onOpenMemoryFolder,
-  onPlantCandidate,
-  onRejectCandidate,
   onSaveFile,
   saving,
 }: {
-  candidate: MemoryLeafCandidate | null;
   memoryError: string;
   memoryTree: MemoryTreeState;
   onClose: () => void;
+  onDeleteFile: (path: string) => Promise<boolean>;
   onOpenMemoryFolder: () => void;
-  onPlantCandidate: (candidate: MemoryLeafCandidate) => void;
-  onRejectCandidate: () => void;
   onSaveFile: (path: string, content: string) => Promise<boolean>;
   saving: boolean;
 }) {
@@ -1511,6 +1488,21 @@ function MemoryDrawer({
       setSelectedPath("");
     }
     return true;
+  };
+
+  const deleteSelected = async () => {
+    if (isBusy || !selectedNode?.path) return;
+    const confirmed = window.confirm("删除这片记忆叶子？此操作只删除记忆树 leaves 下的普通 Markdown 叶子文件。");
+    if (!confirmed) return;
+    setTransitionSaving(true);
+    try {
+      const deleted = await onDeleteFile(selectedNode.path);
+      if (deleted) {
+        setSelectedPath("");
+      }
+    } finally {
+      setTransitionSaving(false);
+    }
   };
 
   const closeEditorFromBlank = async () => {
@@ -1582,47 +1574,21 @@ function MemoryDrawer({
                 onSelect={(node, side) => void selectNode(node, side)}
               />
             ))}
-            {candidate ? (
-              <section className="memory-node-detail editor-right candidate-panel" onMouseDown={(event) => event.stopPropagation()}>
-                <div className="candidate-leaf-orbit" aria-hidden="true">
-                  <span />
-                </div>
-                <div className="memory-tree-editor-header">
-                  <div>
-                    <h2>{candidate.title}</h2>
-                    <p>候选叶子 / {branchLabel(candidate.branch)} / 等待确认</p>
-                  </div>
-                  <div className="candidate-actions">
-                    <button type="button" onClick={() => onPlantCandidate(candidate)} disabled={isBusy}>
-                      {isBusy ? "种下中" : "确认种下"}
-                    </button>
-                    <button type="button" className="secondary" onClick={onRejectCandidate} disabled={isBusy}>
-                      放弃
-                    </button>
-                  </div>
-                </div>
-                <div className="candidate-body">
-                  <p>{candidate.summary}</p>
-                  <div>
-                    <strong>为什么长出来</strong>
-                    <p>{candidate.reason}</p>
-                  </div>
-                  <div>
-                    <strong>将写入</strong>
-                    <p>{candidate.targetPath}</p>
-                  </div>
-                </div>
-              </section>
-            ) : selectedNode?.path ? (
+            {selectedNode?.path ? (
               <section className={`memory-node-detail editor-${editorSide}`} onMouseDown={(event) => event.stopPropagation()}>
                 <div className="memory-tree-editor-header">
                   <div>
                     <h2>{selectedNode.label}</h2>
                     <p>{selectedNode.description}</p>
                   </div>
-                  <button type="button" onClick={() => void save()} disabled={isBusy || draft === (selectedNode.content ?? "")}>
-                    {isBusy ? "保存中" : "保存"}
-                  </button>
+                  <div className="memory-tree-editor-actions">
+                    <button type="button" className="delete-memory" onClick={() => void deleteSelected()} disabled={isBusy}>
+                      删除
+                    </button>
+                    <button type="button" onClick={() => void save()} disabled={isBusy || draft === (selectedNode.content ?? "")}>
+                      {isBusy ? "保存中" : "保存"}
+                    </button>
+                  </div>
                 </div>
                 <textarea
                   className="memory-tree-textarea"
@@ -1693,31 +1659,6 @@ function flattenMemoryLeaves(node: MemoryTreeNode | undefined): MemoryTreeNode[]
   };
   node.children.forEach(visit);
   return leaves;
-}
-
-function branchLabel(branch: string) {
-  switch (branch) {
-    case "sense":
-      return "自我意识";
-    case "user":
-      return "用户画像";
-    case "relationship":
-      return "关系";
-    case "journey":
-      return "创作里程碑";
-    case "drama":
-      return "剧本";
-    case "novel":
-      return "小说";
-    case "knowledge":
-      return "知识";
-    case "skill":
-      return "技能";
-    case "awareness":
-      return "反思";
-    default:
-      return "记忆";
-  }
 }
 
 function MemoryBranchArm({

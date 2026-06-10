@@ -1,4 +1,4 @@
-use crate::memory::read_relevant_memory_snippets;
+use crate::memory::{read_relevant_memory_snippets, write_memory_leaves, MemoryLeafDraft};
 use crate::model_accounts::{read_custom_api_settings, StoredCustomApiSettings};
 use crate::projects::{active_project_model, read_active_project_context};
 use crate::runtime::{ensure_workspace, runtime_root, wridian_data_dir};
@@ -38,6 +38,7 @@ pub(crate) struct CoCreateResponse {
     reply: String,
     edits: Vec<CoCreateEdit>,
     memories_used: Vec<String>,
+    memories_written: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -75,10 +76,16 @@ pub(crate) async fn wridian_cocreate(mut input: CoCreateInput) -> Result<CoCreat
     )
     .await?;
 
+    let memories_written = write_memory_leaves(&data_dir, &model_output.memories)?
+        .into_iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect();
+
     Ok(CoCreateResponse {
         reply: model_output.reply,
         edits: model_output.edits,
         memories_used,
+        memories_written,
     })
 }
 
@@ -87,12 +94,15 @@ struct ModelCoCreateResponse {
     reply: Option<String>,
     #[serde(default)]
     edits: Vec<CoCreateEdit>,
+    #[serde(default)]
+    memories: Vec<MemoryLeafDraft>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ParsedCoCreateResponse {
     reply: String,
     edits: Vec<CoCreateEdit>,
+    memories: Vec<MemoryLeafDraft>,
 }
 
 async fn cocreate_with_model(
@@ -390,7 +400,35 @@ fn parse_cocreation_model_output(output: &str) -> Result<ParsedCoCreateResponse,
             })
         })
         .collect();
-    Ok(ParsedCoCreateResponse { reply, edits })
+    let memories = parsed
+        .memories
+        .into_iter()
+        .filter_map(normalize_model_memory_leaf)
+        .collect();
+    Ok(ParsedCoCreateResponse {
+        reply,
+        edits,
+        memories,
+    })
+}
+
+fn normalize_model_memory_leaf(mut leaf: MemoryLeafDraft) -> Option<MemoryLeafDraft> {
+    leaf.branch = leaf.branch.trim().to_lowercase();
+    leaf.title = leaf.title.trim().to_string();
+    leaf.summary = leaf.summary.trim().to_string();
+    leaf.reason = leaf
+        .reason
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty());
+    leaf.source_path = leaf
+        .source_path
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty());
+    if leaf.branch.is_empty() || leaf.title.is_empty() || leaf.summary.is_empty() {
+        None
+    } else {
+        Some(leaf)
+    }
 }
 
 fn cocreation_system_prompt() -> &'static str {
@@ -398,9 +436,10 @@ fn cocreation_system_prompt() -> &'static str {
 你的任务是围绕当前稿件给出可执行的写作建议、局部改写方案或结构判断。
 你会同时服务小说和短剧/剧本创作：小说关注章节、人物动机、叙述节奏、伏笔和设定一致性；短剧/剧本关注对白、场景冲突、钩子、角色口吻和分集节奏。
 当稿件类型是短剧/剧本时，优先关注场次、对白可表演性、结尾钩子、分集节奏和低成本拍摄约束。
-不要写成通用聊天回复；不要自动声称已经修改正文；不要把普通对话内容写入长期记忆。
+不要写成通用聊天回复；不要自动声称已经修改正文。
+你需要判断本轮是否产生值得长期保留的创作记忆。如果没有，memories 输出空数组；如果有，只提取稳定、可复用、对后续写作有约束或参考价值的事实，不记录一次性闲聊。
 必须输出 JSON 对象：
-{"reply":"给用户看的正常回复","edits":[{"target":"需要被替换的原文片段，必须从稿件内容或用户选中片段中逐字复制","replacement":"替换后的新文本","rationale":"简短理由"}]}
+{"reply":"给用户看的正常回复","edits":[{"target":"需要被替换的原文片段，必须从稿件内容或用户选中片段中逐字复制","replacement":"替换后的新文本","rationale":"简短理由"}],"memories":[{"branch":"novel|drama|knowledge|skill|user|relationship|journey|awareness|sense","title":"短标题","summary":"要沉淀的长期记忆正文","reason":"为什么值得沉淀","sourcePath":"当前来源路径或空"}]}
 如果只是聊天、讨论、解释，edits 输出空数组。
 如果用户要求修改、润色、批量替换角色名、调整对白或重写片段，必须尽量给 edits。
 target 必须是原文中存在的精确片段；不要用行号、摘要或正则；不能确定精确原文时只给 reply，不给 edits。"#
@@ -551,7 +590,10 @@ mod tests {
         .expect("default knowledge context should be accepted");
 
         assert_eq!(expanded[0].value, "默认知识");
-        assert_eq!(expanded[0].relative_path.as_deref(), Some("03故事模型/默认人物.md"));
+        assert_eq!(
+            expanded[0].relative_path.as_deref(),
+            Some("03故事模型/默认人物.md")
+        );
     }
 
     #[test]
@@ -585,5 +627,28 @@ mod tests {
         assert_eq!(parsed.reply, "我会把动机提前到进门动作里。");
         assert_eq!(parsed.edits.len(), 1);
         assert_eq!(parsed.edits[0].target, "她没有立刻喊人。");
+    }
+
+    #[test]
+    fn parse_cocreation_model_output_reads_memory_leaves() {
+        let output = r#"{
+            "reply": "这个人物禁区我会记住。",
+            "edits": [],
+            "memories": [
+                {
+                    "branch": "novel",
+                    "title": "人物禁区",
+                    "summary": "女主不能主动说出真相。",
+                    "reason": "这是后续章节约束。",
+                    "sourcePath": "chapter.md"
+                }
+            ]
+        }"#;
+
+        let parsed = parse_cocreation_model_output(output).expect("valid output");
+
+        assert_eq!(parsed.memories.len(), 1);
+        assert_eq!(parsed.memories[0].branch, "novel");
+        assert_eq!(parsed.memories[0].title, "人物禁区");
     }
 }

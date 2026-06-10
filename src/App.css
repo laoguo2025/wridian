@@ -1598,62 +1598,15 @@ button {
   opacity: 0.45;
 }
 
-.candidate-panel {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  min-height: 0;
-  overflow: hidden;
-}
-
-.candidate-leaf-orbit {
-  position: absolute;
-  right: 34px;
-  top: 74px;
-  pointer-events: none;
-}
-
-.candidate-leaf-orbit span {
-  display: block;
-  width: 28px;
-  height: 18px;
-  border-radius: 999px 999px 999px 4px;
-  background: color-mix(in srgb, var(--accent), transparent 30%);
-  box-shadow: 0 10px 30px color-mix(in srgb, var(--accent), transparent 76%);
-  transform: rotate(-24deg);
-}
-
-.candidate-actions {
+.memory-tree-editor-actions {
   display: inline-flex;
   align-items: center;
   gap: 6px;
 }
 
-.candidate-actions .secondary {
+.memory-tree-editor-actions .delete-memory {
   background: transparent;
-  color: var(--text-muted);
-}
-
-.candidate-body {
-  display: grid;
-  align-content: start;
-  gap: 14px;
-  overflow: auto;
-  padding: 14px;
-  color: var(--text-body);
-  font-size: calc(13px * var(--ui-font-scale, 1));
-  line-height: 1.65;
-}
-
-.candidate-body p {
-  margin: 0;
-  white-space: pre-wrap;
-}
-
-.candidate-body strong {
-  display: block;
-  margin-bottom: 4px;
-  color: var(--text-primary);
-  font-size: calc(12px * var(--ui-font-scale, 1));
+  color: #9d3d35;
 }
 
 .memory-tree-textarea {
