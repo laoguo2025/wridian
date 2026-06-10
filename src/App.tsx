@@ -32,12 +32,27 @@ import { libraryFolderPath, libraryFolderTooltip } from "./libraryToolbar";
 import {
   CREATIVE_SKILLS,
   DEFAULT_CREATIVE_SKILL_STATE,
-  type CreativeSkill,
   type CreativeSkillId,
 } from "./creativeSkills";
 import { MemoryDrawer } from "./memory/MemoryDrawer";
 import { KnowledgeGraphDrawer } from "./knowledge/KnowledgeGraphDrawer";
+import { buildKnowledgeSuggestionIndex } from "./knowledge/knowledgeSuggestions";
 import { ModelSettingsDialog } from "./settings/ModelSettingsDialog";
+import { CreativeSkillsDrawer } from "./skills/CreativeSkillsDrawer";
+import { FileContextMenuView, FileNodeView, type FileContextMenu } from "./files/FileTree";
+import {
+  DarkThemeIcon,
+  FolderPlusIcon,
+  FontSizeIcon,
+  KnowledgeGraphIcon,
+  LightThemeIcon,
+  LightningIcon,
+  MemoryTreeIcon,
+  ModelConfigIcon,
+  PencilIcon,
+  SettingsIcon,
+  WorkFolderIcon,
+} from "./icons";
 import { clamp } from "./numberUtils";
 import type {
   KnowledgeGraphState,
@@ -55,27 +70,6 @@ type FontSizeMode = "default" | "large" | "max";
 type SaveStatus = "idle" | "dirty" | "saving" | "saved" | "error";
 
 type DraftEdit = ChatDraftEdit;
-
-type KnowledgeCategory = {
-  detail: string;
-  id: string;
-  title: string;
-};
-
-type KnowledgeCardSuggestion = {
-  category: string;
-  categoryId: string;
-  id: string;
-  relativePath: string;
-  sourcePath: string;
-  title: string;
-};
-
-type FileContextMenu = {
-  node: WorkFileNode;
-  x: number;
-  y: number;
-};
 
 const DEFAULT_LEFT_PANE_WIDTH = 218;
 const DEFAULT_RIGHT_PANE_WIDTH = 292;
@@ -946,142 +940,6 @@ function App() {
   );
 }
 
-function FileNodeView({
-  depth,
-  node,
-  onOpenFile,
-  onOpenMenu,
-  selectedPath,
-}: {
-  depth: number;
-  node: WorkFileNode;
-  onOpenFile: (node: WorkFileNode) => void;
-  onOpenMenu: (node: WorkFileNode, x: number, y: number) => void;
-  selectedPath: string;
-}) {
-  const [expanded, setExpanded] = useState(true);
-  const isFolder = node.folder;
-  const hasChildren = isFolder && node.children.length > 0;
-  const fileExt = isFolder ? "" : fileExtension(node.name);
-  const rowClassName = [
-    "file-row",
-    isFolder ? "folder" : "file",
-    node.path === selectedPath ? "active" : "",
-    isFolder && expanded ? "expanded" : "",
-    isFolder && !expanded ? "collapsed" : "",
-    isFolder && !hasChildren ? "empty-folder" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-  const handleOpen = () => {
-    if (isFolder) {
-      setExpanded((current) => !current);
-      return;
-    }
-
-    onOpenFile(node);
-  };
-
-  return (
-    <div className="file-node">
-      <button
-        className={rowClassName}
-        type="button"
-        aria-expanded={isFolder ? expanded : undefined}
-        title={node.relativePath || node.name}
-        onClick={handleOpen}
-        onContextMenu={(event) => {
-          event.preventDefault();
-          onOpenMenu(node, event.clientX, event.clientY);
-        }}
-      >
-        <span className="tree-toggle" aria-hidden="true" />
-        <strong>{isFolder ? node.name : fileTitle(node.name)}</strong>
-        {fileExt ? <span className="file-ext">{fileExt}</span> : null}
-      </button>
-      {hasChildren && expanded ? (
-        <div className="file-children">
-          {node.children.map((child) => (
-            <FileNodeView
-              key={child.path}
-              node={child}
-              depth={depth + 1}
-              selectedPath={selectedPath}
-              onOpenFile={onOpenFile}
-              onOpenMenu={onOpenMenu}
-            />
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function fileTitle(name: string) {
-  const extensionStart = name.lastIndexOf(".");
-  if (extensionStart <= 0) return name;
-  return name.slice(0, extensionStart);
-}
-
-function fileExtension(name: string) {
-  const extensionStart = name.lastIndexOf(".");
-  if (extensionStart <= 0 || extensionStart === name.length - 1) return "";
-  return name.slice(extensionStart + 1);
-}
-
-function FileContextMenuView({
-  menu,
-  onAddToPrompt,
-  onClose,
-  onCreateFile,
-  onCreateFolder,
-  onDuplicate,
-  onRename,
-  onTrash,
-}: {
-  menu: FileContextMenu;
-  onAddToPrompt: (node: WorkFileNode) => void;
-  onClose: () => void;
-  onCreateFile: (parentPath?: string) => Promise<void>;
-  onCreateFolder: (parentPath?: string) => Promise<void>;
-  onDuplicate: (node: WorkFileNode) => Promise<void>;
-  onRename: (node: WorkFileNode) => Promise<void>;
-  onTrash: (node: WorkFileNode) => Promise<void>;
-}) {
-  const run = (action: () => void | Promise<void>) => {
-    onClose();
-    void action();
-  };
-
-  return (
-    <div className="context-menu" style={{ left: menu.x, top: menu.y }} onClick={(event) => event.stopPropagation()}>
-      {menu.node.folder ? (
-        <>
-          <button type="button" onClick={() => run(() => onCreateFile(menu.node.path))}>
-            新建文件
-          </button>
-          <button type="button" onClick={() => run(() => onCreateFolder(menu.node.path))}>
-            新建文件夹
-          </button>
-        </>
-      ) : null}
-      <button type="button" onClick={() => run(() => onDuplicate(menu.node))}>
-        创建副本
-      </button>
-      <button type="button" onClick={() => run(() => onAddToPrompt(menu.node))}>
-        添加到对话输入
-      </button>
-      <button type="button" onClick={() => run(() => onRename(menu.node))}>
-        重命名
-      </button>
-      <button type="button" className="danger" onClick={() => run(() => onTrash(menu.node))}>
-        移到回收站
-      </button>
-    </div>
-  );
-}
-
 function baseName(path: string) {
   return path.replace(/[\\/]+$/g, "").split(/[\\/]/).pop() || path;
 }
@@ -1093,223 +951,6 @@ function detectDraftKind(path: string, content: string): DraftKind {
   const sceneSignals = (content.match(/(^|\n)\s*(INT\.|EXT\.|内景|外景|第[一二三四五六七八九十\d]+[集场])/g) ?? []).length;
   const dialogueSignals = (content.match(/(^|\n)\s*[\u4e00-\u9fa5A-Za-z0-9_]{2,12}[：:]/g) ?? []).length;
   return sceneSignals >= 2 || dialogueSignals >= 4 ? "screenplay" : "prose";
-}
-
-function PencilIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 48 48">
-      <path d="M10 44H38C39.1046 44 40 43.1046 40 42V14H30V4H10C8.89543 4 8 4.89543 8 6V42C8 43.1046 8.89543 44 10 44Z" />
-      <path d="M30 4L40 14" />
-      <path d="M24 21V35" />
-      <path d="M17 28H24L31 28" />
-    </svg>
-  );
-}
-
-function FolderPlusIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 48 48">
-      <path d="M5 8C5 6.89543 5.89543 6 7 6H19L24 12H41C42.1046 12 43 12.8954 43 14V40C43 41.1046 42.1046 42 41 42H7C5.89543 42 5 41.1046 5 40V8Z" />
-      <path d="M18 27H30" />
-      <path d="M24 21L24 33" />
-    </svg>
-  );
-}
-
-function WorkFolderIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 48 48">
-      <path d="M43 23V14C43 12.8954 42.1046 12 41 12H24L19 6H7C5.89543 6 5 6.89543 5 8V40C5 41.1046 5.89543 42 7 42H22" />
-      <circle cx="35" cy="35" r="4" />
-      <path d="M35 28V31" />
-      <path d="M35 39V42" />
-      <path d="M39.8281 30L37.7068 32.1213" />
-      <path d="M31.8281 38L29.7068 40.1213" />
-      <path d="M30 30L32.1213 32.1213" />
-      <path d="M38 38L40.1213 40.1213" />
-      <path d="M28 35H29.5H31" />
-      <path d="M39 35H40.5H42" />
-    </svg>
-  );
-}
-
-function MemoryTreeIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 48 48">
-      <path d="M13.0448 14C13.5501 8.3935 18.262 4 24 4C29.738 4 34.4499 8.3935 34.9552 14H35C39.9706 14 44 18.0294 44 23C44 27.9706 39.9706 32 35 32H13C8.02944 32 4 27.9706 4 23C4 18.0294 8.02944 14 13 14H13.0448Z" />
-      <path d="M24 28L29 23" />
-      <path d="M24 25L18 19" />
-      <path d="M24 44V18" />
-    </svg>
-  );
-}
-
-function KnowledgeGraphIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 48 48">
-      <path d="M13.5 39.3706C16.3908 41.6439 20.0371 42.9999 24 42.9999C27.9629 42.9999 31.6092 41.6439 34.5 39.3706" />
-      <path d="M19 9.74707C12.0513 11.8822 7 18.3511 7 25.9999C7 27.9247 7.31989 29.7748 7.9094 31.4999" />
-      <path d="M29 9.74707C35.9487 11.8822 41 18.3511 41 25.9999C41 27.9247 40.6801 29.7748 40.0906 31.4999" />
-      <path d="M43 36C43 37.3416 42.4716 38.5597 41.6117 39.4577C40.7015 40.4082 39.4199 41 38 41C35.2386 41 33 38.7614 33 36C33 33.9899 34.1861 32.2569 35.8967 31.4626C36.536 31.1657 37.2487 31 38 31C40.7614 31 43 33.2386 43 36Z" />
-      <path d="M15 36C15 37.3416 14.4716 38.5597 13.6117 39.4577C12.7015 40.4082 11.4199 41 10 41C7.23858 41 5 38.7614 5 36C5 33.9899 6.18614 32.2569 7.89667 31.4626C8.53604 31.1657 9.24867 31 10 31C12.7614 31 15 33.2386 15 36Z" />
-      <path d="M29 9C29 10.3416 28.4716 11.5597 27.6117 12.4577C26.7015 13.4082 25.4199 14 24 14C21.2386 14 19 11.7614 19 9C19 6.98991 20.1861 5.25686 21.8967 4.4626C22.536 4.16572 23.2487 4 24 4C26.7614 4 29 6.23858 29 9Z" />
-    </svg>
-  );
-}
-
-function LightningIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 48 48">
-      <path d="M27 4L10 27H22L19 44L38 19H25L27 4Z" />
-    </svg>
-  );
-}
-
-function ModelConfigIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 48 48">
-      <path d="M18 23.9372V10C18 6.68629 20.6863 4 24 4C27.3137 4 30 6.68629 30 10V12.0057" />
-      <path d="M30 24.0034V37.9999C30 41.3136 27.3137 43.9999 24 43.9999C20.6863 43.9999 18 41.3136 18 37.9999V35.9699" />
-      <path d="M24 30H9.98415C6.67919 30 4 27.3137 4 24C4 20.6863 6.67919 18 9.98415 18H11.9886" />
-      <path d="M24 18H37.9888C41.3087 18 44 20.6863 44 24C44 27.3137 41.3087 30 37.9888 30H36.0663" />
-    </svg>
-  );
-}
-
-function FontSizeIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 48 48">
-      <path d="M4 8H32" />
-      <path d="M28 21H44" />
-      <path d="M18 42L18 8" />
-      <path d="M36 42L36 21" />
-    </svg>
-  );
-}
-
-function LightThemeIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 48 48">
-      <path d="M24 37C31.1797 37 37 31.1797 37 24C37 16.8203 31.1797 11 24 11C16.8203 11 11 16.8203 11 24C11 31.1797 16.8203 37 24 37Z" />
-      <circle cx="24" cy="3.5" r="2.5" />
-      <circle cx="38.5" cy="9.5" r="2.5" />
-      <circle cx="44.5" cy="24" r="2.5" />
-      <circle cx="38.5" cy="38.5" r="2.5" />
-      <circle cx="24" cy="44.5" r="2.5" />
-      <circle cx="9.5" cy="38.5" r="2.5" />
-      <circle cx="3.5" cy="24" r="2.5" />
-      <circle cx="9.5" cy="9.5" r="2.5" />
-    </svg>
-  );
-}
-
-function DarkThemeIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 48 48">
-      <path d="M28.0527 4.41085C22.5828 5.83695 18.5455 10.8106 18.5455 16.7273C18.5455 23.7564 24.2436 29.4545 31.2727 29.4545C37.1894 29.4545 42.1631 25.4172 43.5891 19.9473C43.8585 21.256 44 22.6115 44 24C44 35.0457 35.0457 44 24 44C12.9543 44 4 35.0457 4 24C4 12.9543 12.9543 4 24 4C25.3885 4 26.744 4.14149 28.0527 4.41085Z" />
-    </svg>
-  );
-}
-
-function SettingsIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 48 48">
-      <path d="M18.2838 43.1713C14.9327 42.1736 11.9498 40.3213 9.58787 37.867C10.469 36.8227 11 35.4734 11 34.0001C11 30.6864 8.31371 28.0001 5 28.0001C4.79955 28.0001 4.60139 28.01 4.40599 28.0292C4.13979 26.7277 4 25.3803 4 24.0001C4 21.9095 4.32077 19.8938 4.91579 17.9995C4.94381 17.9999 4.97188 18.0001 5 18.0001C8.31371 18.0001 11 15.3138 11 12.0001C11 11.0488 10.7786 10.1493 10.3846 9.35011C12.6975 7.1995 15.5205 5.59002 18.6521 4.72314C19.6444 6.66819 21.6667 8.00013 24 8.00013C26.3333 8.00013 28.3556 6.66819 29.3479 4.72314C32.4795 5.59002 35.3025 7.1995 37.6154 9.35011C37.2214 10.1493 37 11.0488 37 12.0001C37 15.3138 39.6863 18.0001 43 18.0001C43.0281 18.0001 43.0562 17.9999 43.0842 17.9995C43.6792 19.8938 44 21.9095 44 24.0001C44 25.3803 43.8602 26.7277 43.594 28.0292C43.3986 28.01 43.2005 28.0001 43 28.0001C39.6863 28.0001 37 30.6864 37 34.0001C37 35.4734 37.531 36.8227 38.4121 37.867C36.0502 40.3213 33.0673 42.1736 29.7162 43.1713C28.9428 40.752 26.676 39.0001 24 39.0001C21.324 39.0001 19.0572 40.752 18.2838 43.1713Z" />
-      <path d="M24 31C27.866 31 31 27.866 31 24C31 20.134 27.866 17 24 17C20.134 17 17 20.134 17 24C17 27.866 20.134 31 24 31Z" />
-    </svg>
-  );
-}
-
-function CreativeSkillsDrawer({
-  enabled,
-  onClose,
-  onToggle,
-  skills,
-}: {
-  enabled: Record<CreativeSkillId, boolean>;
-  onClose: () => void;
-  onToggle: (id: CreativeSkillId) => void;
-  skills: CreativeSkill[];
-}) {
-  return (
-    <div className="drawer-backdrop" onMouseDown={onClose} role="presentation">
-      <aside className="memory-drawer creative-skills-drawer" role="dialog" aria-modal="true" aria-label="技能管理" onMouseDown={(event) => event.stopPropagation()}>
-        <div className="drawer-header">
-          <div>
-            <div className="drawer-title">技能管理</div>
-          </div>
-          <button type="button" className="icon-button" onClick={onClose} aria-label="关闭">
-            ×
-          </button>
-        </div>
-
-        <div className="creative-skills-list">
-          {skills.map((skill) => (
-            <div className="creative-skill-row" key={skill.id}>
-              <div className="creative-skill-main">
-                <div className="creative-skill-title">{skill.title}</div>
-                <div className="creative-skill-meta">{skill.status}</div>
-              </div>
-              <button
-                type="button"
-                className={enabled[skill.id] ? "skill-toggle active" : "skill-toggle"}
-                aria-pressed={enabled[skill.id]}
-                onClick={() => onToggle(skill.id)}
-              >
-                <span />
-              </button>
-            </div>
-          ))}
-        </div>
-      </aside>
-    </div>
-  );
-}
-
-function buildKnowledgeSuggestionIndex(nodes: WorkFileNode[]) {
-  const categories = new Map<string, KnowledgeCategory>();
-  const cards: KnowledgeCardSuggestion[] = [];
-  const visit = (node: WorkFileNode, categoryId = "") => {
-    if (node.folder) {
-      const id = node.relativePath || node.path;
-      categories.set(id, {
-        detail: `${countMarkdownCards(node)} 张知识卡`,
-        id,
-        title: node.name,
-      });
-      node.children.forEach((child) => visit(child, id));
-      return;
-    }
-    if (!/\.(md|markdown)$/i.test(node.name)) return;
-    const fallbackCategory = categoryId || "__root__";
-    if (!categoryId && !categories.has(fallbackCategory)) {
-      categories.set(fallbackCategory, {
-        detail: "知识库根目录",
-        id: fallbackCategory,
-        title: "根目录",
-      });
-    }
-    cards.push({
-      category: categories.get(fallbackCategory)?.title ?? "知识卡",
-      categoryId: fallbackCategory,
-      id: node.path,
-      relativePath: node.relativePath,
-      sourcePath: node.path,
-      title: node.name.replace(/\.(md|markdown)$/i, ""),
-    });
-  };
-  nodes.forEach((node) => visit(node));
-  return {
-    cards,
-    categories: [...categories.values()].filter((category) =>
-      cards.some((card) => card.categoryId === category.id),
-    ),
-  };
-}
-
-function countMarkdownCards(node: WorkFileNode): number {
-  if (!node.folder) return /\.(md|markdown)$/i.test(node.name) ? 1 : 0;
-  return node.children.reduce((total, child) => total + countMarkdownCards(child), 0);
 }
 
 export default App;

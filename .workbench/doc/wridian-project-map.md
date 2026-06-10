@@ -19,10 +19,14 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 - 聊天上下文：`src/chat/promptContext.ts`
 - 聊天消息仓库：`src/chat/messageRepository.ts`
 - 对话请求客户端：`src/chat/cocreationClient.ts`
+- 左侧文件树和右键菜单：`src/files/FileTree.tsx`
 - 正文替换保护：`src/editor/draftReplaceGuard.ts`
 - 创作记忆树抽屉：`src/memory/MemoryDrawer.tsx`
 - 知识图谱抽屉：`src/knowledge/KnowledgeGraphDrawer.tsx`
+- 知识卡建议索引：`src/knowledge/knowledgeSuggestions.ts`
+- 技能管理抽屉：`src/skills/CreativeSkillsDrawer.tsx`
 - 模型设置对话框：`src/settings/ModelSettingsDialog.tsx`
+- 前端 SVG 图标：`src/icons.tsx`
 - 前端共享 Tauri 数据类型：`src/appTypes.ts`
 - 主要样式：`src/App.css`
 - Tauri 组装入口：`src-tauri/src/lib.rs`
