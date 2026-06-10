@@ -1810,34 +1810,96 @@ function KnowledgeGraphDrawer({
   onRefresh: () => void;
 }) {
   const layout = useMemo(() => buildKnowledgeGraphLayout(graph), [graph]);
-  const [viewport, setViewport] = useState({ scale: 1, x: 0, y: 0 });
+  const defaultViewport = useMemo(() => fitKnowledgeGraphViewport(layout.nodes), [layout.nodes]);
+  const [viewport, setViewport] = useState(defaultViewport);
+  const [hoveredNode, setHoveredNode] = useState<KnowledgeGraphLayoutNode | null>(null);
+  const [nodePreview, setNodePreview] = useState<{ path: string; content: string; error: string } | null>(null);
+  const [, forceGraphRender] = useState(0);
   const [dragging, setDragging] = useState(false);
   const dragStateRef = useRef<{
+    kind: "pan" | "node";
     pointerId: number;
     startClientX: number;
     startClientY: number;
+    startGraphX: number;
+    startGraphY: number;
+    startNodeX?: number;
+    startNodeY?: number;
+    node?: KnowledgeGraphLayoutNode;
     startX: number;
     startY: number;
     moved: boolean;
   } | null>(null);
   const suppressGraphClickRef = useRef(false);
 
+  useEffect(() => {
+    setViewport(defaultViewport);
+  }, [defaultViewport]);
+
+  useEffect(() => {
+    if (!hoveredNode || hoveredNode.kind === "folder" || !hoveredNode.path) {
+      setNodePreview(null);
+      return;
+    }
+    const path = hoveredNode.path;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void invoke<OpenFileResponse>("wridian_open_file", { input: { path } })
+        .then((response) => {
+          if (!cancelled) setNodePreview({ path, content: response.content.slice(0, 520), error: "" });
+        })
+        .catch((error) => {
+          if (!cancelled) setNodePreview({ path, content: "", error: error instanceof Error ? error.message : String(error) });
+        });
+    }, 220);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [hoveredNode]);
+
+  const clientToViewBox = (event: ReactPointerEvent<HTMLDivElement> | ReactWheelEvent<HTMLDivElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    return {
+      x: ((event.clientX - bounds.left) / Math.max(1, bounds.width)) * 100,
+      y: ((event.clientY - bounds.top) / Math.max(1, bounds.height)) * 100,
+    };
+  };
+
+  const viewBoxToGraph = (point: { x: number; y: number }, view = viewport) => ({
+    x: 50 + (point.x - view.x - 50) / view.scale,
+    y: 50 + (point.y - view.y - 50) / view.scale,
+  });
+
+  const findEventNode = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const target = event.target instanceof Element ? event.target.closest<SVGGElement>(".graph-node") : null;
+    const nodeId = target?.dataset.nodeId;
+    return nodeId ? layout.nodes.find((node) => node.id === nodeId) : undefined;
+  };
+
   const handleWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
     if (!graph.nodes.length) return;
     event.preventDefault();
     setViewport((current) => ({
-      ...current,
-      scale: clamp(current.scale * (event.deltaY > 0 ? 0.9 : 1.1), 0.6, 3.2),
+      ...zoomKnowledgeGraphViewport(current, clientToViewBox(event), Math.exp(-event.deltaY * 0.0015)),
     }));
   };
 
   const handleGraphPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!graph.nodes.length || event.button !== 0) return;
+    const graphPoint = viewBoxToGraph(clientToViewBox(event));
+    const node = findEventNode(event);
     event.currentTarget.setPointerCapture(event.pointerId);
     dragStateRef.current = {
+      kind: node ? "node" : "pan",
       pointerId: event.pointerId,
       startClientX: event.clientX,
       startClientY: event.clientY,
+      startGraphX: graphPoint.x,
+      startGraphY: graphPoint.y,
+      startNodeX: node?.x,
+      startNodeY: node?.y,
+      node,
       startX: viewport.x,
       startY: viewport.y,
       moved: false,
@@ -1847,13 +1909,24 @@ function KnowledgeGraphDrawer({
 
   const handleGraphPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     const dragState = dragStateRef.current;
-    if (!dragState || dragState.pointerId !== event.pointerId) return;
+    if (!dragState) {
+      if (!findEventNode(event)) setHoveredNode(null);
+      return;
+    }
+    if (dragState.pointerId !== event.pointerId) return;
     const deltaX = event.clientX - dragState.startClientX;
     const deltaY = event.clientY - dragState.startClientY;
     const bounds = event.currentTarget.getBoundingClientRect();
     const svgDeltaX = (deltaX / Math.max(1, bounds.width)) * 100;
     const svgDeltaY = (deltaY / Math.max(1, bounds.height)) * 100;
     if (Math.abs(deltaX) + Math.abs(deltaY) > 4) dragState.moved = true;
+    if (dragState.kind === "node" && dragState.node && dragState.startNodeX != null && dragState.startNodeY != null) {
+      const graphPoint = viewBoxToGraph(clientToViewBox(event));
+      dragState.node.x = clamp(dragState.startNodeX + graphPoint.x - dragState.startGraphX, dragState.node.collisionRadius, 100 - dragState.node.collisionRadius);
+      dragState.node.y = clamp(dragState.startNodeY + graphPoint.y - dragState.startGraphY, dragState.node.collisionRadius + 1.8, 100 - dragState.node.collisionRadius);
+      forceGraphRender((tick) => tick + 1);
+      return;
+    }
     setViewport((current) => ({
       ...current,
       x: dragState.startX + svgDeltaX,
@@ -1887,6 +1960,11 @@ function KnowledgeGraphDrawer({
     onOpenFile(node.path);
   };
 
+  const resetGraphView = () => {
+    setViewport(fitKnowledgeGraphViewport(layout.nodes));
+  };
+  const activePreview = hoveredNode?.path && nodePreview?.path === hoveredNode.path ? nodePreview : null;
+
   return (
     <div className="drawer-backdrop" onMouseDown={onClose} role="presentation">
       <aside className="memory-drawer knowledge-graph-drawer" role="dialog" aria-modal="true" aria-label="知识图谱" onMouseDown={(event) => event.stopPropagation()}>
@@ -1895,6 +1973,9 @@ function KnowledgeGraphDrawer({
             <div className="drawer-title">知识图谱</div>
           </div>
           <div className="drawer-header-actions">
+            <button type="button" className="small-action" onClick={resetGraphView}>
+              重置视图
+            </button>
             <button type="button" className="small-action" onClick={onRefresh}>
               刷新
             </button>
@@ -1914,6 +1995,7 @@ function KnowledgeGraphDrawer({
           onPointerUp={handleGraphPointerUp}
           onPointerCancel={handleGraphPointerUp}
           onWheel={handleWheel}
+          onMouseLeave={() => setHoveredNode(null)}
         >
           {!knowledgeRootConfigured ? (
             <div className="knowledge-graph-empty">先选择知识库文件夹</div>
@@ -1935,7 +2017,9 @@ function KnowledgeGraphDrawer({
                     <g
                       key={node.id}
                       className={`graph-node node-${node.kind}`}
+                      data-node-id={node.id}
                       onClick={() => openGraphNode(node)}
+                      onMouseEnter={() => setHoveredNode(node)}
                       style={{ "--node-fill": node.color } as CSSProperties}
                     >
                       <title>{node.path ?? node.label}</title>
@@ -1951,6 +2035,21 @@ function KnowledgeGraphDrawer({
           ) : (
             <div className="knowledge-graph-empty">知识库里还没有 Markdown 知识卡</div>
           )}
+          {hoveredNode ? (
+            <div className="knowledge-graph-preview">
+              <div className="knowledge-graph-preview-title">{hoveredNode.label}</div>
+              <div className="knowledge-graph-preview-path">{hoveredNode.path ?? hoveredNode.group}</div>
+              {hoveredNode.kind === "folder" ? (
+                <div className="knowledge-graph-preview-body">分类文件夹</div>
+              ) : activePreview?.content ? (
+                <div className="knowledge-graph-preview-body">{activePreview.content}</div>
+              ) : activePreview?.error ? (
+                <div className="knowledge-graph-preview-body">{activePreview.error}</div>
+              ) : (
+                <div className="knowledge-graph-preview-body">读取中...</div>
+              )}
+            </div>
+          ) : null}
         </div>
       </aside>
     </div>
@@ -2009,6 +2108,12 @@ type KnowledgeGraphLayoutNode = KnowledgeGraphNode & {
   depth: number;
   radius: number;
   showLabel: boolean;
+  x: number;
+  y: number;
+};
+
+type KnowledgeGraphViewport = {
+  scale: number;
   x: number;
   y: number;
 };
@@ -2114,6 +2219,47 @@ function knowledgeGraphNodeDepth(node: KnowledgeGraphNode) {
 function knowledgeGraphNodeColor(depth: number) {
   const colors = ["#b85d3f", "#c96b49", "#dc7d57", "#e49472", "#eeaa8a", "#f1bca3", "#d1714e"];
   return colors[Math.min(colors.length - 1, Math.max(0, depth))];
+}
+
+function fitKnowledgeGraphViewport(nodes: KnowledgeGraphLayoutNode[]): KnowledgeGraphViewport {
+  if (!nodes.length) return { scale: 1, x: 0, y: 0 };
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const node of nodes) {
+    const padding = node.collisionRadius + 1.5;
+    minX = Math.min(minX, node.x - padding);
+    minY = Math.min(minY, node.y - padding);
+    maxX = Math.max(maxX, node.x + padding);
+    maxY = Math.max(maxY, node.y + padding);
+  }
+  if (!Number.isFinite(minX)) return { scale: 1, x: 0, y: 0 };
+  const graphWidth = Math.max(1, maxX - minX);
+  const graphHeight = Math.max(1, maxY - minY);
+  const scale = clamp(Math.min(88 / graphWidth, 88 / graphHeight), 0.52, 2.4);
+  const centerX = (minX + maxX) / 2;
+  const centerY = (minY + maxY) / 2;
+  return {
+    scale,
+    x: scale * (50 - centerX),
+    y: scale * (50 - centerY),
+  };
+}
+
+function zoomKnowledgeGraphViewport(
+  viewport: KnowledgeGraphViewport,
+  viewBoxPoint: { x: number; y: number },
+  factor: number,
+): KnowledgeGraphViewport {
+  const scale = clamp(viewport.scale * factor, 0.52, 3.2);
+  const graphX = 50 + (viewBoxPoint.x - viewport.x - 50) / viewport.scale;
+  const graphY = 50 + (viewBoxPoint.y - viewport.y - 50) / viewport.scale;
+  return {
+    scale,
+    x: viewBoxPoint.x - 50 - scale * (graphX - 50),
+    y: viewBoxPoint.y - 50 - scale * (graphY - 50),
+  };
 }
 
 function stableNumber(value: string) {

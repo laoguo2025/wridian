@@ -15,3 +15,4 @@
   - `.workbench/governance/2026-06-10-creative-skills-default-knowledge.md`
   - `.workbench/governance/2026-06-10-knowledge-graph-interaction-layout.md`
   - `.workbench/governance/2026-06-10-knowledge-graph-motion-visibility.md`
+  - `.workbench/governance/2026-06-10-openhuman-graph-gap-fill.md`

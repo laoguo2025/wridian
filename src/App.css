@@ -1772,6 +1772,54 @@ button {
   stroke-width: 0.44;
 }
 
+.knowledge-graph-preview {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 2;
+  width: min(320px, calc(100% - 28px));
+  max-height: 168px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border), var(--text-muted) 18%);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-panel), white 8%);
+  box-shadow: 0 14px 36px color-mix(in srgb, var(--shadow), transparent 22%);
+  padding: 10px 11px;
+  pointer-events: none;
+}
+
+.knowledge-graph-preview-title {
+  color: var(--text-primary);
+  font-size: calc(13px * var(--ui-font-scale, 1));
+  font-weight: 600;
+  line-height: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledge-graph-preview-path {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: calc(11px * var(--ui-font-scale, 1));
+  line-height: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledge-graph-preview-body {
+  display: -webkit-box;
+  margin-top: 8px;
+  color: var(--text-body);
+  font-size: calc(12px * var(--ui-font-scale, 1));
+  line-height: 1.5;
+  overflow: hidden;
+  white-space: pre-wrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+
 @keyframes graph-breathe {
   0%,
   100% {
