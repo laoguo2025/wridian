@@ -20,6 +20,8 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 - 聊天消息仓库：`src/chat/messageRepository.ts`
 - 对话请求客户端：`src/chat/cocreationClient.ts`
 - 左侧文件树和右键菜单：`src/files/FileTree.tsx`
+- 工作区文件命令客户端：`src/workspace/workspaceClient.ts`
+- 稿件类型识别：`src/editor/draftKind.ts`
 - 正文替换保护：`src/editor/draftReplaceGuard.ts`
 - 创作记忆树抽屉：`src/memory/MemoryDrawer.tsx`
 - 知识图谱抽屉：`src/knowledge/KnowledgeGraphDrawer.tsx`

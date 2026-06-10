@@ -20,7 +20,6 @@ import {
   createPromptPillFromSuggestion,
   createSelectionPromptPill,
   upsertPromptContextPill,
-  type DraftKind,
   type PromptContextPill,
 } from "./chat/promptContext";
 import {
@@ -28,6 +27,7 @@ import {
   describeDraftReplaceSkip,
 } from "./editor/draftReplaceGuard";
 import { DraftEditor, readContentEditableSelection, setContentEditableCaret, type TextSelection } from "./editor/DraftEditor";
+import { baseName, detectDraftKind } from "./editor/draftKind";
 import { libraryFolderPath, libraryFolderTooltip } from "./libraryToolbar";
 import {
   CREATIVE_SKILLS,
@@ -54,11 +54,20 @@ import {
   WorkFolderIcon,
 } from "./icons";
 import { clamp } from "./numberUtils";
+import {
+  createWorkFile,
+  createWorkFolder,
+  duplicateWorkNode,
+  initWorkspace,
+  openWorkFile,
+  renameWorkNode,
+  saveWorkFile,
+  setLibraryRoot,
+  trashWorkNode,
+} from "./workspace/workspaceClient";
 import type {
   KnowledgeGraphState,
   MemoryTreeState,
-  OpenFileResponse,
-  SaveFileResponse,
   CustomApiSettingsStatus,
   WorkFileNode,
   WorkspaceInfo,
@@ -216,7 +225,7 @@ function App() {
   }, [theme]);
 
   useEffect(() => {
-    void invoke<WorkspaceInfo>("wridian_init_workspace")
+    void initWorkspace()
       .then((response) => {
         setWorkspace(response);
         setWorkspaceError("");
@@ -262,9 +271,7 @@ function App() {
     setSaveStatus("saving");
     setSaveError("");
     try {
-      await invoke<SaveFileResponse>("wridian_save_file", {
-        input: { path: pathToSave, content: contentToSave },
-      });
+      await saveWorkFile(pathToSave, contentToSave);
       if (selectedPath === pathToSave && editorContent === contentToSave) {
         setLastSavedContent(contentToSave);
       }
@@ -341,8 +348,7 @@ function App() {
         title: tab === "knowledge" ? "选择知识库文件夹" : "选择作品库文件夹",
       });
       if (!selected || Array.isArray(selected)) return;
-      const command = tab === "knowledge" ? "wridian_set_knowledge_root" : "wridian_set_work_root";
-      refreshWorkspace(await invoke<WorkspaceInfo>(command, { input: { path: selected } }));
+      refreshWorkspace(await setLibraryRoot(selected, tab));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setWorkspaceError(message.includes("not allowed") || message.includes("Tauri") ? "请在 Wridian 桌面端选择本地文件夹。" : message);
@@ -353,28 +359,28 @@ function App() {
     if (!parentPath) return;
     const name = window.prompt("新建文件", "未命名.md");
     if (!name) return;
-    await runWorkspaceAction(() => invoke<WorkspaceInfo>("wridian_create_work_file", { input: { parentPath, name } }));
+    await runWorkspaceAction(() => createWorkFile(parentPath, name));
   };
 
   const createFolder = async (parentPath = workspaceRootPath) => {
     if (!parentPath) return;
     const name = window.prompt("新建文件夹", "新建文件夹");
     if (!name) return;
-    await runWorkspaceAction(() => invoke<WorkspaceInfo>("wridian_create_work_folder", { input: { parentPath, name } }));
+    await runWorkspaceAction(() => createWorkFolder(parentPath, name));
   };
 
   const duplicateNode = async (node: WorkFileNode) => {
-    await runWorkspaceAction(() => invoke<WorkspaceInfo>("wridian_duplicate_work_node", { input: { path: node.path } }));
+    await runWorkspaceAction(() => duplicateWorkNode(node.path));
   };
 
   const renameNode = async (node: WorkFileNode) => {
     const name = window.prompt("重命名", node.name);
     if (!name || name === node.name) return;
-    await runWorkspaceAction(() => invoke<WorkspaceInfo>("wridian_rename_work_node", { input: { path: node.path, newName: name } }));
+    await runWorkspaceAction(() => renameWorkNode(node.path, name));
   };
 
   const trashNode = async (node: WorkFileNode) => {
-    await runWorkspaceAction(() => invoke<WorkspaceInfo>("wridian_trash_work_node", { input: { path: node.path } }));
+    await runWorkspaceAction(() => trashWorkNode(node.path));
   };
 
   const addNodeToPrompt = (node: WorkFileNode) => {
@@ -385,7 +391,7 @@ function App() {
   const addFileToPrompt = async (name: string, path: string, relativePath = "") => {
     try {
       const cached = promptFileContentCache[path];
-      const content = cached ?? (await invoke<OpenFileResponse>("wridian_open_file", { input: { path } })).content;
+      const content = cached ?? (await openWorkFile(path)).content;
       setPromptFileContentCache((current) => ({ ...current, [path]: content }));
       setPromptPills((current) => upsertPromptContextPill(
         current,
@@ -419,7 +425,7 @@ function App() {
     setSaveError("");
     setSaveStatus("idle");
     try {
-      const response = await invoke<OpenFileResponse>("wridian_open_file", { input: { path: requestedPath } });
+      const response = await openWorkFile(requestedPath);
       setSelectedPath(response.path);
       setEditorTitle(response.name);
       setEditorContent(response.content);
@@ -938,19 +944,6 @@ function App() {
       ) : null}
     </div>
   );
-}
-
-function baseName(path: string) {
-  return path.replace(/[\\/]+$/g, "").split(/[\\/]/).pop() || path;
-}
-
-function detectDraftKind(path: string, content: string): DraftKind {
-  const lowerPath = path.toLowerCase();
-  if (lowerPath.endsWith(".fountain")) return "screenplay";
-
-  const sceneSignals = (content.match(/(^|\n)\s*(INT\.|EXT\.|内景|外景|第[一二三四五六七八九十\d]+[集场])/g) ?? []).length;
-  const dialogueSignals = (content.match(/(^|\n)\s*[\u4e00-\u9fa5A-Za-z0-9_]{2,12}[：:]/g) ?? []).length;
-  return sceneSignals >= 2 || dialogueSignals >= 4 ? "screenplay" : "prose";
 }
 
 export default App;
