@@ -1811,6 +1811,7 @@ function KnowledgeGraphDrawer({
 }) {
   const layout = useMemo(() => buildKnowledgeGraphLayout(graph), [graph]);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const graphAnimationFrameRef = useRef<number | null>(null);
   const [stageSize, setStageSize] = useState({ height: 520, width: 780 });
   const defaultCamera = useMemo(() => fitKnowledgeGraphCamera(layout.nodes, stageSize), [layout.nodes, stageSize]);
   const [camera, setCamera] = useState(defaultCamera);
@@ -1856,8 +1857,22 @@ function KnowledgeGraphDrawer({
   }, [defaultCamera]);
 
   useEffect(() => {
-    drawKnowledgeGraphCanvas(canvasRef.current, layout, safeCamera, hoveredNode?.id ?? null);
-  }, [graphRenderTick, layout, safeCamera, hoveredNode?.id]);
+    if (!knowledgeRootConfigured || !graph.nodes.length) return;
+    let cancelled = false;
+    const render = (time: number) => {
+      if (cancelled) return;
+      drawKnowledgeGraphCanvas(canvasRef.current, layout, safeCamera, hoveredNode?.id ?? null, time);
+      graphAnimationFrameRef.current = window.requestAnimationFrame(render);
+    };
+    graphAnimationFrameRef.current = window.requestAnimationFrame(render);
+    return () => {
+      cancelled = true;
+      if (graphAnimationFrameRef.current != null) {
+        window.cancelAnimationFrame(graphAnimationFrameRef.current);
+        graphAnimationFrameRef.current = null;
+      }
+    };
+  }, [graph.nodes.length, graphRenderTick, knowledgeRootConfigured, layout, safeCamera, hoveredNode?.id]);
 
   useEffect(() => {
     if (!hoveredNode || hoveredNode.kind === "folder" || !hoveredNode.path) {
@@ -2321,6 +2336,7 @@ function drawKnowledgeGraphCanvas(
   layout: ReturnType<typeof buildKnowledgeGraphLayout>,
   camera: KnowledgeGraphCamera,
   hoveredNodeId: string | null,
+  time = 0,
 ) {
   if (!canvas) return;
   const bounds = canvas.getBoundingClientRect();
@@ -2338,6 +2354,8 @@ function drawKnowledgeGraphCanvas(
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
   context.clearRect(0, 0, width, height);
   const safeCamera = sanitizeKnowledgeGraphCamera(camera);
+  const motion = time / 1000;
+  const edgeDashOffset = -(motion * 18) % 18;
 
   context.save();
   context.lineCap = "round";
@@ -2351,25 +2369,28 @@ function drawKnowledgeGraphCanvas(
     context.strokeStyle = edge.kind === "wikilink" ? "rgba(220, 125, 87, 0.78)" : "rgba(138, 129, 118, 0.72)";
     context.lineWidth = edge.kind === "wikilink" ? 1.45 : 1.2;
     context.setLineDash(edge.kind === "wikilink" ? [5, 4] : [4, 4]);
+    context.lineDashOffset = edgeDashOffset;
     context.stroke();
   }
   context.setLineDash([]);
+  context.lineDashOffset = 0;
 
-  for (const node of layout.nodes) {
+  for (const [index, node] of layout.nodes.entries()) {
     const point = knowledgeGraphToCanvasPoint(node, safeCamera);
-    const radius = Math.max(3.4, node.radius * safeCamera.scale);
+    const pulse = 0.5 + Math.sin(motion * 1.65 + index * 0.42) * 0.5;
+    const radius = Math.max(3.4, node.radius * safeCamera.scale) + pulse * 0.7;
     const hovered = hoveredNodeId === node.id;
     if (node.kind !== "card" || hovered) {
       context.beginPath();
-      context.arc(point.x, point.y, radius + (hovered ? 8 : 5), 0, Math.PI * 2);
-      context.fillStyle = hexToRgba(node.color, hovered ? 0.22 : 0.12);
+      context.arc(point.x, point.y, radius + (hovered ? 9 : 5 + pulse * 2), 0, Math.PI * 2);
+      context.fillStyle = hexToRgba(node.color, hovered ? 0.24 : 0.1 + pulse * 0.05);
       context.fill();
     }
     context.beginPath();
     context.arc(point.x, point.y, radius + (hovered ? 1.4 : 0), 0, Math.PI * 2);
     context.fillStyle = node.color;
     context.fill();
-    context.lineWidth = hovered ? 1.6 : 1;
+    context.lineWidth = hovered ? 1.8 : 0.9 + pulse * 0.35;
     context.strokeStyle = hovered ? "rgba(248, 245, 238, 0.92)" : "rgba(248, 245, 238, 0.68)";
     context.stroke();
   }
