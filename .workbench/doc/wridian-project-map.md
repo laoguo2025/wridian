@@ -12,6 +12,7 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 
 - 前端入口：`src/App.tsx`
 - 右侧对话区：`src/chat/ChatPanel.tsx`
+- 正文编辑器：`src/editor/DraftEditor.tsx`
 - 聊天运行管理：`src/chat/chatManager.ts`
 - 聊天持久化：前端 `src/chat/chatPersistence.ts`，后端 `src-tauri/src/chat_persistence.rs`
 - 聊天输入组件：`src/chat/CopilotPromptEditor.tsx`
@@ -19,6 +20,10 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 - 聊天消息仓库：`src/chat/messageRepository.ts`
 - 对话请求客户端：`src/chat/cocreationClient.ts`
 - 正文替换保护：`src/editor/draftReplaceGuard.ts`
+- 创作记忆树抽屉：`src/memory/MemoryDrawer.tsx`
+- 知识图谱抽屉：`src/knowledge/KnowledgeGraphDrawer.tsx`
+- 模型设置对话框：`src/settings/ModelSettingsDialog.tsx`
+- 前端共享 Tauri 数据类型：`src/appTypes.ts`
 - 主要样式：`src/App.css`
 - Tauri 组装入口：`src-tauri/src/lib.rs`
 - 后端模块：

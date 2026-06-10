@@ -19,3 +19,4 @@
   - `.workbench/governance/2026-06-10-knowledge-graph-zoom-black-screen.md`
   - `.workbench/governance/2026-06-10-knowledge-graph-canvas-renderer.md`
   - `.workbench/governance/2026-06-10-knowledge-graph-canvas-motion.md`
+  - `.workbench/governance/2026-06-10-app-component-extraction.md`
