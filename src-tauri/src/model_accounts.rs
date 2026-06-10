@@ -1,4 +1,5 @@
 use crate::cocreation::read_model_response_text;
+use crate::file_lock::with_file_write_lock;
 use crate::runtime::{ensure_workspace, model_accounts_path, wridian_data_dir};
 use base64::Engine;
 use keyring_core::{set_default_store, Entry, Error as KeyringError};
@@ -417,7 +418,10 @@ pub(crate) async fn wridian_test_model_provider_config(
     ensure_workspace(&data_dir)?;
     let file = read_model_accounts_file(&data_dir)?;
     let provider_id = sanitize_provider_id(&input.provider_id);
-    let existing = file.providers.iter().find(|provider| provider.id == provider_id);
+    let existing = file
+        .providers
+        .iter()
+        .find(|provider| provider.id == provider_id);
     let protocol = normalize_protocol(&input.protocol)?;
     let auth_style = normalize_auth_style(&input.auth_style);
     let base_url = input.base_url.trim().trim_end_matches('/').to_string();
@@ -669,7 +673,8 @@ pub(crate) async fn wridian_google_gemini_oauth_login() -> Result<GoogleGeminiOa
         "http://{}:{}{}",
         GOOGLE_OAUTH_REDIRECT_HOST, port, GOOGLE_OAUTH_CALLBACK_PATH
     );
-    let auth_url = google_oauth_auth_url(&oauth_client.client_id, &redirect_uri, &state, &challenge);
+    let auth_url =
+        google_oauth_auth_url(&oauth_client.client_id, &redirect_uri, &state, &challenge);
     open_browser_url(&auth_url)?;
     let captured =
         tauri::async_runtime::spawn_blocking(move || capture_google_oauth_code(listener, &state))
@@ -1023,8 +1028,10 @@ fn write_model_accounts_file(
     file: &StoredModelAccountsFile,
 ) -> Result<(), String> {
     let content = serde_json::to_string_pretty(file).map_err(|error| error.to_string())?;
-    fs::write(model_accounts_path(data_dir), content)
-        .map_err(|error| format!("模型账户配置写入失败：{error}"))
+    let path = model_accounts_path(data_dir);
+    with_file_write_lock(data_dir, &path, || {
+        fs::write(&path, content).map_err(|error| format!("模型账户配置写入失败：{error}"))
+    })
 }
 
 fn empty_accounts_file() -> StoredModelAccountsFile {

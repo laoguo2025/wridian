@@ -6,6 +6,7 @@ import {
 } from "./chat/messageRepository";
 import { useChatManager, type ChatDraftEdit } from "./chat/chatManager";
 import { ChatPanel } from "./chat/ChatPanel";
+import { saveChatKnowledgeCard } from "./chat/chatPersistence";
 import {
   getProjectState,
   selectProject,
@@ -119,6 +120,15 @@ function filePreviewType(path: string): FilePreviewState["type"] {
   return "external";
 }
 
+function knowledgeCardTitleFromMessage(message: string) {
+  const line = message
+    .split(/\r?\n/)
+    .map((item) => item.trim().replace(/^#+\s*/, ""))
+    .find(Boolean);
+  if (!line) return "Wridian 对话沉淀";
+  return line.length > 48 ? `${line.slice(0, 48)}` : line;
+}
+
 function App() {
   const [theme, setTheme] = useState<Theme>("light");
   const [fontSizeMode, setFontSizeMode] = useState<FontSizeMode>("default");
@@ -126,16 +136,18 @@ function App() {
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [knowledgeGraphOpen, setKnowledgeGraphOpen] = useState(false);
   const [creativeSkillsOpen, setCreativeSkillsOpen] = useState(false);
-  const [knowledgeGraphState, setKnowledgeGraphState] = useState<KnowledgeGraphState>({ nodes: [], edges: [], warnings: [] });
+  const [knowledgeGraphState, setKnowledgeGraphState] = useState<KnowledgeGraphState>({ nodes: [], edges: [], relationships: [], warnings: [] });
   const [knowledgeGraphError, setKnowledgeGraphError] = useState("");
   const [creativeSkillEnabled, setCreativeSkillEnabled] = useState<Record<CreativeSkillId, boolean>>(DEFAULT_CREATIVE_SKILL_STATE);
   const [creativeSkillSources, setCreativeSkillSources] = useState<CreativeSkillSources>({ knowledgeOps: { available: false } });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [workspace, setWorkspace] = useState<WorkspaceInfo | null>(null);
   const [workspaceError, setWorkspaceError] = useState("");
+  const [workspaceNotice, setWorkspaceNotice] = useState("");
   const [prompt, setPrompt] = useState("");
   const [pendingEdits, setPendingEdits] = useState<DraftEdit[]>([]);
   const [promptPills, setPromptPills] = useState<PromptContextPill[]>([]);
+  const [savingKnowledgeMessageId, setSavingKnowledgeMessageId] = useState("");
   const [promptFileContentCache, setPromptFileContentCache] = useState<Record<string, string>>({});
   const [selectedKnowledgeCategoryId, setSelectedKnowledgeCategoryId] = useState("");
   const [activeModelLabel, setActiveModelLabel] = useState("");
@@ -374,6 +386,10 @@ function App() {
   const refreshWorkspace = (response: WorkspaceInfo) => {
     setWorkspace(response);
     setWorkspaceError("");
+    const repair = response.lastLinkRepair;
+    setWorkspaceNotice(repair && repair.changedLinkCount > 0
+      ? `已同步修复 ${repair.changedFileCount} 个文件中的 ${repair.changedLinkCount} 处 wikilink；回滚记录已生成。`
+      : "");
   };
 
   const workspaceRootPath = libraryTab === "knowledge"
@@ -578,6 +594,35 @@ function App() {
   const retryLastUserMessage = (message: ChatMessage) => {
     setPromptPills(restorePromptPillsFromMessage(message));
     void sendPrompt({ text: message.text, selectedText: message.selectedText });
+  };
+
+  const saveAssistantMessageAsKnowledgeCard = async (assistantMessage: ChatMessage, userMessage?: ChatMessage) => {
+    if (assistantMessage.role !== "assistant" || savingKnowledgeMessageId) return;
+    setSavingKnowledgeMessageId(assistantMessage.id);
+    chatManager.setError("");
+    try {
+      const contextPills = userMessage
+        ? restorePromptPillsFromMessage(userMessage).map((pill) => ({ label: pill.label, value: pill.value }))
+        : [];
+      const response = await saveChatKnowledgeCard({
+        assistantMessage: assistantMessage.text,
+        cardTitle: knowledgeCardTitleFromMessage(assistantMessage.text),
+        contextPills,
+        sessionId: chatManager.sessionId,
+        sourcePath: selectedPath || filePreview?.path || "",
+        title: editorTitle || filePreview?.name || "Wridian 对话",
+        userMessage: userMessage?.text,
+      });
+      refreshWorkspace(await initWorkspace());
+      setWorkspaceNotice(`已存为待核查知识卡：${response.title}`);
+      if (knowledgeGraphOpen) {
+        void loadKnowledgeGraph();
+      }
+    } catch (error) {
+      chatManager.setError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavingKnowledgeMessageId("");
+    }
   };
 
   const acceptEdit = (id: string) => {
@@ -857,6 +902,7 @@ function App() {
             </div>
           </div>
           {workspaceError ? <div className="rail-error">{workspaceError}</div> : null}
+          {workspaceNotice ? <div className="rail-warning">{workspaceNotice}</div> : null}
           <div className="file-tree">
             {visibleFiles.length ? (
               visibleFiles.map((node) => (
@@ -983,6 +1029,7 @@ function App() {
           onCopy={copyText}
           onEditUserMessage={editUserMessage}
           onRetry={retryLastUserMessage}
+          onSaveKnowledgeCard={saveAssistantMessageAsKnowledgeCard}
           pending={chatManager.pending}
           prompt={prompt}
           promptPills={promptPills}
@@ -992,6 +1039,7 @@ function App() {
           projectError={projectError}
           projects={projectState.projects}
           selectedProjectId={projectState.activeProjectId ?? ""}
+          savingKnowledgeMessageId={savingKnowledgeMessageId}
           onSelectModel={(id) => void switchModel(id)}
           onSelectProject={(id) => void switchProject(id)}
           onPromptChange={setPrompt}

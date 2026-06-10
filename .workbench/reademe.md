@@ -30,3 +30,12 @@
   - `.workbench/governance/2026-06-10-normalize-knowledge-ops-skill.md`
   - `.workbench/governance/2026-06-10-common-file-tree-preview.md`
   - `.workbench/governance/2026-06-10-knowledge-graph-default-scale.md`
+  - `.workbench/governance/2026-06-11-tolaria-file-relationship-governance.md`
+  - `.workbench/governance/2026-06-11-knowledge-graph-zhishiku-governance-labels.md`
+  - `.workbench/governance/2026-06-11-knowledge-graph-node-breathing-halo.md`
+  - `.workbench/governance/2026-06-11-knowledge-graph-infra-hot-cache.md`
+  - `.workbench/governance/2026-06-11-knowledge-graph-writing-language.md`
+  - `.workbench/governance/2026-06-11-zhishiku-health-conflict-protocol.md`
+  - `.workbench/governance/2026-06-11-hybrid-retrieval-chat-card-write-lock.md`
+  - `.workbench/governance/2026-06-11-knowledge-graph-neighborhood-mode.md`
+  - `.workbench/governance/2026-06-11-package-0.0.4.md`

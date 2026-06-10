@@ -1,3 +1,4 @@
+use crate::file_lock::with_file_write_lock;
 use crate::memory::{read_relevant_memory_snippets, write_memory_leaves, MemoryLeafDraft};
 use crate::model_accounts::{
     anthropic_messages_url, is_openai_oauth_settings, openai_chat_completions_url,
@@ -5,10 +6,11 @@ use crate::model_accounts::{
     read_gemini_response_text, response_body_summary, ActiveModelSettings,
 };
 use crate::projects::{active_project_model, read_active_project_context};
-use crate::runtime::{ensure_workspace, runtime_root, wridian_data_dir};
+use crate::runtime::{ensure_workspace, iso_timestamp, runtime_root, wridian_data_dir};
 use crate::workspace::{read_active_work_root, resolved_knowledge_root};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -20,8 +22,11 @@ const BUDGET_EXPLICIT_TOTAL_CHARS: usize = 4200;
 const BUDGET_MEMORY_TOTAL_CHARS: usize = 2200;
 const BUDGET_PROJECT_CONTEXT_CHARS: usize = 2600;
 const BUDGET_SELECTION_CHARS: usize = 3000;
+const BUDGET_HOT_KNOWLEDGE_ITEM_CHARS: usize = 760;
+const BUDGET_HOT_KNOWLEDGE_TOTAL_CHARS: usize = 1800;
 const BUDGET_TOOL_ITEM_CHARS: usize = 1800;
 const BUDGET_TOOL_TOTAL_CHARS: usize = 2600;
+const MAX_HOT_CACHE_ENTRIES: usize = 40;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -74,6 +79,8 @@ pub(crate) async fn wridian_cocreate(mut input: CoCreateInput) -> Result<CoCreat
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
     input.context_items = expand_context_items(&data_dir, &input.context_items)?;
+    let hot_knowledge = read_hot_knowledge_snippets(&data_dir, &input);
+    let _ = record_hot_cache_from_context(&data_dir, &input.context_items);
     let settings = read_active_model_settings(&data_dir, input.selected_model_id.as_deref())?
         .ok_or_else(|| "请先在模型设置里保存模型账户。".to_string())?;
     let memories_used =
@@ -88,6 +95,7 @@ pub(crate) async fn wridian_cocreate(mut input: CoCreateInput) -> Result<CoCreat
         &memories_used,
         &active_context,
         &active_project_context,
+        &hot_knowledge,
     )
     .await?;
 
@@ -127,6 +135,7 @@ async fn cocreate_with_model(
     memories: &[String],
     active_context: &str,
     active_project_context: &str,
+    hot_knowledge: &str,
 ) -> Result<ParsedCoCreateResponse, String> {
     if is_openai_oauth_settings(settings) {
         return cocreate_with_openai_oauth(
@@ -136,6 +145,7 @@ async fn cocreate_with_model(
             memories,
             active_context,
             active_project_context,
+            hot_knowledge,
         )
         .await;
     }
@@ -148,6 +158,7 @@ async fn cocreate_with_model(
                 memories,
                 active_context,
                 active_project_context,
+                hot_knowledge,
             )
             .await
         }
@@ -159,6 +170,7 @@ async fn cocreate_with_model(
                 memories,
                 active_context,
                 active_project_context,
+                hot_knowledge,
             )
             .await
         }
@@ -170,6 +182,7 @@ async fn cocreate_with_model(
                 memories,
                 active_context,
                 active_project_context,
+                hot_knowledge,
             )
             .await
         }
@@ -183,6 +196,7 @@ async fn cocreate_with_openai_oauth(
     memories: &[String],
     active_context: &str,
     active_project_context: &str,
+    hot_knowledge: &str,
 ) -> Result<ParsedCoCreateResponse, String> {
     let url = format!("{}/responses", settings.base_url.trim_end_matches('/'));
     let client = reqwest::Client::builder()
@@ -197,7 +211,7 @@ async fn cocreate_with_openai_oauth(
         .json(&json!({
             "model": project_model.unwrap_or(&settings.model),
             "instructions": cocreation_system_prompt(),
-            "input": build_cocreation_prompt(input, memories, active_context, active_project_context),
+            "input": build_cocreation_prompt(input, memories, active_context, active_project_context, hot_knowledge),
             "store": false,
             "temperature": 0.7
         }))
@@ -232,6 +246,7 @@ async fn cocreate_with_openai_compatible(
     memories: &[String],
     active_context: &str,
     active_project_context: &str,
+    hot_knowledge: &str,
 ) -> Result<ParsedCoCreateResponse, String> {
     let url = openai_chat_completions_url(&settings.base_url);
     let client = reqwest::Client::builder()
@@ -250,7 +265,7 @@ async fn cocreate_with_openai_compatible(
                 },
                 {
                     "role": "user",
-                    "content": build_cocreation_prompt(input, memories, active_context, active_project_context)
+                    "content": build_cocreation_prompt(input, memories, active_context, active_project_context, hot_knowledge)
                 }
             ],
             "response_format": { "type": "json_object" },
@@ -287,6 +302,7 @@ async fn cocreate_with_anthropic(
     memories: &[String],
     active_context: &str,
     active_project_context: &str,
+    hot_knowledge: &str,
 ) -> Result<ParsedCoCreateResponse, String> {
     let url = anthropic_messages_url(&settings.base_url);
     let client = reqwest::Client::builder()
@@ -312,7 +328,7 @@ async fn cocreate_with_anthropic(
             "messages": [
                 {
                     "role": "user",
-                    "content": build_cocreation_prompt(input, memories, active_context, active_project_context)
+                    "content": build_cocreation_prompt(input, memories, active_context, active_project_context, hot_knowledge)
                 }
             ],
             "max_tokens": 2048,
@@ -349,6 +365,7 @@ async fn cocreate_with_gemini(
     memories: &[String],
     active_context: &str,
     active_project_context: &str,
+    hot_knowledge: &str,
 ) -> Result<ParsedCoCreateResponse, String> {
     let model = project_model.unwrap_or(&settings.model);
     let url = format!("{}/models/{}:generateContent", settings.base_url, model);
@@ -373,7 +390,7 @@ async fn cocreate_with_gemini(
                 {
                     "role": "user",
                     "parts": [
-                        { "text": build_cocreation_prompt(input, memories, active_context, active_project_context) }
+                        { "text": build_cocreation_prompt(input, memories, active_context, active_project_context, hot_knowledge) }
                     ]
                 }
             ],
@@ -411,6 +428,266 @@ fn read_active_context(data_dir: &Path) -> String {
     fs::read_to_string(path)
         .map(|content| compact_text(&content, BUDGET_ACTIVE_CONTEXT_CHARS))
         .unwrap_or_default()
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct KnowledgeHotCache {
+    schema_version: u32,
+    entries: Vec<KnowledgeHotCacheEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct KnowledgeHotCacheEntry {
+    path: String,
+    relative_path: String,
+    title: String,
+    last_used: String,
+    hits: usize,
+    related_terms: Vec<String>,
+}
+
+fn knowledge_hot_cache_path(data_dir: &Path) -> PathBuf {
+    runtime_root(data_dir).join("knowledge-hot-cache.json")
+}
+
+fn read_hot_knowledge_snippets(data_dir: &Path, input: &CoCreateInput) -> String {
+    let knowledge_root = match resolved_knowledge_root(data_dir).and_then(|path| {
+        path.canonicalize()
+            .map_err(|error| format!("知识库目录解析失败：{error}"))
+    }) {
+        Ok(root) => root,
+        Err(_) => return String::new(),
+    };
+    let cache = read_hot_cache(data_dir);
+    if cache.entries.is_empty() {
+        return String::new();
+    }
+    let explicit_paths = input
+        .context_items
+        .iter()
+        .filter_map(|item| item.source_path.as_deref())
+        .filter_map(|path| PathBuf::from(path).canonicalize().ok())
+        .collect::<HashSet<_>>();
+    let query = hot_cache_query_text(input);
+    let mut scored = cache
+        .entries
+        .iter()
+        .filter_map(|entry| {
+            let path = PathBuf::from(&entry.path).canonicalize().ok()?;
+            if !path.is_file()
+                || !path.starts_with(&knowledge_root)
+                || explicit_paths.contains(&path)
+            {
+                return None;
+            }
+            let score = hot_cache_entry_score(entry, &query);
+            (score > 0).then_some((score, entry, path))
+        })
+        .collect::<Vec<_>>();
+    scored.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then_with(|| right.1.hits.cmp(&left.1.hits))
+    });
+
+    let mut rendered = String::new();
+    for (_, entry, path) in scored.into_iter().take(3) {
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let block = format!(
+            "【hot｜{}｜{}】\n{}\n",
+            entry.title,
+            entry.relative_path,
+            compact_text(&content, BUDGET_HOT_KNOWLEDGE_ITEM_CHARS)
+        );
+        if rendered.chars().count() + block.chars().count() > BUDGET_HOT_KNOWLEDGE_TOTAL_CHARS {
+            break;
+        }
+        rendered.push_str(&block);
+    }
+    rendered.trim().to_string()
+}
+
+fn record_hot_cache_from_context(
+    data_dir: &Path,
+    items: &[DialogueContextItem],
+) -> Result<(), String> {
+    let knowledge_root = resolved_knowledge_root(data_dir)?
+        .canonicalize()
+        .map_err(|error| format!("知识库目录解析失败：{error}"))?;
+    let mut cache = read_hot_cache(data_dir);
+    cache.schema_version = 1;
+    let now = iso_timestamp();
+
+    for item in items.iter().filter(|item| item.kind.trim() != "tool") {
+        let Some(source_path) = item.source_path.as_deref() else {
+            continue;
+        };
+        let Ok(path) = PathBuf::from(source_path).canonicalize() else {
+            continue;
+        };
+        if !path.is_file() || !path.starts_with(&knowledge_root) {
+            continue;
+        }
+        let relative_path = path
+            .strip_prefix(&knowledge_root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let title = if item.label.trim().is_empty() {
+            path.file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .unwrap_or_else(|| relative_path.clone())
+        } else {
+            item.label.trim().to_string()
+        };
+        let related_terms = hot_cache_terms(&format!("{title}\n{relative_path}\n{}", item.value));
+        let canonical_path = path.to_string_lossy().into_owned();
+        if let Some(entry) = cache
+            .entries
+            .iter_mut()
+            .find(|entry| entry.path == canonical_path)
+        {
+            entry.title = title;
+            entry.relative_path = relative_path;
+            entry.last_used = now.clone();
+            entry.hits = entry.hits.saturating_add(1);
+            entry.related_terms = merge_hot_terms(&entry.related_terms, &related_terms);
+        } else {
+            cache.entries.push(KnowledgeHotCacheEntry {
+                path: canonical_path,
+                relative_path,
+                title,
+                last_used: now.clone(),
+                hits: 1,
+                related_terms,
+            });
+        }
+    }
+
+    cache.entries.sort_by(|left, right| {
+        right
+            .last_used
+            .cmp(&left.last_used)
+            .then_with(|| right.hits.cmp(&left.hits))
+    });
+    cache.entries.truncate(MAX_HOT_CACHE_ENTRIES);
+    write_hot_cache(data_dir, &cache)
+}
+
+fn read_hot_cache(data_dir: &Path) -> KnowledgeHotCache {
+    fs::read_to_string(knowledge_hot_cache_path(data_dir))
+        .ok()
+        .and_then(|content| serde_json::from_str::<KnowledgeHotCache>(&content).ok())
+        .unwrap_or(KnowledgeHotCache {
+            schema_version: 1,
+            entries: Vec::new(),
+        })
+}
+
+fn write_hot_cache(data_dir: &Path, cache: &KnowledgeHotCache) -> Result<(), String> {
+    let path = knowledge_hot_cache_path(data_dir);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("hot cache 目录创建失败：{error}"))?;
+    }
+    let content = serde_json::to_string_pretty(cache).map_err(|error| error.to_string())?;
+    with_file_write_lock(data_dir, &path, || {
+        fs::write(&path, content).map_err(|error| format!("hot cache 写入失败：{error}"))
+    })
+}
+
+fn hot_cache_query_text(input: &CoCreateInput) -> String {
+    let explicit = input
+        .context_items
+        .iter()
+        .map(|item| {
+            format!(
+                "{} {}",
+                item.label,
+                item.relative_path.as_deref().unwrap_or("")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "{}\n{}\n{}\n{}\n{}",
+        input.title,
+        input.user_input,
+        input.selected_text.as_deref().unwrap_or(""),
+        input.content.chars().take(1600).collect::<String>(),
+        explicit
+    )
+}
+
+fn hot_cache_entry_score(entry: &KnowledgeHotCacheEntry, query: &str) -> usize {
+    let query = query.to_lowercase();
+    let mut score = entry.hits.min(6);
+    for term in &entry.related_terms {
+        if term.chars().count() >= 2 && query.contains(term) {
+            score += 10;
+        }
+    }
+    for token in hot_cache_terms(&format!("{}\n{}", entry.title, entry.relative_path)) {
+        if query.contains(&token) {
+            score += 14;
+        }
+    }
+    score
+}
+
+fn hot_cache_terms(text: &str) -> Vec<String> {
+    let mut terms = HashSet::new();
+    for token in text
+        .split(|ch: char| !(ch.is_alphanumeric() || ('\u{4e00}'..='\u{9fff}').contains(&ch)))
+        .map(|token| token.trim().to_lowercase())
+    {
+        if token.chars().count() >= 2 && token.chars().count() <= 32 {
+            terms.insert(token);
+        }
+    }
+    extract_wikilink_like_terms(text, &mut terms);
+    let mut terms = terms.into_iter().collect::<Vec<_>>();
+    terms.sort();
+    terms.truncate(24);
+    terms
+}
+
+fn extract_wikilink_like_terms(text: &str, terms: &mut HashSet<String>) {
+    let mut rest = text;
+    while let Some(start) = rest.find("[[") {
+        rest = &rest[start + 2..];
+        let Some(end) = rest.find("]]") else {
+            break;
+        };
+        let term = rest[..end]
+            .split('|')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .trim_end_matches(".md")
+            .trim_end_matches(".markdown")
+            .to_lowercase();
+        if term.chars().count() >= 2 {
+            terms.insert(term);
+        }
+        rest = &rest[end + 2..];
+    }
+}
+
+fn merge_hot_terms(current: &[String], next: &[String]) -> Vec<String> {
+    let mut merged = current
+        .iter()
+        .chain(next.iter())
+        .cloned()
+        .collect::<HashSet<_>>();
+    let mut terms = merged.drain().collect::<Vec<_>>();
+    terms.sort();
+    terms.truncate(24);
+    terms
 }
 
 fn expand_context_items(
@@ -515,6 +792,7 @@ fn build_cocreation_prompt(
     memories: &[String],
     active_context: &str,
     active_project_context: &str,
+    hot_knowledge: &str,
 ) -> String {
     let memories_block = render_memory_context(memories);
     let active_context_block = if active_context.is_empty() {
@@ -533,10 +811,15 @@ fn build_cocreation_prompt(
     };
     let explicit_context_block = render_context_items_by_slot(&input.context_items, false);
     let tool_context_block = render_context_items_by_slot(&input.context_items, true);
+    let hot_knowledge_block = if hot_knowledge.trim().is_empty() {
+        "无。".to_string()
+    } else {
+        hot_knowledge.trim().to_string()
+    };
 
     let source_label = prompt_source_label(&input.source_path, &input.title);
     format!(
-        "稿件类型：{}\n当前文件：{}\n来源路径：{}\n\n上下文编译顺序：当前稿件/选区 → Project Mode → 当前现场 → 记忆树 → 显式知识卡/相关稿件 → 技能协议 → 用户请求。\n\n[1 当前稿件与选区]\n用户选中的片段：\n{}\n\n稿件内容：\n{}\n\n[2 Project Mode]\n{}\n\n[3 当前现场]\n{}\n\n[4 记忆树上下文]\n{}\n\n[5 显式上下文]\n{}\n\n[6 技能协议]\n{}\n\n用户这次想要：\n{}",
+        "稿件类型：{}\n当前文件：{}\n来源路径：{}\n\n上下文编译顺序：当前稿件/选区 → Project Mode → 当前现场 → 记忆树 → hot cache 知识召回 → 显式知识卡/相关稿件 → 技能协议 → 用户请求。\n\n[1 当前稿件与选区]\n用户选中的片段：\n{}\n\n稿件内容：\n{}\n\n[2 Project Mode]\n{}\n\n[3 当前现场]\n{}\n\n[4 记忆树上下文]\n{}\n\n[5 Hot Cache 知识召回]\n{}\n\n[6 显式上下文]\n{}\n\n[7 技能协议]\n{}\n\n用户这次想要：\n{}",
         draft_kind,
         input.title,
         source_label,
@@ -550,6 +833,7 @@ fn build_cocreation_prompt(
         active_project_block,
         active_context_block,
         memories_block,
+        hot_knowledge_block,
         explicit_context_block,
         tool_context_block,
         input.user_input.trim()
@@ -822,6 +1106,7 @@ mod tests {
             &["【剧情线】雨夜场景不能提前暴露凶手。".to_string()],
             "{\"currentChapter\":\"第三章\"}",
             "Project Mode：短剧项目",
+            "",
         );
 
         assert!(prompt.contains("稿件内容"));
@@ -848,10 +1133,10 @@ mod tests {
             }],
         };
 
-        let prompt = build_cocreation_prompt(&input, &[], "", "");
+        let prompt = build_cocreation_prompt(&input, &[], "", "", "");
 
         assert!(prompt.contains("用户选中的片段：\n她推开门"));
-        assert!(prompt.contains("[5 显式上下文]"));
+        assert!(prompt.contains("[6 显式上下文]"));
         assert!(prompt.contains("【memory｜人物卡｜人物卡.md】\n她怕黑，但不承认。"));
     }
 
@@ -883,11 +1168,11 @@ mod tests {
             ],
         };
 
-        let prompt = build_cocreation_prompt(&input, &[], "", "");
+        let prompt = build_cocreation_prompt(&input, &[], "", "", "");
 
         assert!(prompt
-            .contains("[5 显式上下文]\n【memory｜知识卡｜03故事模型/知识卡.md】\n一条显式知识卡"));
-        assert!(prompt.contains("[6 技能协议]\n【tool｜知识库运维】\nWridian 技能协议：知识库运维"));
+            .contains("[6 显式上下文]\n【memory｜知识卡｜03故事模型/知识卡.md】\n一条显式知识卡"));
+        assert!(prompt.contains("[7 技能协议]\n【tool｜知识库运维】\nWridian 技能协议：知识库运维"));
     }
 
     #[test]
@@ -903,7 +1188,7 @@ mod tests {
             context_items: Vec::new(),
         };
 
-        let prompt = build_cocreation_prompt(&input, &[], "", "");
+        let prompt = build_cocreation_prompt(&input, &[], "", "", "");
 
         assert!(prompt.contains("来源路径：第一章.md"));
         assert!(!prompt.contains("D:/private"));
@@ -977,6 +1262,65 @@ mod tests {
             expanded[0].relative_path.as_deref(),
             Some("03故事模型/默认人物.md")
         );
+    }
+
+    #[test]
+    fn hot_cache_recalls_recent_related_knowledge_without_explicit_duplicate() {
+        let data_dir = temp_data_dir("hot-cache");
+        crate::runtime::ensure_workspace(&data_dir).expect("ensure workspace");
+        let knowledge_root = crate::runtime::default_knowledge_root(&data_dir);
+        let card_path = knowledge_root.join("03故事模型").join("反转钩子.md");
+        fs::write(&card_path, "反转钩子需要先埋误导，再在场尾回收。").expect("write card");
+        record_hot_cache_from_context(
+            &data_dir,
+            &[DialogueContextItem {
+                kind: "memory".to_string(),
+                label: "反转钩子".to_string(),
+                value: "path".to_string(),
+                source_path: Some(card_path.to_string_lossy().into_owned()),
+                relative_path: Some("03故事模型/反转钩子.md".to_string()),
+            }],
+        )
+        .expect("record hot cache");
+
+        let recalled = read_hot_knowledge_snippets(
+            &data_dir,
+            &CoCreateInput {
+                source_path: "demo://01.md".to_string(),
+                title: "01.md".to_string(),
+                content: "这一场需要一个反转钩子。".to_string(),
+                draft_kind: Some("screenplay".to_string()),
+                user_input: "加强场尾反转".to_string(),
+                selected_text: None,
+                selected_model_id: None,
+                context_items: Vec::new(),
+            },
+        );
+
+        assert!(recalled.contains("【hot｜反转钩子｜03故事模型/反转钩子.md】"));
+        assert!(recalled.contains("先埋误导"));
+
+        let duplicate_suppressed = read_hot_knowledge_snippets(
+            &data_dir,
+            &CoCreateInput {
+                source_path: "demo://01.md".to_string(),
+                title: "01.md".to_string(),
+                content: "这一场需要一个反转钩子。".to_string(),
+                draft_kind: Some("screenplay".to_string()),
+                user_input: "加强场尾反转".to_string(),
+                selected_text: None,
+                selected_model_id: None,
+                context_items: vec![DialogueContextItem {
+                    kind: "memory".to_string(),
+                    label: "反转钩子".to_string(),
+                    value: "反转钩子需要先埋误导，再在场尾回收。".to_string(),
+                    source_path: Some(card_path.to_string_lossy().into_owned()),
+                    relative_path: Some("03故事模型/反转钩子.md".to_string()),
+                }],
+            },
+        );
+
+        assert!(duplicate_suppressed.is_empty());
     }
 
     #[test]

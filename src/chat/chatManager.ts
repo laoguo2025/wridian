@@ -71,6 +71,7 @@ export function useChatManager({ onDraftEdits }: { onDraftEdits: (edits: ChatDra
     error,
     messages,
     pending,
+    sessionId: sessionIdRef.current,
     sendPrompt,
     setError,
   };

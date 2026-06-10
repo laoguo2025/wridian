@@ -1,3 +1,4 @@
+use crate::file_lock::with_file_write_lock;
 use crate::memory::read_project_compressed_memory;
 use crate::runtime::{ensure_workspace, runtime_root, wridian_data_dir};
 use crate::workspace::{
@@ -5,13 +6,15 @@ use crate::workspace::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 const MAX_RELEVANT_SCAN_FILES: usize = 800;
 const MAX_RELEVANT_SCAN_DEPTH: usize = 8;
 const MAX_RELEVANT_FILE_BYTES: u64 = 512 * 1024;
+const MAX_RELEVANT_CHUNKS_PER_FILE: usize = 48;
+const MAX_RELEVANT_CHUNK_CHARS: usize = 900;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -214,7 +217,9 @@ fn write_project_state(data_dir: &Path, state: &ProjectState) -> Result<(), Stri
         fs::create_dir_all(parent).map_err(|error| format!("项目目录创建失败：{error}"))?;
     }
     let content = serde_json::to_string_pretty(&json!(state)).map_err(|error| error.to_string())?;
-    fs::write(path, content).map_err(|error| format!("项目配置写入失败：{error}"))
+    with_file_write_lock(data_dir, &path, || {
+        fs::write(&path, content).map_err(|error| format!("项目配置写入失败：{error}"))
+    })
 }
 
 fn project_state_path(data_dir: &Path) -> PathBuf {
@@ -309,7 +314,11 @@ fn find_relevant_notes(
     }
     let source_links = extract_wikilinks(&input.content);
     let candidates = collect_writing_files(&roots)?;
-    let mut scored = Vec::new();
+    let mut candidate_docs = Vec::new();
+    let mut document_frequency: HashMap<String, usize> = HashMap::new();
+    let mut chunk_count = 0usize;
+    let mut total_chunk_terms = 0usize;
+
     for path in candidates {
         if path == source_path {
             continue;
@@ -320,8 +329,6 @@ fn find_relevant_notes(
         let content = fs::read_to_string(&path)
             .map_err(|error| format!("相关稿件读取失败（{}）：{error}", path.to_string_lossy()))?;
         let path_text = path.to_string_lossy().to_string();
-        let candidate_terms = tokenize_mixed(&format!("{path_text}\n{content}"));
-        let lexical_score = overlap_score(&source_terms, &candidate_terms);
         let candidate_links = extract_wikilinks(&content);
         let title = path
             .file_name()
@@ -341,17 +348,66 @@ fn find_relevant_notes(
         } else {
             0.0
         };
-        let score = lexical_score + link_score;
+
+        let chunks = build_relevant_chunks(&title, &path_text, &content, &source_terms);
+        for chunk in &chunks {
+            chunk_count += 1;
+            total_chunk_terms += chunk.term_count;
+            for term in chunk.frequencies.keys() {
+                *document_frequency.entry(term.clone()).or_insert(0) += 1;
+            }
+        }
+        candidate_docs.push(RelevantCandidateDoc {
+            path_text,
+            title,
+            chunks,
+            link_score,
+            has_outgoing_links,
+            has_backlinks,
+        });
+    }
+
+    let avg_chunk_terms = if chunk_count == 0 {
+        1.0
+    } else {
+        (total_chunk_terms as f64 / chunk_count as f64).max(1.0)
+    };
+    let mut scored = Vec::new();
+    for doc in candidate_docs {
+        let best_chunk = doc
+            .chunks
+            .iter()
+            .map(|chunk| {
+                (
+                    bm25_chunk_score(
+                        chunk,
+                        &source_terms,
+                        &document_frequency,
+                        chunk_count,
+                        avg_chunk_terms,
+                    ),
+                    chunk,
+                )
+            })
+            .max_by(|left, right| {
+                left.0
+                    .partial_cmp(&right.0)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        let (lexical_score, snippet) = best_chunk
+            .map(|(score, chunk)| (score, best_snippet(&chunk.text, &source_terms)))
+            .unwrap_or((0.0, String::new()));
+        let score = lexical_score + doc.link_score;
         if score <= 0.0 {
             continue;
         }
         scored.push(RelevantNote {
-            path: path_text,
-            title,
-            snippet: best_snippet(&content, &source_terms),
+            path: doc.path_text,
+            title: doc.title,
+            snippet,
             score,
-            has_outgoing_links,
-            has_backlinks,
+            has_outgoing_links: doc.has_outgoing_links,
+            has_backlinks: doc.has_backlinks,
         });
     }
     scored.sort_by(|left, right| {
@@ -362,6 +418,116 @@ fn find_relevant_notes(
     });
     scored.truncate(input.limit.unwrap_or(8).min(20));
     Ok(scored)
+}
+
+#[derive(Debug)]
+struct RelevantCandidateDoc {
+    path_text: String,
+    title: String,
+    chunks: Vec<RelevantChunk>,
+    link_score: f64,
+    has_outgoing_links: bool,
+    has_backlinks: bool,
+}
+
+#[derive(Debug)]
+struct RelevantChunk {
+    text: String,
+    frequencies: HashMap<String, usize>,
+    term_count: usize,
+}
+
+fn build_relevant_chunks(
+    title: &str,
+    path_text: &str,
+    content: &str,
+    source_terms: &HashSet<String>,
+) -> Vec<RelevantChunk> {
+    let mut chunks = split_relevant_chunks(content);
+    if chunks.is_empty() {
+        chunks.push(
+            content
+                .trim()
+                .chars()
+                .take(MAX_RELEVANT_CHUNK_CHARS)
+                .collect(),
+        );
+    }
+    chunks
+        .into_iter()
+        .take(MAX_RELEVANT_CHUNKS_PER_FILE)
+        .map(|chunk| {
+            let scoring_text = format!("{title}\n{path_text}\n{chunk}");
+            let mut frequencies = HashMap::new();
+            let tokens = tokenize_mixed_vec(&scoring_text);
+            for token in tokens {
+                if source_terms.contains(&token) {
+                    *frequencies.entry(token).or_insert(0) += 1;
+                }
+            }
+            let term_count = tokenize_mixed_vec(&chunk).len().max(1);
+            RelevantChunk {
+                text: chunk,
+                frequencies,
+                term_count,
+            }
+        })
+        .collect()
+}
+
+fn split_relevant_chunks(content: &str) -> Vec<String> {
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            push_relevant_chunk(&mut chunks, &mut current);
+            continue;
+        }
+        let next_len = current.chars().count() + trimmed.chars().count() + 1;
+        if next_len > MAX_RELEVANT_CHUNK_CHARS {
+            push_relevant_chunk(&mut chunks, &mut current);
+        }
+        if !current.is_empty() {
+            current.push('\n');
+        }
+        current.push_str(trimmed);
+    }
+    push_relevant_chunk(&mut chunks, &mut current);
+    chunks
+}
+
+fn push_relevant_chunk(chunks: &mut Vec<String>, current: &mut String) {
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        chunks.push(trimmed.chars().take(MAX_RELEVANT_CHUNK_CHARS).collect());
+    }
+    current.clear();
+}
+
+fn bm25_chunk_score(
+    chunk: &RelevantChunk,
+    source_terms: &HashSet<String>,
+    document_frequency: &HashMap<String, usize>,
+    chunk_count: usize,
+    avg_chunk_terms: f64,
+) -> f64 {
+    if chunk.frequencies.is_empty() || chunk_count == 0 {
+        return 0.0;
+    }
+    let k1 = 1.2;
+    let b = 0.75;
+    let chunk_len = chunk.term_count as f64;
+    source_terms
+        .iter()
+        .filter_map(|term| {
+            let tf = *chunk.frequencies.get(term)? as f64;
+            let df = *document_frequency.get(term).unwrap_or(&0) as f64;
+            let idf = (((chunk_count as f64 - df + 0.5) / (df + 0.5)) + 1.0).ln();
+            let denominator = tf + k1 * (1.0 - b + b * chunk_len / avg_chunk_terms);
+            Some(idf * (tf * (k1 + 1.0)) / denominator.max(0.0001))
+        })
+        .sum()
 }
 
 fn collect_writing_files(roots: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
@@ -440,11 +606,15 @@ fn project_allows_path(project: Option<&ProjectConfig>, path: &Path) -> bool {
 }
 
 fn tokenize_mixed(text: &str) -> HashSet<String> {
+    tokenize_mixed_vec(text).into_iter().collect()
+}
+
+fn tokenize_mixed_vec(text: &str) -> Vec<String> {
     let lower = text.to_lowercase();
-    let mut tokens = HashSet::new();
+    let mut tokens = Vec::new();
     for token in lower.split(|ch: char| !ch.is_alphanumeric() && ch != '_') {
         if token.chars().count() > 1 {
-            tokens.insert(token.to_string());
+            tokens.push(token.to_string());
         }
     }
     let cjk: Vec<char> = text
@@ -452,17 +622,9 @@ fn tokenize_mixed(text: &str) -> HashSet<String> {
         .filter(|ch| ('\u{4e00}'..='\u{9fff}').contains(ch))
         .collect();
     for window in cjk.windows(2) {
-        tokens.insert(window.iter().collect());
+        tokens.push(window.iter().collect());
     }
     tokens
-}
-
-fn overlap_score(left: &HashSet<String>, right: &HashSet<String>) -> f64 {
-    if left.is_empty() || right.is_empty() {
-        return 0.0;
-    }
-    let overlap = left.intersection(right).count() as f64;
-    overlap / (left.len() as f64).sqrt().max(1.0)
 }
 
 fn extract_wikilinks(text: &str) -> HashSet<String> {
@@ -619,5 +781,69 @@ mod tests {
         .expect("find notes");
 
         assert!(!notes.iter().any(|note| note.path.ends_with("large.md")));
+    }
+
+    #[test]
+    fn relevant_notes_returns_best_matching_chunk() {
+        let data_dir = temp_data_dir("chunk-snippet");
+        crate::runtime::ensure_workspace(&data_dir).expect("ensure workspace");
+        let vault = crate::runtime::vault_root(&data_dir);
+        let source = vault.join("source.md");
+        let candidate = vault.join("candidate.md");
+        fs::write(&source, "霜镜契约在第三幕回收").expect("write source");
+        fs::write(
+            &candidate,
+            "普通段落只谈节奏。\n\n霜镜契约应该先作为误导物出现，再在第三幕回收。",
+        )
+        .expect("write candidate");
+
+        let notes = find_relevant_notes(
+            &data_dir,
+            &RelevantNotesInput {
+                source_path: source.to_string_lossy().into_owned(),
+                content: "霜镜契约在第三幕回收".to_string(),
+                query: None,
+                limit: Some(8),
+            },
+            None,
+        )
+        .expect("find notes");
+
+        let note = notes
+            .iter()
+            .find(|note| note.path.ends_with("candidate.md"))
+            .expect("candidate note");
+        assert!(note.snippet.contains("霜镜契约"));
+        assert!(note.snippet.contains("第三幕回收"));
+    }
+
+    #[test]
+    fn relevant_notes_keeps_backlink_boost_without_text_overlap() {
+        let data_dir = temp_data_dir("backlink");
+        crate::runtime::ensure_workspace(&data_dir).expect("ensure workspace");
+        let vault = crate::runtime::vault_root(&data_dir);
+        let source = vault.join("source.md");
+        let candidate = vault.join("candidate.md");
+        fs::write(&source, "霜镜契约").expect("write source");
+        fs::write(&candidate, "[[source]]\n\n另一张卡只通过反链关联。").expect("write candidate");
+
+        let notes = find_relevant_notes(
+            &data_dir,
+            &RelevantNotesInput {
+                source_path: source.to_string_lossy().into_owned(),
+                content: "霜镜契约".to_string(),
+                query: None,
+                limit: Some(8),
+            },
+            None,
+        )
+        .expect("find notes");
+
+        let note = notes
+            .iter()
+            .find(|note| note.path.ends_with("candidate.md"))
+            .expect("candidate note");
+        assert!(note.has_backlinks);
+        assert!(note.score > 0.0);
     }
 }

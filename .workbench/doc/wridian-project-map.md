@@ -33,6 +33,7 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 - 主要样式：`src/App.css`
 - Tauri 组装入口：`src-tauri/src/lib.rs`
 - 后端模块：
+  - `src-tauri/src/file_lock.rs`：Wridian 本地写入锁，使用运行时目录 `.wridian/locks/` 串行化同一目标文件或节点的写入操作。
   - `src-tauri/src/runtime.rs`：本地数据目录、默认 Vault、运行时文件路径。
   - `src-tauri/src/workspace.rs`：本地作品目录、文件树、正文读写。
   - `src-tauri/src/model_accounts.rs`：多供应商模型账户配置、凭据存储、模型切换和连接测试。
@@ -48,6 +49,7 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 - 作品库面向用户时必须先由用户选择本地文件夹；知识库安装后默认在本机 D 盘创建并启用 `Wridian知识库` 根目录，若无 D 盘则回落到 Wridian 本地数据目录。用户仍可手动改选其他知识库根目录。
 - 前端文件树节点同时携带绝对路径和相对路径：绝对路径只用于 Tauri 本地安全校验和读写，相对路径用于 UI、聊天上下文引用和跨库引用语义。
 - 文件区采用 Obsidian 式结构：顶部新建文件/文件夹/作品文件夹，树节点支持多层级展开/收回和右键菜单，底部系统设置。
+- 文件树重命名文件或文件夹后，会扫描同一作品库或知识库下的 Markdown，自动修复正文和 frontmatter 中受影响的 wikilink；包括短链接 `[[A]]`、带别名链接 `[[A|别名]]` 和路径式链接 `[[旧目录/A]]`。每次实际修复都会在该库根目录 `.wridian/link-repair/` 写入 JSON 回滚记录。
 - 左侧文件区分为“作品库 / 知识库”标签页：作品库放作品项目、章节、剧本、分集、场景稿；知识库放人物、地点、设定、世界观、风格、禁区和资料摘录等知识卡。默认知识库分类模板为 `00知识库治理`、`01原始资料`、`02拆解报告`、`03故事模型`、`04人物原型`、`05情节方程`、`06写作技法`、`07综合素材`、`08大神蒸馏`、`09文件归档`，其中 `00知识库治理` 默认包含使用说明；这些只是初始分类，用户可以在文件树里增、改、删，知识库运维 skill 体检时应按实际目录修正。
 - 左侧文件区底部按当前标签页展示已绑定根目录，格式为“当前目录：目录名”，完整路径通过悬停标题查看；该提示只读，不改变作品库/知识库选择逻辑。
 - 文件区“移到回收站”只移动到当前工作根目录 `.wridian-trash/`，不做永久删除。
@@ -58,6 +60,7 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 - 模型账户配置运行时存放在 Wridian 数据目录的 `.wridian/model-accounts.json`；供应商、Base URL、模型名、`authStyle`、`extraEnv` 和当前选中模型写入本地配置文件，API Key/访问凭据写入 Windows Credential Manager，目标名按 `provider:<provider-id>.ai.wridian.app` 组织。旧 `customApi` 配置会迁移到多供应商结构；安装包不写入用户密钥。
 - 记忆系统以 `.wridian/memory-tree/` 下的 Markdown 文件树为主入口；用户在“创作记忆树”抽屉直接查看和编辑全局层、伙伴层、作品层和知识调用机制文件。
 - 知识、知识库、知识卡和知识图谱属于作品项目之外的通用知识积累；作品项目可显式引用知识卡，但知识卡不自动变成作品记忆。
+- 知识图谱把 `source`、`entity`、`concept`、`knowledge_card`、`skill_output`、`note` 作为知识域节点口径；优先从 frontmatter `type/kind/card_type/wridian_type` 推断，无法判断时只作为普通 `note`。
 - 暂不接入生图、生视频和复杂模型网关。
 
 ## 作品域与知识域
@@ -97,9 +100,9 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
   - `ChatSingleMessage.tsx` / `ChatButtons.tsx`：用户消息使用浅边框背景，AI 消息不做重卡片；消息动作放在底部紧凑行。
   - pill 节点：Wridian 已按 Copilot 的 `BasePillNode` / `URLPillNode` / `ToolPillNode` / `PastePlugin` / `GenericPillSyncPlugin` 形态引入本地 `PromptPillNode`，真实注册到 Lexical 编辑树；URL、工具、文件、图片、记忆等上下文会从 Lexical 树同步回 prompt pill 状态。
   - 输入控制：Wridian 底部控制条只显示当前模型或当前项目名，不再提供 Project / Relevant / Vault 这类泛化工具按钮；文件 pill 会优先读取并缓存文件内容再注入上下文；粘贴 URL、保留的工具标记和图片会生成结构化 pill。
-  - Project Mode / Relevant Notes：Wridian 的 Project Mode 已对齐作品项目，右侧下拉只提供“普通聊天”和作品项目文件夹名，不再提供手动“新建 Project”；打开作品文件时自动切换到所属作品项目。选择作品项目后，对话请求会读取创作记忆树中该项目的 `compressed.md` 压缩记忆。Relevant Notes 使用工作区本地全文词项重合 + wikilink/backlink 加权召回，点击可把相关稿件作为 file pill 注入。
+  - Project Mode / Relevant Notes：Wridian 的 Project Mode 已对齐作品项目，右侧下拉只提供“普通聊天”和作品项目文件夹名，不再提供手动“新建 Project”；打开作品文件时自动切换到所属作品项目。选择作品项目后，对话请求会读取创作记忆树中该项目的 `compressed.md` 压缩记忆。Relevant Notes 使用工作区本地分段 BM25 式词项评分 + wikilink/backlink 加权召回，返回最佳命中片段；点击可把相关稿件作为 file pill 注入。
 - 记忆命中、注入和上下文选择默认在后台执行，不在右侧对话区常驻展示“本次使用的记忆”等系统说明；创作记忆树只由顶部“创作记忆树”动作打开。
-- 工作界面右上角在创作记忆树图标右侧提供“知识图谱”入口；弹窗尺寸与创作记忆树一致，当前根据当前知识库 Markdown 分类、知识卡、wikilink 和 frontmatter 中包含 `[[wikilink]]` 的关系字段生成动态图谱视图；图谱会按 frontmatter `type/kind/card_type/wridian_type` 或默认 00-09 目录推断节点类型，并用关系字段名显示 typed relation。图谱支持自动适配视图、重置视图、鼠标位置缩放、拖拽画布、拖拽节点、悬浮预览知识卡和点击知识卡节点打开文件编辑区，点击文件夹节点只保留图谱浏览。知识图谱图标右侧提供“技能管理”入口，用于管理知识库运维、作品拆解、知识卡提炼和大神蒸馏等技能入口；对话输入框输入 `/` 时只显示当前已启用的技能。
+- 工作界面右上角在创作记忆树图标右侧提供“知识图谱”入口；弹窗尺寸与创作记忆树一致，当前根据当前知识库 Markdown 分类、知识卡、wikilink 和 frontmatter 中包含 `[[wikilink]]` 的关系字段生成动态图谱视图；图谱会按 frontmatter `type/kind/card_type/wridian_type` 或默认 00-09 目录推断节点类型，并用中文关系标签显示 typed relation。图谱后端返回统一关系结构：字段名、源文件、目标文件、关系类型和是否双向；固定字段保留语义，非固定字段作为普通扩展关系进入图谱。图谱支持 Type Markdown 定义（`type: Type`）中的图标、颜色、排序和默认字段，用于同类型知识卡渲染。图谱治理视图对齐 `zhishiku-skill` 体检口径，只读展示缺素材出处、关联索引空、采纳未沉淀、孤岛待归档、重复待合并、待核查冲突和高频老化，并提示补出处、补关联、合并、归档、重写等动作；知识卡悬浮预览会显示入链、出链、知识卡反链、作品文件显式引用，以及 `zhishiku-skill` 产出的体检状态、冲突和不确定性标记。知识卡悬浮预览包含 Tolaria 式关系邻域：按当前卡片列出关系分组、指向节点和反链节点，并标记双向关系。图谱支持自动适配视图、重置视图、鼠标位置缩放、拖拽画布、拖拽节点、悬浮预览知识卡和点击知识卡节点打开文件编辑区，点击文件夹节点只保留图谱浏览。知识图谱图标右侧提供“技能管理”入口，用于管理知识库运维、作品拆解、知识卡提炼和大神蒸馏等技能入口；对话输入框输入 `/` 时只显示当前已启用的技能。
 - 右侧侧边面板应保持“对话”语义，入口文案统一为“对话”。
 - 对话回复可由模型返回结构化 `memories`，Wridian 自动写入创作记忆树 leaves；顶部“记忆树”按钮打开结构化 Markdown 记忆树，用户可查看、编辑和删除普通叶子文件。
 - 当前已完成最小对话/记忆分离：底部输入调用对话命令，不再创建候选记忆或打开候选确认流；长期记忆写入后只通过记忆树抽屉管理。
@@ -142,8 +145,10 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 - 对话完成后，模型可返回结构化 `memories`；Wridian 自动写入 `leaves/<branch>/` 普通 Markdown 叶子文件，用户在创作记忆树中直接编辑或删除。作品项目 `project.md` 和 `compressed.md` 属于项目核心记忆，只能编辑，不能通过叶子删除动作移除。
 - 记忆作用域：普通聊天读取根文件和通用分支/叶子；作品项目额外读取命中的 drama/novel 分支机制和对应作品叶子；知识卡只在显式选择或召回时进入上下文，不默认混进作品记忆。
 - 聊天记录：`.wridian/chat/*.md`，每个运行会话保存为 Markdown，包含 frontmatter、来源文件、用户/助手消息和上下文 pill。
+- 对话回复底部提供“存为卡”动作；Wridian 会把助手回复、上一条用户问题和上下文 pill 写入知识库 `00知识库治理/对话沉淀/`，frontmatter 标记为 `type: knowledge_card`、`wridian_type: conversation_distillation`、`status: draft`、`review_status: 待核查`，由后续 `zhishiku-skill` 提炼、蒸馏或体检后再转为正式知识卡。
 - 旧的写入前预览和二次确认不再作为用户界面路径；记忆树里的 Markdown 文件是主编辑面。
-- 对话上下文编译采用固定槽位和预算：当前稿件/选区、Project Mode、当前现场、记忆树、显式知识卡/相关稿件、技能协议、用户请求分段渲染；tool pill 单独进入技能协议槽位，pill 是文件/记忆/技能引用和发送瞬间快照，不再伪装成选区文本。
+- 对话上下文编译采用固定槽位和预算：当前稿件/选区、Project Mode、当前现场、记忆树、hot cache 知识召回、显式知识卡/相关稿件、技能协议、用户请求分段渲染；tool pill 单独进入技能协议槽位，pill 是文件/记忆/技能引用和发送瞬间快照，不再伪装成选区文本。
+- hot cache 存放在 Wridian 运行目录 `.wridian/knowledge-hot-cache.json`，只记录最近显式使用过的知识卡路径、标题、相对路径、命中次数和轻量关键词；发送对话时最多召回少量相关知识卡，并跳过本轮已显式 `@` 的同一张卡。
 - 知识图谱和相关稿件召回必须有本地扫描门禁：限制文件数、递归深度和单文件大小；可跳过的图谱问题返回 warnings 给前端展示，相关稿件读取错误继续显式失败。
 - 后续上下文编译应参考 claude-obsidian、obsidian-copilot、OpenHuman、Hermes、OpenClaw、SillyTavern：按槽位、作用域、热上下文和预算加载记忆树文件，不把所有文件每轮硬塞进 prompt。
 
@@ -179,3 +184,4 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 
 - `src-tauri/src/lib.rs` 只负责模块声明、插件挂载和命令注册。
 - 新业务逻辑必须进入对应模块；没有对应模块时先建小模块，不继续膨胀 `lib.rs`。
+- Wridian 控制的本地文件写入应通过 `src-tauri/src/file_lock.rs` 的写入锁串行化；当前覆盖稿件/知识文件保存、工作区配置、文件树结构操作、项目状态、聊天记录、hot cache、记忆树和模型账号配置。

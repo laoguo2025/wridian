@@ -18,7 +18,7 @@
 
 ```yaml
 id: "stable-human-readable-id"
-type: "draft | creative_project | project_element | creative_memory | knowledge_card | knowledge_source | knowledge_entity | knowledge_concept"
+type: "draft | creative_project | project_element | creative_memory | knowledge_card | knowledge_source | knowledge_entity | knowledge_concept | skill_output"
 status: "draft | active | archived | deprecated"
 title: "用户可见标题"
 aliases: []
@@ -93,9 +93,31 @@ type: knowledge_card
 knowledge_kind: "method | fact | reference | trope | research | style | checklist"
 status: active
 source_refs: []
+source: []
+derived_from: []
+quotes: []
+evidence: []
 related_to: []
 used_by_projects: []
+review_status:
+conflicts_with: []
+uncertainty:
 ```
+
+可追溯来源字段口径：
+
+- `source`：素材来源字段，可指向原始资料、网页、书、PDF、拆解来源。
+- `derived_from`：从某来源、拆解报告或上游知识产物提炼而来。
+- `quotes`：直接引用或摘录来源。
+- `evidence`：支撑该知识卡判断的依据材料。
+- 旧字段 `source_refs/source_ref/source_url/source_title` 继续有效。
+
+`zhishiku-skill` 体检产物字段：
+
+- `review_status`：知识库运维给出的只读体检状态，如 `待核查`、`有冲突`、`需合并`、`已确认`。Wridian 只展示，不自行判定。
+- `conflicts_with`：与本卡存在观点冲突或适用条件冲突的知识卡列表。
+- `uncertainty`：不确定性说明、适用条件缺口或需要补证的原因。
+- 中文旧字段 `体检状态/治理状态/核查状态`、`冲突对象/冲突卡片`、`不确定性/待核查` 继续可读，用于兼容 `zhishiku-skill` 的中文卡片。
 
 ### knowledge_source
 
@@ -132,6 +154,20 @@ concept_kind: "theme | method | genre_rule | style | theory | constraint"
 status: active
 source_refs: []
 related_to: []
+```
+
+### skill_output
+
+`zhishiku-skill`、`chaijie-skill`、`tilian-skill`、`zhengliu-skill` 产生的拆解、提炼、蒸馏或中间报告。
+
+```yaml
+type: skill_output
+skill_kind: "chaijie | tilian | zhengliu | zhishiku | report"
+status: active
+source: []
+derived_from: []
+evidence: []
+extracts_to: []
 ```
 
 ## 边界关系字段
@@ -177,8 +213,28 @@ distilled_from_memory: ["creative_memory:<id-or-path>"]
 - 来源资料：`sources/<来源标题>.md`
 - 实体：`entities/<实体名>.md`
 - 概念：`concepts/<概念名>.md`
-- hot cache：`hot.md`
+- hot cache：运行时缓存 `.wridian/knowledge-hot-cache.json`
 - 索引：`index.md`
+- 体检报告：`00知识库治理/知识库体检-YYYY-MM-DD.md`
+
+## Type 文档
+
+知识库可以使用 `type: Type` 的 Markdown 文件作为通用知识类型定义。Type 文档只服务知识卡、来源、概念、实体、方法论等通用知识类型，不用于人物卡或 World Info。
+
+```yaml
+type: Type
+title: "knowledge_card"
+icon: "K"
+color: "#dc7d57"
+sort: "title:asc"
+default_fields:
+  - source_refs
+  - related_to
+```
+
+- `title` 优先作为类型名；未写时使用文件名。
+- `icon` 和 `color` 用于知识图谱节点渲染。
+- `sort` 和 `default_fields` 是类型定义元数据，第一版只作为只读图谱元信息暴露。
 
 ## 非目标
 
@@ -186,3 +242,5 @@ distilled_from_memory: ["creative_memory:<id-or-path>"]
 - 本协议不要求普通稿件都写 frontmatter。
 - 本协议不自动把知识卡写入创作记忆树。
 - 本协议不自动把作品事实写入知识库。
+- hot cache 只辅助对话召回最近常用知识卡，不替代用户显式 `@` 选择，也不作为长期事实来源。
+- 冲突和不确定性判断由 `zhishiku-skill` 或用户确认产出；Wridian 主程序只读取字段、关系和 callout 做只读展示。

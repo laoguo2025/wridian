@@ -21,6 +21,7 @@ export function ChatPanel({
   onImagePaste,
   onRemovePill,
   onRetry,
+  onSaveKnowledgeCard,
   onSelectModel,
   onSelectSuggestion,
   onSelectProject,
@@ -33,6 +34,7 @@ export function ChatPanel({
   promptSuggestions,
   selectedProjectId,
   selectedModelId,
+  savingKnowledgeMessageId,
 }: {
   activeModelLabel: string;
   configuredModels: ConfiguredModelStatus[];
@@ -45,6 +47,7 @@ export function ChatPanel({
   onImagePaste: (files: File[]) => void;
   onRemovePill: (id: string) => void;
   onRetry: (message: ChatMessage) => void;
+  onSaveKnowledgeCard: (assistantMessage: ChatMessage, userMessage?: ChatMessage) => void;
   onSelectModel: (id: string) => void;
   onSelectSuggestion: (suggestion: PromptSuggestion) => void;
   onSelectProject: (id: string) => void;
@@ -57,6 +60,7 @@ export function ChatPanel({
   promptSuggestions: PromptSuggestion[];
   selectedProjectId: string;
   selectedModelId: string;
+  savingKnowledgeMessageId: string;
 }) {
   const threadRef = useRef<HTMLDivElement | null>(null);
 
@@ -86,6 +90,8 @@ export function ChatPanel({
                 onCopy={onCopy}
                 onEditUserMessage={onEditUserMessage}
                 onRetry={onRetry}
+                onSaveKnowledgeCard={onSaveKnowledgeCard}
+                savingKnowledgeMessageId={savingKnowledgeMessageId}
                 userForRetry={findPreviousUserMessage(messages, index)}
               />
             ))
@@ -156,12 +162,16 @@ function ChatMessageView({
   onCopy,
   onEditUserMessage,
   onRetry,
+  onSaveKnowledgeCard,
+  savingKnowledgeMessageId,
   userForRetry,
 }: {
   message: ChatMessage;
   onCopy: (text: string) => void;
   onEditUserMessage: (message: ChatMessage) => void;
   onRetry: (message: ChatMessage) => void;
+  onSaveKnowledgeCard: (assistantMessage: ChatMessage, userMessage?: ChatMessage) => void;
+  savingKnowledgeMessageId: string;
   userForRetry?: ChatMessage;
 }) {
   const contextPills = restorePromptPillsFromMessage(message);
@@ -192,6 +202,14 @@ function ChatMessageView({
           <>
             <button type="button" onClick={() => userForRetry ? onRetry(userForRetry) : undefined} disabled={!userForRetry} title="重试">
               重试
+            </button>
+            <button
+              type="button"
+              onClick={() => onSaveKnowledgeCard(message, userForRetry)}
+              disabled={savingKnowledgeMessageId === message.id}
+              title="存为知识卡"
+            >
+              {savingKnowledgeMessageId === message.id ? "保存中" : "存为卡"}
             </button>
             <button type="button" onClick={() => onCopy(message.text)} title="复制">
               复制
