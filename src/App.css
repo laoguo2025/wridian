@@ -418,6 +418,55 @@ button {
   padding: 8px;
 }
 
+.knowledge-inbox-bar {
+  display: flex;
+  padding: 0 2px;
+}
+
+.knowledge-inbox-bar button {
+  width: 100%;
+  min-height: 26px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 8px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
+  line-height: 16px;
+}
+
+.knowledge-inbox-bar button:not(:disabled):hover,
+.knowledge-inbox-bar button.active {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.knowledge-inbox-bar button.active {
+  background: var(--bg-selected);
+}
+
+.knowledge-inbox-bar button:disabled {
+  opacity: 0.42;
+}
+
+.knowledge-inbox-bar strong {
+  min-width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent), transparent 82%);
+  color: color-mix(in srgb, var(--accent), black 18%);
+  display: inline-grid;
+  place-items: center;
+  padding: 0 5px;
+  font-size: calc(10px * var(--ui-font-scale, 1));
+  line-height: 14px;
+  font-weight: 650;
+}
+
 .rail-warning {
   display: grid;
   gap: 3px;
@@ -434,6 +483,14 @@ button {
   min-height: 0;
   overflow: auto;
   padding: 5px 0 8px;
+}
+
+.file-tree-empty {
+  color: var(--text-faint);
+  font-size: calc(12px * var(--ui-font-scale, 1));
+  line-height: 16px;
+  padding: 12px 8px;
+  text-align: center;
 }
 
 .file-node {

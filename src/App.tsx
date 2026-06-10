@@ -128,6 +128,7 @@ function App() {
   const [savingMemoryTree, setSavingMemoryTree] = useState(false);
   const [fileMenu, setFileMenu] = useState<FileContextMenu | null>(null);
   const [libraryTab, setLibraryTab] = useState<"works" | "knowledge">("works");
+  const [knowledgeInboxOnly, setKnowledgeInboxOnly] = useState(false);
   const [workspacePaneWidths, setWorkspacePaneWidths] = useState({
     left: DEFAULT_LEFT_PANE_WIDTH,
     right: DEFAULT_RIGHT_PANE_WIDTH,
@@ -257,7 +258,8 @@ function App() {
 
   const files = workspace?.files ?? [];
   const knowledgeFiles = workspace?.knowledgeFiles ?? [];
-  const visibleFiles = libraryTab === "works" ? files : knowledgeFiles;
+  const knowledgeInboxFiles = workspace?.knowledgeInboxFiles ?? [];
+  const visibleFiles = libraryTab === "works" ? files : knowledgeInboxOnly ? knowledgeInboxFiles : knowledgeFiles;
   const activeLibraryConfigured = libraryTab === "knowledge"
     ? Boolean(workspace?.knowledgeRootConfigured)
     : Boolean(workspace?.workRootConfigured);
@@ -749,7 +751,10 @@ function App() {
               <button type="button" className={libraryTab === "works" ? "active" : ""} onClick={() => setLibraryTab("works")}>
                 作品库
               </button>
-              <button type="button" className={libraryTab === "knowledge" ? "active" : ""} onClick={() => setLibraryTab("knowledge")}>
+              <button type="button" className={libraryTab === "knowledge" ? "active" : ""} onClick={() => {
+                setLibraryTab("knowledge");
+                setKnowledgeInboxOnly(false);
+              }}>
                 知识库
               </button>
             </div>
@@ -771,6 +776,21 @@ function App() {
             </div>
           </div>
           {workspaceError ? <div className="rail-error">{workspaceError}</div> : null}
+          {libraryTab === "knowledge" ? (
+            <div className="knowledge-inbox-bar">
+              <button
+                type="button"
+                className={knowledgeInboxOnly ? "active" : ""}
+                onClick={() => setKnowledgeInboxOnly((current) => !current)}
+                disabled={!activeLibraryConfigured}
+                aria-pressed={knowledgeInboxOnly}
+                title="显示待整理的知识文件"
+              >
+                <span>候选箱</span>
+                <strong>{knowledgeInboxFiles.length}</strong>
+              </button>
+            </div>
+          ) : null}
 
           <div className="file-tree">
             {visibleFiles.length ? (
@@ -784,6 +804,9 @@ function App() {
                   onOpenMenu={openFileContextMenu}
                 />
               ))
+            ) : null}
+            {libraryTab === "knowledge" && knowledgeInboxOnly && !visibleFiles.length ? (
+              <div className="file-tree-empty">没有待整理知识文件</div>
             ) : null}
           </div>
 
