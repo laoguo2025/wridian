@@ -210,7 +210,7 @@ pub(crate) fn wridian_rename_work_node(input: RenameNodeInput) -> Result<Workspa
         .parent()
         .ok_or_else(|| "无法重命名工作区根目录。".to_string())?;
     let name = if source.is_file() {
-        normalize_file_name(&input.new_name)?
+        normalize_workspace_file_name(&input.new_name)?
     } else {
         normalize_node_name(&input.new_name)?
     };
@@ -360,7 +360,7 @@ fn read_work_tree(root: &Path, base: &Path, library: &str) -> Result<Vec<WorkFil
                 folder: true,
                 children,
             });
-        } else if is_supported_writing_file(&path) {
+        } else if is_supported_workspace_file(&path) {
             nodes.push(WorkFileNode {
                 name,
                 path: path.to_string_lossy().into_owned(),
@@ -387,21 +387,54 @@ fn should_skip_entry(name: &str) -> bool {
 }
 
 pub(crate) fn is_supported_writing_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
+    file_extension(path)
+        .map(|extension| matches!(extension.as_str(), "md" | "markdown" | "txt"))
+        .unwrap_or(false)
+}
+
+fn is_supported_workspace_file(path: &Path) -> bool {
+    file_extension(path)
         .map(|extension| {
             matches!(
-                extension.to_ascii_lowercase().as_str(),
-                "md" | "markdown" | "txt" | "fountain"
+                extension.as_str(),
+                "md" | "markdown"
+                    | "txt"
+                    | "doc"
+                    | "docx"
+                    | "wps"
+                    | "pdf"
+                    | "png"
+                    | "jpg"
+                    | "jpeg"
+                    | "webp"
+                    | "gif"
+                    | "svg"
+                    | "bmp"
+                    | "csv"
+                    | "xlsx"
+                    | "xls"
+                    | "et"
+                    | "ppt"
+                    | "pptx"
+                    | "dps"
+                    | "json"
+                    | "yaml"
+                    | "yml"
             )
         })
         .unwrap_or(false)
 }
 
+fn file_extension(path: &Path) -> Option<String> {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+}
+
 fn resolve_allowed_writing_file(data_dir: &Path, raw_path: &str) -> Result<PathBuf, String> {
     let path = PathBuf::from(raw_path.trim());
     if !path.is_file() || !is_supported_writing_file(&path) {
-        return Err("只能打开和保存 md、txt 或 fountain 写作文件。".to_string());
+        return Err("文件编辑区只能打开和保存 md、txt 文件。".to_string());
     }
     let canonical_path = path
         .canonicalize()
@@ -434,8 +467,8 @@ fn resolve_allowed_existing_node(data_dir: &Path, raw_path: &str) -> Result<Path
     if !(path.is_file() || path.is_dir()) {
         return Err("文件或文件夹不存在。".to_string());
     }
-    if path.is_file() && !is_supported_writing_file(&path) {
-        return Err("只能操作 md、txt 或 fountain 写作文件。".to_string());
+    if path.is_file() && !is_supported_workspace_file(&path) {
+        return Err("只能操作 Wridian 文件树支持显示的常见文件。".to_string());
     }
     let canonical_path = path
         .canonicalize()
@@ -502,7 +535,15 @@ fn normalize_file_name(name: &str) -> Result<String, String> {
         normalized.push_str(".md");
     }
     if !is_supported_writing_file(Path::new(&normalized)) {
-        return Err("文件名只支持 md、markdown、txt 或 fountain 后缀。".to_string());
+        return Err("文件名只支持 md、markdown 或 txt 后缀。".to_string());
+    }
+    Ok(normalized)
+}
+
+fn normalize_workspace_file_name(name: &str) -> Result<String, String> {
+    let normalized = normalize_node_name(name)?;
+    if !is_supported_workspace_file(Path::new(&normalized)) {
+        return Err("文件名只支持 Wridian 文件树可显示的常见文件后缀。".to_string());
     }
     Ok(normalized)
 }
@@ -610,6 +651,65 @@ mod tests {
         assert_eq!(knowledge_file.relative_path, "人物卡.md");
         assert_eq!(work_file.library, "works");
         assert_eq!(knowledge_file.library, "knowledge");
+    }
+
+    #[test]
+    fn workspace_tree_displays_common_files_but_edits_only_text_notes() {
+        let data_dir = temp_data_dir("common-files");
+        let work_root = data_dir.join("user-works");
+        fs::create_dir_all(&work_root).expect("create work root");
+        fs::write(work_root.join("方案.md"), "正文").expect("write md");
+        fs::write(work_root.join("资料.txt"), "文本").expect("write txt");
+        fs::write(work_root.join("报告.pdf"), b"pdf").expect("write pdf");
+        fs::write(work_root.join("合同.docx"), b"docx").expect("write docx");
+        fs::write(work_root.join("国产文档.wps"), b"wps").expect("write wps");
+        fs::write(work_root.join("图片.png"), b"png").expect("write png");
+        fs::write(work_root.join("程序.exe"), b"exe").expect("write exe");
+        fs::create_dir_all(crate::runtime::runtime_root(&data_dir)).expect("create runtime");
+        fs::write(
+            workspace_config_path(&data_dir),
+            serde_json::json!({
+                "schemaVersion": 1,
+                "activeWorkRoot": work_root.to_string_lossy()
+            })
+            .to_string(),
+        )
+        .expect("write workspace config");
+
+        let info = workspace_info(&data_dir).expect("workspace info");
+        let names = info
+            .files
+            .iter()
+            .map(|node| node.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"方案.md"));
+        assert!(names.contains(&"资料.txt"));
+        assert!(names.contains(&"报告.pdf"));
+        assert!(names.contains(&"合同.docx"));
+        assert!(names.contains(&"国产文档.wps"));
+        assert!(names.contains(&"图片.png"));
+        assert!(!names.contains(&"程序.exe"));
+        assert!(resolve_allowed_writing_file(
+            &data_dir,
+            &work_root.join("方案.md").to_string_lossy()
+        )
+        .is_ok());
+        assert!(resolve_allowed_writing_file(
+            &data_dir,
+            &work_root.join("资料.txt").to_string_lossy()
+        )
+        .is_ok());
+        assert!(resolve_allowed_writing_file(
+            &data_dir,
+            &work_root.join("报告.pdf").to_string_lossy()
+        )
+        .is_err());
+        assert!(resolve_allowed_writing_file(
+            &data_dir,
+            &work_root.join("合同.docx").to_string_lossy()
+        )
+        .is_err());
     }
 
     #[test]

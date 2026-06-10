@@ -14,6 +14,7 @@ export type SendChatPromptInput = {
   content: string;
   contextPills: PromptContextPill[];
   draftKind: DraftKind;
+  selectedModelId?: string;
   selectedText?: string;
   sourcePath: string;
   text: string;
@@ -49,6 +50,7 @@ export function useChatManager({ onDraftEdits }: { onDraftEdits: (edits: ChatDra
         content: input.content,
         contextItems: input.contextPills,
         draftKind: input.draftKind,
+        selectedModelId: input.selectedModelId,
         userInput,
         selectedText: input.selectedText ?? "",
       });

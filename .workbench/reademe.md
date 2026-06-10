@@ -23,3 +23,10 @@
   - `.workbench/governance/2026-06-10-app-shell-secondary-extraction.md`
   - `.workbench/governance/2026-06-10-workspace-client-extraction.md`
   - `.workbench/governance/2026-06-10-dialog-folder-selection-fix.md`
+  - `.workbench/governance/2026-06-10-knowledge-graph-skill-context-compiler.md`
+  - `.workbench/governance/2026-06-10-opener-folder-permission-empty-action.md`
+  - `.workbench/governance/2026-06-10-library-picker-uninstall-data-cleanup.md`
+  - `.workbench/governance/2026-06-10-left-rail-current-directory.md`
+  - `.workbench/governance/2026-06-10-normalize-knowledge-ops-skill.md`
+  - `.workbench/governance/2026-06-10-common-file-tree-preview.md`
+  - `.workbench/governance/2026-06-10-knowledge-graph-default-scale.md`

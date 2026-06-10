@@ -325,7 +325,7 @@ function buildKnowledgeGraphLayout(graph: KnowledgeGraphState) {
     return {
       ...node,
       collisionRadius: radius + labelRadius + 1.25,
-      color: knowledgeGraphNodeColor(depth),
+      color: knowledgeGraphTypedNodeColor(node, depth),
       depth,
       radius,
       showLabel,
@@ -412,6 +412,19 @@ function knowledgeGraphNodeColor(depth: number) {
   return colors[Math.min(colors.length - 1, Math.max(0, depth))];
 }
 
+function knowledgeGraphTypedNodeColor(node: KnowledgeGraphNode, depth: number) {
+  if (node.kind === "folder") return knowledgeGraphNodeColor(depth);
+  const normalizedKind = node.kind.toLowerCase();
+  if (normalizedKind.includes("source")) return "#5f8f7b";
+  if (normalizedKind.includes("analysis") || normalizedKind.includes("report")) return "#8d7cc3";
+  if (normalizedKind.includes("skill")) return "#c69348";
+  if (normalizedKind.includes("method") || normalizedKind.includes("knowledge")) return "#dc7d57";
+  if (normalizedKind.includes("concept") || normalizedKind.includes("entity")) return "#5f79b8";
+  return knowledgeGraphNodeColor(depth);
+}
+
+const DEFAULT_KNOWLEDGE_GRAPH_FIT_RATIO = 0.64;
+
 function fitKnowledgeGraphCamera(nodes: KnowledgeGraphLayoutNode[], size = { height: 520, width: 780 }): KnowledgeGraphCamera {
   const width = Math.max(1, size.width);
   const height = Math.max(1, size.height);
@@ -430,7 +443,8 @@ function fitKnowledgeGraphCamera(nodes: KnowledgeGraphLayoutNode[], size = { hei
   if (!Number.isFinite(minX)) return { offsetX: width / 2, offsetY: height / 2, scale: 1 };
   const graphWidth = Math.max(1, maxX - minX);
   const graphHeight = Math.max(1, maxY - minY);
-  const scale = clamp(Math.min((width - 52) / graphWidth, (height - 52) / graphHeight), 3.2, 12);
+  const fittedScale = Math.min((width - 52) / graphWidth, (height - 52) / graphHeight);
+  const scale = clamp(fittedScale * DEFAULT_KNOWLEDGE_GRAPH_FIT_RATIO, 2.4, 7.8);
   const centerX = (minX + maxX) / 2;
   const centerY = (minY + maxY) / 2;
   return {
@@ -534,14 +548,18 @@ function drawKnowledgeGraphCanvas(
   for (const edge of layout.edges) {
     const source = knowledgeGraphToCanvasPoint(edge.source, safeCamera);
     const target = knowledgeGraphToCanvasPoint(edge.target, safeCamera);
+    const relationKind = knowledgeGraphRelationKind(edge.kind);
     context.beginPath();
     context.moveTo(source.x, source.y);
     context.lineTo(target.x, target.y);
-    context.strokeStyle = edge.kind === "wikilink" ? "rgba(220, 125, 87, 0.78)" : "rgba(138, 129, 118, 0.72)";
-    context.lineWidth = edge.kind === "wikilink" ? 1.45 : 1.2;
-    context.setLineDash(edge.kind === "wikilink" ? [5, 4] : [4, 4]);
-    context.lineDashOffset = edgeDashOffset;
+    context.strokeStyle = knowledgeGraphEdgeColor(relationKind);
+    context.lineWidth = knowledgeGraphEdgeWidth(relationKind);
+    context.setLineDash(knowledgeGraphEdgeDash(relationKind));
+    context.lineDashOffset = relationKind === "frontmatter" ? 0 : edgeDashOffset;
     context.stroke();
+    if (relationKind === "frontmatter") {
+      drawKnowledgeGraphEdgeLabel(context, source, target, knowledgeGraphRelationLabel(edge.kind));
+    }
   }
   context.setLineDash([]);
   context.lineDashOffset = 0;
@@ -568,19 +586,26 @@ function drawKnowledgeGraphCanvas(
 
   context.textAlign = "center";
   context.textBaseline = "top";
-  context.font = "11px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
   for (const node of layout.nodes) {
     if (!node.showLabel && hoveredNodeId !== node.id) continue;
     const point = knowledgeGraphToCanvasPoint(node, safeCamera);
     const radius = Math.max(3.4, node.radius * safeCamera.scale);
+    const labelFontSize = knowledgeGraphLabelFontSize(radius, hoveredNodeId === node.id);
+    const labelTop = point.y + radius + Math.max(4, labelFontSize * 0.42);
     const label = ellipsizeCanvasLabel(node.label, hoveredNodeId === node.id ? 22 : 14);
-    context.lineWidth = 3;
+    context.font = `${labelFontSize}px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif`;
+    context.lineWidth = Math.max(2, labelFontSize * 0.28);
     context.strokeStyle = "rgba(31, 29, 26, 0.72)";
-    context.strokeText(label, point.x, point.y + radius + 5);
+    context.strokeText(label, point.x, labelTop);
     context.fillStyle = "rgba(236, 229, 219, 0.86)";
-    context.fillText(label, point.x, point.y + radius + 5);
+    context.fillText(label, point.x, labelTop);
   }
   context.restore();
+}
+
+function knowledgeGraphLabelFontSize(nodePixelRadius: number, hovered: boolean) {
+  const base = nodePixelRadius * 0.72 + 3.2;
+  return clamp(hovered ? base + 1.2 : base, 7, 13.5);
 }
 
 function hexToRgba(hex: string, alpha: number) {
@@ -596,6 +621,73 @@ function hexToRgba(hex: string, alpha: number) {
 function ellipsizeCanvasLabel(label: string, maxLength: number) {
   if (label.length <= maxLength) return label;
   return `${label.slice(0, Math.max(1, maxLength - 1))}…`;
+}
+
+function knowledgeGraphRelationKind(kind: string) {
+  if (kind.startsWith("frontmatter:")) return "frontmatter";
+  if (kind === "wikilink") return "wikilink";
+  return "contains";
+}
+
+function knowledgeGraphRelationLabel(kind: string) {
+  return kind.replace(/^frontmatter:/, "").replace(/_/g, " ").slice(0, 22);
+}
+
+function knowledgeGraphEdgeColor(kind: string) {
+  if (kind === "frontmatter") return "rgba(220, 125, 87, 0.9)";
+  if (kind === "wikilink") return "rgba(220, 125, 87, 0.72)";
+  return "rgba(138, 129, 118, 0.64)";
+}
+
+function knowledgeGraphEdgeWidth(kind: string) {
+  if (kind === "frontmatter") return 1.85;
+  if (kind === "wikilink") return 1.35;
+  return 1.1;
+}
+
+function knowledgeGraphEdgeDash(kind: string) {
+  if (kind === "frontmatter") return [];
+  if (kind === "wikilink") return [5, 4];
+  return [4, 5];
+}
+
+function drawKnowledgeGraphEdgeLabel(
+  context: CanvasRenderingContext2D,
+  source: { x: number; y: number },
+  target: { x: number; y: number },
+  label: string,
+) {
+  if (!label) return;
+  const midX = (source.x + target.x) / 2;
+  const midY = (source.y + target.y) / 2;
+  context.save();
+  context.font = "10px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+  const width = Math.min(122, Math.max(34, context.measureText(label).width + 10));
+  context.fillStyle = "rgba(36, 32, 28, 0.76)";
+  context.strokeStyle = "rgba(220, 125, 87, 0.5)";
+  context.lineWidth = 1;
+  roundRectPath(context, midX - width / 2, midY - 8, width, 16, 6);
+  context.fill();
+  context.stroke();
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillStyle = "rgba(248, 238, 229, 0.88)";
+  context.fillText(label, midX, midY + 0.5, width - 8);
+  context.restore();
+}
+
+function roundRectPath(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {
+  const safeRadius = Math.min(radius, width / 2, height / 2);
+  context.beginPath();
+  context.moveTo(x + safeRadius, y);
+  context.lineTo(x + width - safeRadius, y);
+  context.quadraticCurveTo(x + width, y, x + width, y + safeRadius);
+  context.lineTo(x + width, y + height - safeRadius);
+  context.quadraticCurveTo(x + width, y + height, x + width - safeRadius, y + height);
+  context.lineTo(x + safeRadius, y + height);
+  context.quadraticCurveTo(x, y + height, x, y + height - safeRadius);
+  context.lineTo(x, y + safeRadius);
+  context.quadraticCurveTo(x, y, x + safeRadius, y);
 }
 
 function stableNumber(value: string) {

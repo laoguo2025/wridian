@@ -1,5 +1,5 @@
 import { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import {
   restorePromptPillsFromMessage,
   type ChatMessage,
@@ -28,7 +28,7 @@ import {
 } from "./editor/draftReplaceGuard";
 import { DraftEditor, readContentEditableSelection, setContentEditableCaret, type TextSelection } from "./editor/DraftEditor";
 import { baseName, detectDraftKind } from "./editor/draftKind";
-import { libraryFolderPath, libraryFolderTooltip } from "./libraryToolbar";
+import { libraryFolderTooltip } from "./libraryToolbar";
 import {
   CREATIVE_SKILLS,
   DEFAULT_CREATIVE_SKILL_STATE,
@@ -66,9 +66,11 @@ import {
   trashWorkNode,
 } from "./workspace/workspaceClient";
 import type {
+  CreativeSkillSources,
+  ConfiguredModelStatus,
   KnowledgeGraphState,
   MemoryTreeState,
-  CustomApiSettingsStatus,
+  ModelAccountsStatus,
   WorkFileNode,
   WorkspaceInfo,
 } from "./appTypes";
@@ -79,6 +81,12 @@ type FontSizeMode = "default" | "large" | "max";
 type SaveStatus = "idle" | "dirty" | "saving" | "saved" | "error";
 
 type DraftEdit = ChatDraftEdit;
+type FilePreviewState = {
+  extension: string;
+  name: string;
+  path: string;
+  type: "image" | "pdf" | "external";
+};
 
 const DEFAULT_LEFT_PANE_WIDTH = 218;
 const DEFAULT_RIGHT_PANE_WIDTH = 292;
@@ -94,6 +102,23 @@ const FONT_SIZE_SCALE: Record<FontSizeMode, number> = {
   large: 1.12,
   max: 1.25,
 };
+
+function fileExtension(path: string) {
+  const match = /\.([^.\\/]+)$/.exec(path);
+  return match ? match[1].toLowerCase() : "";
+}
+
+function isEditableWorkspaceFile(path: string) {
+  return ["md", "markdown", "txt"].includes(fileExtension(path));
+}
+
+function filePreviewType(path: string): FilePreviewState["type"] {
+  const extension = fileExtension(path);
+  if (["png", "jpg", "jpeg", "webp", "gif", "svg", "bmp"].includes(extension)) return "image";
+  if (extension === "pdf") return "pdf";
+  return "external";
+}
+
 function App() {
   const [theme, setTheme] = useState<Theme>("light");
   const [fontSizeMode, setFontSizeMode] = useState<FontSizeMode>("default");
@@ -104,6 +129,7 @@ function App() {
   const [knowledgeGraphState, setKnowledgeGraphState] = useState<KnowledgeGraphState>({ nodes: [], edges: [], warnings: [] });
   const [knowledgeGraphError, setKnowledgeGraphError] = useState("");
   const [creativeSkillEnabled, setCreativeSkillEnabled] = useState<Record<CreativeSkillId, boolean>>(DEFAULT_CREATIVE_SKILL_STATE);
+  const [creativeSkillSources, setCreativeSkillSources] = useState<CreativeSkillSources>({ knowledgeOps: { available: false } });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [workspace, setWorkspace] = useState<WorkspaceInfo | null>(null);
   const [workspaceError, setWorkspaceError] = useState("");
@@ -113,10 +139,13 @@ function App() {
   const [promptFileContentCache, setPromptFileContentCache] = useState<Record<string, string>>({});
   const [selectedKnowledgeCategoryId, setSelectedKnowledgeCategoryId] = useState("");
   const [activeModelLabel, setActiveModelLabel] = useState("");
+  const [configuredModels, setConfiguredModels] = useState<ConfiguredModelStatus[]>([]);
+  const [selectedModelId, setSelectedModelId] = useState("");
   const [projectState, setProjectState] = useState<ProjectState>({ projects: [] });
   const [projectError, setProjectError] = useState("");
   const [hasDraftSelection, setHasDraftSelection] = useState(false);
   const [selectedPath, setSelectedPath] = useState("");
+  const [filePreview, setFilePreview] = useState<FilePreviewState | null>(null);
   const [loadingPath, setLoadingPath] = useState("");
   const [editorTitle, setEditorTitle] = useState("");
   const [editorContent, setEditorContent] = useState("");
@@ -180,16 +209,32 @@ function App() {
     }
   }, []);
 
+  const loadModelAccounts = useCallback(async () => {
+    try {
+      const status = await invoke<ModelAccountsStatus>("wridian_get_model_accounts");
+      const activeId = status.activeModelId ?? status.configuredModels[0]?.id ?? "";
+      setConfiguredModels(status.configuredModels);
+      setSelectedModelId(activeId);
+      setActiveModelLabel(status.activeModelLabel ?? status.configuredModels.find((model) => model.id === activeId)?.label ?? "未配置模型");
+    } catch {
+      setConfiguredModels([]);
+      setSelectedModelId("");
+      setActiveModelLabel("未配置模型");
+    }
+  }, []);
+
   const sendPrompt = async (override?: { text: string; selectedText?: string }) => {
-    const userInput = (override?.text ?? prompt).trim();
+    const contextPills = override ? [] : promptPills;
+    const userInput = (override?.text ?? prompt).trim() || (contextPills.length ? "请按已选择的技能执行。" : "");
     if (!userInput || chatManager.pending) return;
     if (!override) setPrompt("");
     setMemoryOpen(false);
     const sent = await chatManager.sendPrompt({
       content: editorContent,
-      contextPills: override ? [] : promptPills,
+      contextPills,
       draftKind,
       selectedText: override?.selectedText,
+      selectedModelId,
       sourcePath: selectedPath,
       text: userInput,
       title: editorTitle,
@@ -244,9 +289,13 @@ function App() {
   }, [knowledgeGraphOpen, loadKnowledgeGraph, workspace?.knowledgeFiles.length]);
 
   useEffect(() => {
-    void invoke<CustomApiSettingsStatus>("wridian_get_custom_api_settings")
-      .then((status) => setActiveModelLabel(status.model ?? "未配置模型"))
-      .catch(() => setActiveModelLabel("未配置模型"));
+    void loadModelAccounts();
+  }, [loadModelAccounts]);
+
+  useEffect(() => {
+    void invoke<CreativeSkillSources>("wridian_get_creative_skill_sources")
+      .then(setCreativeSkillSources)
+      .catch(() => setCreativeSkillSources({ knowledgeOps: { available: false } }));
   }, []);
 
   useEffect(() => {
@@ -258,10 +307,13 @@ function App() {
   const files = workspace?.files ?? [];
   const knowledgeFiles = workspace?.knowledgeFiles ?? [];
   const visibleFiles = libraryTab === "works" ? files : knowledgeFiles;
+  const selectedTreePath = selectedPath || filePreview?.path || "";
   const activeLibraryConfigured = libraryTab === "knowledge"
     ? Boolean(workspace?.knowledgeRootConfigured)
     : Boolean(workspace?.workRootConfigured);
   const isRealFile = Boolean(selectedPath);
+  const hasEditorSurface = Boolean(selectedPath || filePreview);
+  const previewUrl = filePreview ? convertFileSrc(filePreview.path) : "";
   const dirty = isRealFile && !loadingPath && editorContent !== lastSavedContent;
 
   const saveCurrentFile = useCallback(async () => {
@@ -304,19 +356,18 @@ function App() {
     }
   };
 
-  const openCurrentLibraryFolder = async () => {
-    setWorkspaceError("");
-    const path = libraryFolderPath(libraryTab, workspace);
-    if (!path) {
-      await chooseLibraryRoot();
-      return;
-    }
+  const switchModel = async (id: string) => {
+    const localLabel = configuredModels.find((model) => model.id === id)?.label ?? "未配置模型";
+    setSelectedModelId(id);
+    setActiveModelLabel(localLabel);
     try {
-      const { openPath } = await import("@tauri-apps/plugin-opener");
-      await openPath(path);
+      const status = await invoke<ModelAccountsStatus>("wridian_select_active_model", { input: { modelId: id } });
+      const activeId = status.activeModelId ?? id;
+      setConfiguredModels(status.configuredModels);
+      setSelectedModelId(activeId);
+      setActiveModelLabel(status.activeModelLabel ?? status.configuredModels.find((model) => model.id === activeId)?.label ?? localLabel);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setWorkspaceError(message.includes("not allowed") || message.includes("Tauri") ? "请在 Wridian 桌面端打开本地文件夹。" : message);
+      chatManager.setError(error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -328,6 +379,7 @@ function App() {
   const workspaceRootPath = libraryTab === "knowledge"
     ? activeLibraryConfigured ? workspace?.knowledgeRootPath || "" : ""
     : activeLibraryConfigured ? workspace?.filesRootPath || workspace?.activeWorkRoot || "" : "";
+  const currentDirectoryLabel = workspaceRootPath ? baseName(workspaceRootPath) : "";
 
   const runWorkspaceAction = async (action: () => Promise<WorkspaceInfo>) => {
     setWorkspaceError("");
@@ -420,7 +472,26 @@ function App() {
   }, [fileMenu]);
 
   const openFilePath = async (requestedPath: string, fallbackName = "") => {
+    if (!isEditableWorkspaceFile(requestedPath)) {
+      const name = fallbackName || requestedPath.split(/[\\/]/).pop() || "未命名文件";
+      setSelectedPath("");
+      setFilePreview({
+        extension: fileExtension(requestedPath).toUpperCase(),
+        name,
+        path: requestedPath,
+        type: filePreviewType(requestedPath),
+      });
+      setEditorTitle(name);
+      setEditorContent("");
+      setLastSavedContent("");
+      setPromptPills([]);
+      setPendingEdits([]);
+      setSaveError("");
+      setSaveStatus("saved");
+      return;
+    }
     setLoadingPath(requestedPath);
+    setFilePreview(null);
     setEditorTitle(fallbackName || requestedPath.split(/[\\/]/).pop() || "未命名文件");
     setSaveError("");
     setSaveStatus("idle");
@@ -458,6 +529,16 @@ function App() {
   const openKnowledgeGraphFile = (path: string) => {
     setKnowledgeGraphOpen(false);
     void openFilePath(path);
+  };
+
+  const openPreviewInSystem = async () => {
+    if (!filePreview) return;
+    try {
+      const { openPath } = await import("@tauri-apps/plugin-opener");
+      await openPath(filePreview.path);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : String(error));
+    }
   };
 
   const handleDraftKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
@@ -564,7 +645,12 @@ function App() {
     knowledgeCards: knowledgeSuggestionIndex.cards,
     knowledgeCategories: knowledgeSuggestionIndex.categories,
     selectedKnowledgeCategoryId,
-  }), [draftKind, enabledCreativeSkills, knowledgeSuggestionIndex, selectedKnowledgeCategoryId]);
+  }), [
+    draftKind,
+    enabledCreativeSkills,
+    knowledgeSuggestionIndex,
+    selectedKnowledgeCategoryId,
+  ]);
 
   const statusLabel = useMemo(() => {
     if (saveStatus === "idle") return "读取中";
@@ -762,9 +848,9 @@ function App() {
               </button>
               <button
                 type="button"
-                title={activeLibraryConfigured ? libraryFolderTooltip(libraryTab) : libraryTab === "knowledge" ? "选择知识库文件夹" : "选择作品库文件夹"}
-                aria-label={activeLibraryConfigured ? libraryFolderTooltip(libraryTab) : libraryTab === "knowledge" ? "选择知识库文件夹" : "选择作品库文件夹"}
-                onClick={() => void openCurrentLibraryFolder()}
+                title={libraryFolderTooltip(libraryTab)}
+                aria-label={libraryFolderTooltip(libraryTab)}
+                onClick={() => void chooseLibraryRoot(libraryTab)}
               >
                 <WorkFolderIcon />
               </button>
@@ -778,19 +864,20 @@ function App() {
                   key={node.path}
                   node={node}
                   depth={0}
-                  selectedPath={selectedPath}
+                  selectedPath={selectedTreePath}
                   onOpenFile={openFile}
                   onOpenMenu={openFileContextMenu}
                 />
               ))
-            ) : (
-              <button type="button" className="library-empty-action" onClick={() => void chooseLibraryRoot(libraryTab)}>
-                {libraryTab === "knowledge" ? "选择知识库文件夹" : "选择作品库文件夹"}
-              </button>
-            )}
+            ) : null}
           </div>
 
           <div className="rail-bottom">
+            {currentDirectoryLabel ? (
+              <div className="rail-current-directory" title={workspaceRootPath}>
+                当前目录：{currentDirectoryLabel}
+              </div>
+            ) : null}
             <button type="button" title="系统设置" aria-label="系统设置" onClick={() => setSettingsOpen(true)}>
               <SettingsIcon />
             </button>
@@ -807,17 +894,21 @@ function App() {
         />
 
         <main className="writing-pane">
-          <section className={`paper ${selectedPath ? "" : "paper-empty"}`} aria-label="正文编辑区">
-            {selectedPath ? (
+          <section className={`paper ${hasEditorSurface ? "" : "paper-empty"}`} aria-label="正文编辑区">
+            {hasEditorSurface ? (
               <div className="paper-topline">
-                <div className="paper-kicker">{baseName(selectedPath)}</div>
+                <div className="paper-kicker">{selectedPath ? baseName(selectedPath) : filePreview?.name}</div>
                 <div className="paper-actions">
-                  <button type="button" className="paper-action" onClick={attachCurrentSelectionToPrompt} disabled={!hasDraftSelection}>
-                    添加选区到输入框
-                  </button>
-                  <div className={`save-state ${saveStatus}`} title={saveError || undefined}>
-                    {statusLabel}
-                  </div>
+                  {selectedPath ? (
+                    <>
+                      <button type="button" className="paper-action" onClick={attachCurrentSelectionToPrompt} disabled={!hasDraftSelection}>
+                        添加选区到输入框
+                      </button>
+                      <div className={`save-state ${saveStatus}`} title={saveError || undefined}>
+                        {statusLabel}
+                      </div>
+                    </>
+                  ) : null}
                 </div>
               </div>
             ) : null}
@@ -841,6 +932,34 @@ function App() {
                   onSelectionChange={updateDraftSelection}
                 />
               </>
+            ) : filePreview ? (
+              <div className="file-preview" aria-label="只读文件预览">
+                <div className="file-preview-header">
+                  <div>
+                    <div className="file-preview-kicker">{filePreview.extension || "FILE"}</div>
+                    <h1>{filePreview.name}</h1>
+                  </div>
+                  <button type="button" className="paper-action" onClick={() => void openPreviewInSystem()}>
+                    用本机程序打开
+                  </button>
+                </div>
+                {filePreview.type === "image" ? (
+                  <div className="file-preview-canvas image">
+                    <img src={previewUrl} alt={filePreview.name} />
+                  </div>
+                ) : filePreview.type === "pdf" ? (
+                  <div className="file-preview-canvas document">
+                    <iframe src={previewUrl} title={filePreview.name} />
+                  </div>
+                ) : (
+                  <div className="file-preview-canvas external">
+                    <div className="file-preview-placeholder">
+                      <strong>只读文件</strong>
+                      <span>当前格式不能在文件编辑区直接编辑。请用本机程序查看。</span>
+                    </div>
+                  </div>
+                )}
+              </div>
             ) : (
               <div className="empty-editor" aria-label="空文件编辑区">文件编辑区</div>
             )}
@@ -858,6 +977,7 @@ function App() {
         />
 
         <ChatPanel
+          configuredModels={configuredModels}
           error={chatManager.error}
           messages={chatManager.messages}
           onCopy={copyText}
@@ -868,9 +988,11 @@ function App() {
           promptPills={promptPills}
           promptSuggestions={promptSuggestions}
           activeModelLabel={activeModelLabel}
+          selectedModelId={selectedModelId}
           projectError={projectError}
           projects={projectState.projects}
           selectedProjectId={projectState.activeProjectId ?? ""}
+          onSelectModel={(id) => void switchModel(id)}
           onSelectProject={(id) => void switchProject(id)}
           onPromptChange={setPrompt}
           onPromptPillsChange={setPromptPills}
@@ -882,6 +1004,12 @@ function App() {
           }}
           onRemovePill={(id) => setPromptPills((current) => current.filter((pill) => pill.id !== id))}
           onSelectSuggestion={(suggestion) => {
+            if (suggestion.kind === "command") {
+              if (suggestion.pillKind === "tool") {
+                setPromptPills((current) => upsertPromptContextPill(current, createPromptPillFromSuggestion(suggestion)));
+              }
+              return;
+            }
             if (suggestion.kind !== "context") return;
             if (suggestion.id.startsWith("knowledge-category:")) {
               const categoryId = suggestion.insertText.slice("category:".length);
@@ -929,10 +1057,11 @@ function App() {
           onToggle={(id) => {
             setCreativeSkillEnabled((current) => ({ ...current, [id]: !current[id] }));
           }}
+          sources={creativeSkillSources}
           skills={CREATIVE_SKILLS}
         />
       ) : null}
-      {settingsOpen ? <ModelSettingsDialog onClose={() => setSettingsOpen(false)} /> : null}
+      {settingsOpen ? <ModelSettingsDialog onClose={() => setSettingsOpen(false)} onChanged={loadModelAccounts} /> : null}
       {fileMenu ? (
         <FileContextMenuView
           menu={fileMenu}

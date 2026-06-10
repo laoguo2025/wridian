@@ -174,7 +174,7 @@ function PromptTypeaheadPlugin({
     editor.update(() => {
       replacePromptTrigger(currentTrigger, suggestion);
     });
-    if (suggestion.kind === "context") {
+    if (suggestion.kind === "context" || suggestion.pillKind === "tool") {
       onSelectSuggestion(suggestion);
     }
     closeMenu();
@@ -288,7 +288,7 @@ function replacePromptTrigger(trigger: PromptTriggerState, suggestion: PromptSug
   const afterText = text.slice(trigger.end);
   const nodes: LexicalNode[] = [];
   if (beforeText) nodes.push($createTextNode(beforeText));
-  if (suggestion.kind === "context") {
+  if (suggestion.kind === "context" || suggestion.pillKind === "tool") {
     nodes.push($createPromptPillNode(createPromptPillFromSuggestion(suggestion)));
     nodes.push($createTextNode(afterText ? ` ${afterText}` : " "));
   } else {

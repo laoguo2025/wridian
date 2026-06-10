@@ -1,5 +1,6 @@
 mod chat_persistence;
 mod cocreation;
+mod creative_skills;
 mod knowledge_graph;
 mod memory;
 mod model_accounts;
@@ -23,6 +24,17 @@ pub fn run() {
             workspace::wridian_duplicate_work_node,
             workspace::wridian_rename_work_node,
             workspace::wridian_trash_work_node,
+            creative_skills::wridian_get_creative_skill_sources,
+            model_accounts::wridian_get_model_accounts,
+            model_accounts::wridian_save_model_provider,
+            model_accounts::wridian_select_active_model,
+            model_accounts::wridian_delete_model_provider,
+            model_accounts::wridian_test_model_provider,
+            model_accounts::wridian_test_model_provider_config,
+            model_accounts::wridian_anthropic_oauth_start,
+            model_accounts::wridian_anthropic_oauth_complete,
+            model_accounts::wridian_openai_oauth_login,
+            model_accounts::wridian_google_gemini_oauth_login,
             model_accounts::wridian_get_custom_api_settings,
             model_accounts::wridian_save_custom_api_settings,
             model_accounts::wridian_test_custom_api,

@@ -31,6 +31,15 @@ export type SaveFileResponse = {
   savedAt: string;
 };
 
+export type CreativeSkillSource = {
+  available: boolean;
+  path?: string | null;
+};
+
+export type CreativeSkillSources = {
+  knowledgeOps: CreativeSkillSource;
+};
+
 export type CustomApiSettingsStatus = {
   configured: boolean;
   baseUrl?: string | null;
@@ -41,6 +50,36 @@ export type CustomApiSettingsStatus = {
 export type TestCustomApiResponse = {
   ok: boolean;
   message: string;
+};
+
+export type ConfiguredModelStatus = {
+  id: string;
+  label: string;
+  providerId: string;
+  providerName: string;
+  protocol: "openai-compatible" | "anthropic" | "google" | string;
+  model: string;
+};
+
+export type ModelProviderStatus = {
+  id: string;
+  presetKey?: string | null;
+  providerName: string;
+  providerType?: string | null;
+  protocol: "openai-compatible" | "anthropic" | "google" | string;
+  authStyle?: "api_key" | "auth_token" | "oauth_external" | string;
+  configured: boolean;
+  baseUrl?: string | null;
+  models: string[];
+  maskedKey?: string | null;
+  extraEnv?: Record<string, string>;
+};
+
+export type ModelAccountsStatus = {
+  activeModelId?: string | null;
+  activeModelLabel?: string | null;
+  configuredModels: ConfiguredModelStatus[];
+  providers: ModelProviderStatus[];
 };
 
 export type MemoryTreeNode = {

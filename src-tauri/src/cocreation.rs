@@ -1,5 +1,9 @@
 use crate::memory::{read_relevant_memory_snippets, write_memory_leaves, MemoryLeafDraft};
-use crate::model_accounts::{read_custom_api_settings, StoredCustomApiSettings};
+use crate::model_accounts::{
+    anthropic_messages_url, is_openai_oauth_settings, openai_chat_completions_url,
+    openai_oauth_account_id, read_active_model_settings, read_anthropic_response_text,
+    read_gemini_response_text, response_body_summary, ActiveModelSettings,
+};
 use crate::projects::{active_project_model, read_active_project_context};
 use crate::runtime::{ensure_workspace, runtime_root, wridian_data_dir};
 use crate::workspace::{read_active_work_root, resolved_knowledge_root};
@@ -8,6 +12,16 @@ use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+const BUDGET_ACTIVE_CONTEXT_CHARS: usize = 1200;
+const BUDGET_CURRENT_DRAFT_CHARS: usize = 7000;
+const BUDGET_EXPLICIT_ITEM_CHARS: usize = 1400;
+const BUDGET_EXPLICIT_TOTAL_CHARS: usize = 4200;
+const BUDGET_MEMORY_TOTAL_CHARS: usize = 2200;
+const BUDGET_PROJECT_CONTEXT_CHARS: usize = 2600;
+const BUDGET_SELECTION_CHARS: usize = 3000;
+const BUDGET_TOOL_ITEM_CHARS: usize = 1800;
+const BUDGET_TOOL_TOTAL_CHARS: usize = 2600;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -18,6 +32,7 @@ pub(crate) struct CoCreateInput {
     draft_kind: Option<String>,
     user_input: String,
     selected_text: Option<String>,
+    selected_model_id: Option<String>,
     #[serde(default)]
     context_items: Vec<DialogueContextItem>,
 }
@@ -59,8 +74,8 @@ pub(crate) async fn wridian_cocreate(mut input: CoCreateInput) -> Result<CoCreat
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
     input.context_items = expand_context_items(&data_dir, &input.context_items)?;
-    let settings = read_custom_api_settings(&data_dir)?
-        .ok_or_else(|| "请先在模型设置里保存第三方 API。".to_string())?;
+    let settings = read_active_model_settings(&data_dir, input.selected_model_id.as_deref())?
+        .ok_or_else(|| "请先在模型设置里保存模型账户。".to_string())?;
     let memories_used =
         read_relevant_memory_snippets(&data_dir, &input.source_path, &input.title, 8)?;
     let active_context = read_active_context(&data_dir);
@@ -106,14 +121,119 @@ struct ParsedCoCreateResponse {
 }
 
 async fn cocreate_with_model(
-    settings: &StoredCustomApiSettings,
+    settings: &ActiveModelSettings,
     project_model: Option<&str>,
     input: &CoCreateInput,
     memories: &[String],
     active_context: &str,
     active_project_context: &str,
 ) -> Result<ParsedCoCreateResponse, String> {
-    let url = format!("{}/chat/completions", settings.base_url);
+    if is_openai_oauth_settings(settings) {
+        return cocreate_with_openai_oauth(
+            settings,
+            project_model,
+            input,
+            memories,
+            active_context,
+            active_project_context,
+        )
+        .await;
+    }
+    match settings.protocol.as_str() {
+        "anthropic" => {
+            cocreate_with_anthropic(
+                settings,
+                project_model,
+                input,
+                memories,
+                active_context,
+                active_project_context,
+            )
+            .await
+        }
+        "google" => {
+            cocreate_with_gemini(
+                settings,
+                project_model,
+                input,
+                memories,
+                active_context,
+                active_project_context,
+            )
+            .await
+        }
+        _ => {
+            cocreate_with_openai_compatible(
+                settings,
+                project_model,
+                input,
+                memories,
+                active_context,
+                active_project_context,
+            )
+            .await
+        }
+    }
+}
+
+async fn cocreate_with_openai_oauth(
+    settings: &ActiveModelSettings,
+    project_model: Option<&str>,
+    input: &CoCreateInput,
+    memories: &[String],
+    active_context: &str,
+    active_project_context: &str,
+) -> Result<ParsedCoCreateResponse, String> {
+    let url = format!("{}/responses", settings.base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(90))
+        .build()
+        .map_err(|error| format!("对话客户端创建失败：{error}"))?;
+    let mut request = client.post(url).bearer_auth(&settings.api_key);
+    if let Some(account_id) = openai_oauth_account_id()? {
+        request = request.header("chatgpt-account-id", account_id);
+    }
+    let response = request
+        .json(&json!({
+            "model": project_model.unwrap_or(&settings.model),
+            "instructions": cocreation_system_prompt(),
+            "input": build_cocreation_prompt(input, memories, active_context, active_project_context),
+            "store": false,
+            "temperature": 0.7
+        }))
+        .send()
+        .await
+        .map_err(|error| format!("对话请求失败：{error}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("对话响应读取失败：{error}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "对话请求失败：HTTP {} {}",
+            status.as_u16(),
+            response_body_summary(&body)
+        ));
+    }
+    let content = read_model_response_text(&body)?;
+    let parsed = parse_cocreation_model_output(&content)?;
+    if parsed.reply.trim().is_empty() {
+        Err("模型返回了空回复。".to_string())
+    } else {
+        Ok(parsed)
+    }
+}
+
+async fn cocreate_with_openai_compatible(
+    settings: &ActiveModelSettings,
+    project_model: Option<&str>,
+    input: &CoCreateInput,
+    memories: &[String],
+    active_context: &str,
+    active_project_context: &str,
+) -> Result<ParsedCoCreateResponse, String> {
+    let url = openai_chat_completions_url(&settings.base_url);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(90))
         .build()
@@ -148,7 +268,7 @@ async fn cocreate_with_model(
         return Err(format!(
             "对话请求失败：HTTP {} {}",
             status.as_u16(),
-            body.chars().take(240).collect::<String>()
+            response_body_summary(&body)
         ));
     }
     let content = read_model_response_text(&body)?;
@@ -160,10 +280,136 @@ async fn cocreate_with_model(
     }
 }
 
+async fn cocreate_with_anthropic(
+    settings: &ActiveModelSettings,
+    project_model: Option<&str>,
+    input: &CoCreateInput,
+    memories: &[String],
+    active_context: &str,
+    active_project_context: &str,
+) -> Result<ParsedCoCreateResponse, String> {
+    let url = anthropic_messages_url(&settings.base_url);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(90))
+        .build()
+        .map_err(|error| format!("对话客户端创建失败：{error}"))?;
+    let mut request = client.post(url).header("anthropic-version", "2023-06-01");
+    request = if settings.auth_style == "oauth_external" {
+        request
+            .bearer_auth(&settings.api_key)
+            .header("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
+            .header("user-agent", "claude-cli/2.1.74 (external, cli)")
+            .header("x-app", "cli")
+    } else if settings.auth_style == "auth_token" {
+        request.bearer_auth(&settings.api_key)
+    } else {
+        request.header("x-api-key", &settings.api_key)
+    };
+    let response = request
+        .json(&json!({
+            "model": project_model.unwrap_or(&settings.model),
+            "system": cocreation_system_prompt(),
+            "messages": [
+                {
+                    "role": "user",
+                    "content": build_cocreation_prompt(input, memories, active_context, active_project_context)
+                }
+            ],
+            "max_tokens": 2048,
+            "temperature": 0.7
+        }))
+        .send()
+        .await
+        .map_err(|error| format!("对话请求失败：{error}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("对话响应读取失败：{error}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "对话请求失败：HTTP {} {}",
+            status.as_u16(),
+            response_body_summary(&body)
+        ));
+    }
+    let content = read_anthropic_response_text(&body)?;
+    let parsed = parse_cocreation_model_output(&content)?;
+    if parsed.reply.trim().is_empty() {
+        Err("模型返回了空回复。".to_string())
+    } else {
+        Ok(parsed)
+    }
+}
+
+async fn cocreate_with_gemini(
+    settings: &ActiveModelSettings,
+    project_model: Option<&str>,
+    input: &CoCreateInput,
+    memories: &[String],
+    active_context: &str,
+    active_project_context: &str,
+) -> Result<ParsedCoCreateResponse, String> {
+    let model = project_model.unwrap_or(&settings.model);
+    let url = format!("{}/models/{}:generateContent", settings.base_url, model);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(90))
+        .build()
+        .map_err(|error| format!("对话客户端创建失败：{error}"))?;
+    let mut request = client.post(if settings.auth_style == "oauth_external" {
+        url
+    } else {
+        format!("{}?key={}", url, settings.api_key)
+    });
+    if settings.auth_style == "oauth_external" {
+        request = request.bearer_auth(&settings.api_key);
+    }
+    let response = request
+        .json(&json!({
+            "systemInstruction": {
+                "parts": [{ "text": cocreation_system_prompt() }]
+            },
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        { "text": build_cocreation_prompt(input, memories, active_context, active_project_context) }
+                    ]
+                }
+            ],
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "temperature": 0.7
+            }
+        }))
+        .send()
+        .await
+        .map_err(|error| format!("对话请求失败：{error}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("对话响应读取失败：{error}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "对话请求失败：HTTP {} {}",
+            status.as_u16(),
+            response_body_summary(&body)
+        ));
+    }
+    let content = read_gemini_response_text(&body)?;
+    let parsed = parse_cocreation_model_output(&content)?;
+    if parsed.reply.trim().is_empty() {
+        Err("模型返回了空回复。".to_string())
+    } else {
+        Ok(parsed)
+    }
+}
+
 fn read_active_context(data_dir: &Path) -> String {
     let path = runtime_root(data_dir).join("active-context.json");
     fs::read_to_string(path)
-        .map(|content| compact_text(&content, 1200))
+        .map(|content| compact_text(&content, BUDGET_ACTIVE_CONTEXT_CHARS))
         .unwrap_or_default()
 }
 
@@ -270,48 +516,42 @@ fn build_cocreation_prompt(
     active_context: &str,
     active_project_context: &str,
 ) -> String {
-    let memories_block = if memories.is_empty() {
-        "暂无记忆树上下文。".to_string()
-    } else {
-        memories
-            .iter()
-            .map(|memory| format!("- {memory}"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
+    let memories_block = render_memory_context(memories);
     let active_context_block = if active_context.is_empty() {
         "暂无当前现场。".to_string()
     } else {
-        active_context.to_string()
+        compact_text(active_context, BUDGET_ACTIVE_CONTEXT_CHARS)
     };
     let active_project_block = if active_project_context.trim().is_empty() {
         "未启用 Project Mode。".to_string()
     } else {
-        active_project_context.to_string()
+        compact_text(active_project_context, BUDGET_PROJECT_CONTEXT_CHARS)
     };
     let draft_kind = match input.draft_kind.as_deref() {
         Some("screenplay") => "短剧/剧本稿件",
         _ => "小说/散文稿件",
     };
-    let explicit_context_block = render_context_items(&input.context_items);
+    let explicit_context_block = render_context_items_by_slot(&input.context_items, false);
+    let tool_context_block = render_context_items_by_slot(&input.context_items, true);
 
     let source_label = prompt_source_label(&input.source_path, &input.title);
     format!(
-        "稿件类型：{}\n当前文件：{}\n来源路径：{}\n\nProject Mode：\n{}\n\n当前现场：\n{}\n\n记忆树上下文：\n{}\n\n显式上下文：\n{}\n\n用户选中的片段：\n{}\n\n稿件内容：\n{}\n\n用户这次想要：\n{}",
+        "稿件类型：{}\n当前文件：{}\n来源路径：{}\n\n上下文编译顺序：当前稿件/选区 → Project Mode → 当前现场 → 记忆树 → 显式知识卡/相关稿件 → 技能协议 → 用户请求。\n\n[1 当前稿件与选区]\n用户选中的片段：\n{}\n\n稿件内容：\n{}\n\n[2 Project Mode]\n{}\n\n[3 当前现场]\n{}\n\n[4 记忆树上下文]\n{}\n\n[5 显式上下文]\n{}\n\n[6 技能协议]\n{}\n\n用户这次想要：\n{}",
         draft_kind,
         input.title,
         source_label,
+        input
+            .selected_text
+            .as_deref()
+            .map(|text| compact_text(text, BUDGET_SELECTION_CHARS))
+            .filter(|text| !text.is_empty())
+            .unwrap_or_else(|| "未选择片段。".to_string()),
+        compact_text(&input.content, BUDGET_CURRENT_DRAFT_CHARS),
         active_project_block,
         active_context_block,
         memories_block,
         explicit_context_block,
-        input
-            .selected_text
-            .as_deref()
-            .map(|text| compact_text(text, 3000))
-            .filter(|text| !text.is_empty())
-            .unwrap_or_else(|| "未选择片段。".to_string()),
-        compact_text(&input.content, 7000),
+        tool_context_block,
         input.user_input.trim()
     )
 }
@@ -325,37 +565,84 @@ fn prompt_source_label(source_path: &str, title: &str) -> String {
         .unwrap_or_else(|| "当前稿件".to_string())
 }
 
-fn render_context_items(items: &[DialogueContextItem]) -> String {
-    if items.is_empty() {
-        return "无显式上下文。".to_string();
+fn render_memory_context(memories: &[String]) -> String {
+    if memories.is_empty() {
+        return "暂无记忆树上下文。".to_string();
     }
-    items
+    let mut rendered = String::new();
+    for memory in memories {
+        let item = format!("- {}\n", compact_text(memory, 420));
+        if rendered.chars().count() + item.chars().count() > BUDGET_MEMORY_TOTAL_CHARS {
+            rendered.push_str("- 其余记忆因预算限制未展开。\n");
+            break;
+        }
+        rendered.push_str(&item);
+    }
+    rendered.trim().to_string()
+}
+
+fn render_context_items_by_slot(items: &[DialogueContextItem], tool_slot: bool) -> String {
+    let filtered = items
         .iter()
-        .filter_map(|item| {
-            let value = compact_text(&item.value, 1800);
-            if value.trim().is_empty() {
-                return None;
-            }
-            let source = item
-                .relative_path
-                .as_deref()
-                .or(item.source_path.as_deref())
-                .unwrap_or("")
-                .trim();
-            let header = if source.is_empty() {
-                format!("【{}｜{}】", item.kind.trim(), item.label.trim())
-            } else {
-                format!(
-                    "【{}｜{}｜{}】",
-                    item.kind.trim(),
-                    item.label.trim(),
-                    source
-                )
-            };
-            Some(format!("{header}\n{value}"))
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+        .filter(|item| (item.kind.trim() == "tool") == tool_slot)
+        .collect::<Vec<_>>();
+    render_context_items(
+        &filtered,
+        if tool_slot {
+            BUDGET_TOOL_ITEM_CHARS
+        } else {
+            BUDGET_EXPLICIT_ITEM_CHARS
+        },
+        if tool_slot {
+            BUDGET_TOOL_TOTAL_CHARS
+        } else {
+            BUDGET_EXPLICIT_TOTAL_CHARS
+        },
+    )
+}
+
+fn render_context_items(
+    items: &[&DialogueContextItem],
+    per_item_budget: usize,
+    total_budget: usize,
+) -> String {
+    if items.is_empty() {
+        return "无。".to_string();
+    }
+    let mut rendered = String::new();
+    for item in items {
+        let value = compact_text(&item.value, per_item_budget);
+        if value.trim().is_empty() {
+            continue;
+        }
+        let source = item
+            .relative_path
+            .as_deref()
+            .or(item.source_path.as_deref())
+            .unwrap_or("")
+            .trim();
+        let header = if source.is_empty() {
+            format!("【{}｜{}】", item.kind.trim(), item.label.trim())
+        } else {
+            format!(
+                "【{}｜{}｜{}】",
+                item.kind.trim(),
+                item.label.trim(),
+                source
+            )
+        };
+        let block = format!("{header}\n{value}\n");
+        if rendered.chars().count() + block.chars().count() > total_budget {
+            rendered.push_str("【预算】其余上下文因预算限制未展开。\n");
+            break;
+        }
+        rendered.push_str(&block);
+    }
+    if rendered.trim().is_empty() {
+        "无。".to_string()
+    } else {
+        rendered.trim().to_string()
+    }
 }
 
 pub(crate) fn read_model_response_text(body: &str) -> Result<String, String> {
@@ -527,6 +814,7 @@ mod tests {
             draft_kind: Some("prose".to_string()),
             user_input: "强化她进门前的动机".to_string(),
             selected_text: None,
+            selected_model_id: None,
             context_items: Vec::new(),
         };
         let prompt = build_cocreation_prompt(
@@ -550,6 +838,7 @@ mod tests {
             draft_kind: Some("prose".to_string()),
             user_input: "结合人物卡改写".to_string(),
             selected_text: Some("她推开门".to_string()),
+            selected_model_id: None,
             context_items: vec![DialogueContextItem {
                 kind: "memory".to_string(),
                 label: "人物卡".to_string(),
@@ -562,8 +851,43 @@ mod tests {
         let prompt = build_cocreation_prompt(&input, &[], "", "");
 
         assert!(prompt.contains("用户选中的片段：\n她推开门"));
-        assert!(prompt.contains("显式上下文："));
+        assert!(prompt.contains("[5 显式上下文]"));
         assert!(prompt.contains("【memory｜人物卡｜人物卡.md】\n她怕黑，但不承认。"));
+    }
+
+    #[test]
+    fn build_prompt_separates_tool_protocol_from_explicit_context_items() {
+        let input = CoCreateInput {
+            source_path: "demo://03.md".to_string(),
+            title: "03.md".to_string(),
+            content: "她推开门，没有立刻喊人。".to_string(),
+            draft_kind: Some("prose".to_string()),
+            user_input: "体检知识库".to_string(),
+            selected_text: None,
+            selected_model_id: None,
+            context_items: vec![
+                DialogueContextItem {
+                    kind: "tool".to_string(),
+                    label: "知识库运维".to_string(),
+                    value: "Wridian 技能协议：知识库运维".to_string(),
+                    source_path: None,
+                    relative_path: None,
+                },
+                DialogueContextItem {
+                    kind: "memory".to_string(),
+                    label: "知识卡".to_string(),
+                    value: "一条显式知识卡".to_string(),
+                    source_path: None,
+                    relative_path: Some("03故事模型/知识卡.md".to_string()),
+                },
+            ],
+        };
+
+        let prompt = build_cocreation_prompt(&input, &[], "", "");
+
+        assert!(prompt
+            .contains("[5 显式上下文]\n【memory｜知识卡｜03故事模型/知识卡.md】\n一条显式知识卡"));
+        assert!(prompt.contains("[6 技能协议]\n【tool｜知识库运维】\nWridian 技能协议：知识库运维"));
     }
 
     #[test]
@@ -575,6 +899,7 @@ mod tests {
             draft_kind: Some("prose".to_string()),
             user_input: "润色".to_string(),
             selected_text: None,
+            selected_model_id: None,
             context_items: Vec::new(),
         };
 

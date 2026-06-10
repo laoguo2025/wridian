@@ -11,8 +11,8 @@ export const CREATIVE_SKILLS: CreativeSkill[] = [
   {
     id: "knowledgeOps",
     title: "知识库运维",
-    status: "目录体检、归档、进化",
-    prompt: "请调用知识库运维技能，检查当前知识库目录、分类、知识卡和归档状态，并给出需要修正的清单。",
+    status: "接入 zhishiku-skill 规则",
+    prompt: "请调用知识库运维技能，按当前知识库真实目录做体检；先给出问题清单、风险等级和建议动作，不要直接改动文件。",
   },
   {
     id: "workDecompose",

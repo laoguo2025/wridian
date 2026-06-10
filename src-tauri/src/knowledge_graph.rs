@@ -73,6 +73,7 @@ fn read_knowledge_graph(root: &Path) -> Result<KnowledgeGraphResponse, String> {
         &mut warnings,
     )?;
     collect_wikilink_edges(&card_paths, &card_by_stem, &mut edges, &mut warnings);
+    collect_frontmatter_relation_edges(&card_paths, &card_by_stem, &mut edges, &mut warnings);
     dedupe_edges(&mut edges);
 
     Ok(KnowledgeGraphResponse {
@@ -190,10 +191,14 @@ fn collect_graph_nodes(
                     continue;
                 }
             };
+            let frontmatter = extract_frontmatter_block(&content);
+            let node_kind = frontmatter
+                .and_then(read_frontmatter_node_kind)
+                .unwrap_or_else(|| infer_node_kind_from_path(&relative));
             nodes.push(KnowledgeGraphNode {
                 id: id.clone(),
                 label: title.clone(),
-                kind: "card".to_string(),
+                kind: node_kind,
                 path: Some(path.to_string_lossy().into_owned()),
                 group: parent_group(&relative),
                 size: 6 + extract_wikilinks(&content).len().min(10),
@@ -249,6 +254,156 @@ fn collect_wikilink_edges(
             }
         }
     }
+}
+
+fn collect_frontmatter_relation_edges(
+    card_paths: &[PathBuf],
+    card_by_stem: &HashMap<String, String>,
+    edges: &mut Vec<KnowledgeGraphEdge>,
+    warnings: &mut Vec<String>,
+) {
+    for path in card_paths {
+        let content = match fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(error) => {
+                push_warning(
+                    warnings,
+                    format!("知识卡读取失败（{}）：{error}", path.to_string_lossy()),
+                );
+                continue;
+            }
+        };
+        let Some(source_id) = path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().to_lowercase())
+            .and_then(|stem| card_by_stem.get(&stem).cloned())
+        else {
+            continue;
+        };
+        for (field, link) in extract_frontmatter_relation_links(&content) {
+            if let Some(target_id) = card_by_stem.get(&link) {
+                if *target_id != source_id {
+                    edges.push(KnowledgeGraphEdge {
+                        source: source_id.clone(),
+                        target: target_id.clone(),
+                        kind: format!("frontmatter:{field}"),
+                    });
+                }
+            }
+        }
+    }
+}
+
+fn extract_frontmatter_relation_links(text: &str) -> Vec<(String, String)> {
+    let Some(frontmatter) = extract_frontmatter_block(text) else {
+        return Vec::new();
+    };
+    let mut relations = Vec::new();
+    let mut current_key = String::new();
+    for line in frontmatter.lines() {
+        if let Some((key, value)) = frontmatter_key_value(line) {
+            current_key = normalize_frontmatter_field(key);
+            if is_system_frontmatter_field(&current_key) {
+                current_key.clear();
+                continue;
+            }
+            for link in extract_wikilinks(value) {
+                relations.push((current_key.clone(), link));
+            }
+            continue;
+        }
+        if current_key.is_empty() || !frontmatter_list_item(line) {
+            continue;
+        }
+        for link in extract_wikilinks(line) {
+            relations.push((current_key.clone(), link));
+        }
+    }
+    relations
+}
+
+fn extract_frontmatter_block(text: &str) -> Option<&str> {
+    let rest = text.strip_prefix("---")?;
+    let rest = rest
+        .strip_prefix("\r\n")
+        .or_else(|| rest.strip_prefix('\n'))?;
+    rest.split_once("\n---")
+        .or_else(|| rest.split_once("\r\n---"))
+        .map(|(frontmatter, _)| frontmatter)
+}
+
+fn frontmatter_key_value(line: &str) -> Option<(&str, &str)> {
+    let trimmed = line.trim_start();
+    if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('-') {
+        return None;
+    }
+    let (key, value) = trimmed.split_once(':')?;
+    let key = key.trim();
+    if key.is_empty() {
+        return None;
+    }
+    Some((key, value.trim()))
+}
+
+fn frontmatter_list_item(line: &str) -> bool {
+    line.trim_start().starts_with('-')
+}
+
+fn normalize_frontmatter_field(field: &str) -> String {
+    field.trim().replace(' ', "_").to_lowercase()
+}
+
+fn is_system_frontmatter_field(field: &str) -> bool {
+    field.starts_with('_') || matches!(field, "type" | "kind" | "category" | "status" | "tags")
+}
+
+fn read_frontmatter_node_kind(frontmatter: &str) -> Option<String> {
+    for line in frontmatter.lines() {
+        let (key, value) = frontmatter_key_value(line)?;
+        let field = normalize_frontmatter_field(key);
+        if !matches!(
+            field.as_str(),
+            "type" | "kind" | "card_type" | "wridian_type"
+        ) {
+            continue;
+        }
+        let normalized = normalize_node_kind_value(value);
+        if !normalized.is_empty() {
+            return Some(normalized);
+        }
+    }
+    None
+}
+
+fn normalize_node_kind_value(value: &str) -> String {
+    value
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .replace(' ', "-")
+        .to_lowercase()
+}
+
+fn infer_node_kind_from_path(relative: &str) -> String {
+    let top = relative.split('/').next().unwrap_or("").trim();
+    if top.starts_with("01") {
+        return "source".to_string();
+    }
+    if top.starts_with("02") {
+        return "analysis".to_string();
+    }
+    if top.starts_with("08") {
+        return "skill".to_string();
+    }
+    if top.starts_with("03")
+        || top.starts_with("04")
+        || top.starts_with("05")
+        || top.starts_with("06")
+        || top.starts_with("07")
+    {
+        return "knowledge-card".to_string();
+    }
+    "card".to_string()
 }
 
 fn extract_wikilinks(text: &str) -> HashSet<String> {
@@ -343,6 +498,49 @@ mod tests {
             .iter()
             .any(|edge| edge.source == "card:人物/阿宁.md" && edge.target == "card:城市.md"));
         assert!(graph.warnings.is_empty());
+    }
+
+    #[test]
+    fn graph_reads_frontmatter_relations_and_node_kinds() {
+        let root = std::env::temp_dir().join(format!(
+            "wridian-knowledge-graph-frontmatter-test-{}",
+            crate::runtime::unique_test_suffix()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("03故事模型")).expect("create knowledge folder");
+        fs::create_dir_all(root.join("08大神蒸馏")).expect("create skill folder");
+        fs::write(
+            root.join("03故事模型").join("技法.md"),
+            "---\ntype: method\nrelated_to:\n  - \"[[来源]]\"\nadopts knowledge: \"[[作者Skill]]\"\nstatus: active\n---\n正文 [[来源]]",
+        )
+        .expect("write source");
+        fs::write(root.join("来源.md"), "source").expect("write target");
+        fs::write(root.join("08大神蒸馏").join("作者Skill.md"), "skill").expect("write skill");
+
+        let graph = read_knowledge_graph(&root).expect("graph");
+
+        assert!(graph
+            .nodes
+            .iter()
+            .any(|node| { node.id == "card:03故事模型/技法.md" && node.kind == "method" }));
+        assert!(graph.nodes.iter().any(|node| {
+            node.id == "card:08大神蒸馏/作者Skill.md" && node.kind == "skill"
+        }));
+        assert!(graph.edges.iter().any(|edge| {
+            edge.source == "card:03故事模型/技法.md"
+                && edge.target == "card:来源.md"
+                && edge.kind == "frontmatter:related_to"
+        }));
+        assert!(graph.edges.iter().any(|edge| {
+            edge.source == "card:03故事模型/技法.md"
+                && edge.target == "card:08大神蒸馏/作者Skill.md"
+                && edge.kind == "frontmatter:adopts_knowledge"
+        }));
+        assert!(graph.edges.iter().any(|edge| {
+            edge.source == "card:03故事模型/技法.md"
+                && edge.target == "card:来源.md"
+                && edge.kind == "wikilink"
+        }));
     }
 
     #[test]

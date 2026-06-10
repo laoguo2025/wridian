@@ -7,9 +7,11 @@ import {
 } from "./messageRepository";
 import type { PromptContextPill, PromptSuggestion } from "./promptContext";
 import type { ProjectConfig } from "./projectContext";
+import type { ConfiguredModelStatus } from "../appTypes";
 
 export function ChatPanel({
   activeModelLabel,
+  configuredModels,
   error,
   messages,
   onCopy,
@@ -19,6 +21,7 @@ export function ChatPanel({
   onImagePaste,
   onRemovePill,
   onRetry,
+  onSelectModel,
   onSelectSuggestion,
   onSelectProject,
   onSubmit,
@@ -29,8 +32,10 @@ export function ChatPanel({
   promptPills,
   promptSuggestions,
   selectedProjectId,
+  selectedModelId,
 }: {
   activeModelLabel: string;
+  configuredModels: ConfiguredModelStatus[];
   error: string;
   messages: ChatMessage[];
   onCopy: (text: string) => void;
@@ -40,6 +45,7 @@ export function ChatPanel({
   onImagePaste: (files: File[]) => void;
   onRemovePill: (id: string) => void;
   onRetry: (message: ChatMessage) => void;
+  onSelectModel: (id: string) => void;
   onSelectSuggestion: (suggestion: PromptSuggestion) => void;
   onSelectProject: (id: string) => void;
   onSubmit: () => void;
@@ -50,6 +56,7 @@ export function ChatPanel({
   promptPills: PromptContextPill[];
   promptSuggestions: PromptSuggestion[];
   selectedProjectId: string;
+  selectedModelId: string;
 }) {
   const threadRef = useRef<HTMLDivElement | null>(null);
 
@@ -118,10 +125,24 @@ export function ChatPanel({
           suggestions={promptSuggestions}
         />
         <div className="prompt-footer">
-          <span className="prompt-model-label" aria-label="当前模型">
-            {activeModelLabel || "未配置模型"}
-          </span>
-          <button type="submit" className="prompt-send" aria-label={pending ? "停止" : "发送"} disabled={pending || !prompt.trim()}>
+          {configuredModels.length ? (
+            <select
+              className="prompt-model-select"
+              value={selectedModelId}
+              onChange={(event) => onSelectModel(event.currentTarget.value)}
+              aria-label="切换模型"
+              title={activeModelLabel || "切换模型"}
+            >
+              {configuredModels.map((model) => (
+                <option value={model.id} key={model.id}>{model.label}</option>
+              ))}
+            </select>
+          ) : (
+            <span className="prompt-model-label" aria-label="当前模型">
+              {activeModelLabel || "未配置模型"}
+            </span>
+          )}
+          <button type="submit" className="prompt-send" aria-label={pending ? "停止" : "发送"} disabled={pending || (!prompt.trim() && !promptPills.length)}>
             {pending ? "..." : "发送"}
           </button>
         </div>

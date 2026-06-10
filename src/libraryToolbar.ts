@@ -1,23 +1,5 @@
 export type LibraryTab = "works" | "knowledge";
 
-export type LibraryToolbarWorkspace = {
-  activeWorkRoot?: string | null;
-  filesRootPath?: string | null;
-  workRootConfigured?: boolean;
-  activeKnowledgeRoot?: string | null;
-  knowledgeRootConfigured?: boolean;
-  knowledgeRootPath?: string | null;
-  vaultPath?: string | null;
-};
-
 export function libraryFolderTooltip(tab: LibraryTab): string {
-  return tab === "knowledge" ? "打开本地知识库" : "打开本地作品库";
-}
-
-export function libraryFolderPath(tab: LibraryTab, workspace: LibraryToolbarWorkspace | null): string {
-  if (!workspace) return "";
-  if (tab === "knowledge") {
-    return workspace.knowledgeRootConfigured ? workspace.knowledgeRootPath ?? "" : "";
-  }
-  return workspace.workRootConfigured ? workspace.filesRootPath || workspace.activeWorkRoot || "" : "";
+  return tab === "knowledge" ? "选择知识库文件夹" : "选择作品库文件夹";
 }

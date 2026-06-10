@@ -18,6 +18,7 @@ export type CoCreateRequest = {
   content: string;
   contextItems: PromptContextPill[];
   draftKind: DraftKind;
+  selectedModelId?: string;
   selectedText: string;
   sourcePath: string;
   title: string;
@@ -38,6 +39,7 @@ export async function requestCocreation(request: CoCreateRequest) {
         value: item.value,
       })),
       draftKind: request.draftKind,
+      selectedModelId: request.selectedModelId || null,
       userInput: request.userInput,
       selectedText: request.selectedText || null,
     },
