@@ -120,6 +120,7 @@ type KnowledgeGraphEdge = {
 type KnowledgeGraphState = {
   nodes: KnowledgeGraphNode[];
   edges: KnowledgeGraphEdge[];
+  warnings: string[];
 };
 
 type KnowledgeCategory = {
@@ -169,7 +170,7 @@ function App() {
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [knowledgeGraphOpen, setKnowledgeGraphOpen] = useState(false);
   const [creativeSkillsOpen, setCreativeSkillsOpen] = useState(false);
-  const [knowledgeGraphState, setKnowledgeGraphState] = useState<KnowledgeGraphState>({ nodes: [], edges: [] });
+  const [knowledgeGraphState, setKnowledgeGraphState] = useState<KnowledgeGraphState>({ nodes: [], edges: [], warnings: [] });
   const [knowledgeGraphError, setKnowledgeGraphError] = useState("");
   const [creativeSkillEnabled, setCreativeSkillEnabled] = useState<Record<CreativeSkillId, boolean>>(DEFAULT_CREATIVE_SKILL_STATE);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1978,6 +1979,14 @@ function KnowledgeGraphDrawer({
         </div>
 
         {graphError ? <div className="rail-error">{graphError}</div> : null}
+        {graph.warnings.length ? (
+          <div className="rail-warning">
+            {graph.warnings.slice(0, 3).map((warning) => (
+              <div key={warning}>{warning}</div>
+            ))}
+            {graph.warnings.length > 3 ? <div>还有 {graph.warnings.length - 3} 条图谱提示。</div> : null}
+          </div>
+        ) : null}
 
         <div
           className={dragging ? "knowledge-graph-stage dragging" : "knowledge-graph-stage"}
@@ -2468,7 +2477,7 @@ function ModelSettingsDialog({ onClose }: { onClose: () => void }) {
     setMessage("");
     try {
       const response = await invoke<TestCustomApiResponse>("wridian_test_custom_api");
-      setMessage(response.message || (response.ok ? "连接成功。" : "连接失败。"));
+      setMessage(response.message || (response.ok ? "连接成功，且响应格式可用。" : "连接失败。"));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {

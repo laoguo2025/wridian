@@ -60,27 +60,41 @@ fn render_chat_transcript(input: &SaveChatTranscriptInput) -> String {
     content.push_str(&format!("title: {}\n", escape_yaml(&input.title)));
     content.push_str(&format!("source: {}\n", escape_yaml(&input.source_path)));
     content.push_str("---\n\n");
-    content.push_str(&format!("# {}\n\n", if input.title.trim().is_empty() { "Wridian 对话" } else { input.title.trim() }));
+    content.push_str(&format!(
+        "# {}\n\n",
+        escape_markdown_heading(if input.title.trim().is_empty() {
+            "Wridian 对话"
+        } else {
+            input.title.trim()
+        })
+    ));
 
     for message in &input.messages {
-        let heading = if message.role == "assistant" { "Wridian" } else { "用户" };
+        let heading = if message.role == "assistant" {
+            "Wridian"
+        } else {
+            "用户"
+        };
         content.push_str(&format!("## {heading}\n\n"));
         if let Some(pills) = &message.context_pills {
             if !pills.is_empty() {
                 content.push_str("### 上下文\n\n");
                 for pill in pills {
-                    content.push_str(&format!("- **{}**：{}\n", pill.label.trim(), normalize_line(&pill.value)));
+                    content.push_str(&format!(
+                        "#### {}\n\n{}\n\n",
+                        escape_markdown_heading(pill.label.trim()),
+                        fenced_block(&pill.value)
+                    ));
                 }
-                content.push('\n');
             }
         } else if let Some(selected_text) = &message.selected_text {
             if !selected_text.trim().is_empty() {
                 content.push_str("### 上下文\n\n");
-                content.push_str(selected_text.trim());
+                content.push_str(&fenced_block(selected_text));
                 content.push_str("\n\n");
             }
         }
-        content.push_str(message.text.trim());
+        content.push_str(&fenced_block(&message.text));
         content.push_str("\n\n");
     }
 
@@ -107,6 +121,59 @@ fn escape_yaml(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-fn normalize_line(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ")
+fn escape_markdown_heading(value: &str) -> String {
+    let escaped = value
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .replace('\\', "\\\\")
+        .replace('#', "\\#")
+        .replace('[', "\\[")
+        .replace(']', "\\]");
+    if escaped.is_empty() {
+        "未命名".to_string()
+    } else {
+        escaped
+    }
+}
+
+fn fenced_block(value: &str) -> String {
+    let mut fence = "```";
+    while value.contains(fence) {
+        fence = match fence.len() {
+            3 => "````",
+            4 => "`````",
+            _ => "``````",
+        };
+    }
+    format!("{fence}text\n{}\n{fence}", value.trim())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_chat_transcript_fences_untrusted_content() {
+        let transcript = render_chat_transcript(&SaveChatTranscriptInput {
+            session_id: "session-1".to_string(),
+            title: "# hacked".to_string(),
+            source_path: "source.md".to_string(),
+            messages: vec![ChatTranscriptMessage {
+                role: "user".to_string(),
+                text: "---\ntype: injected\n```".to_string(),
+                selected_text: Some("## not heading".to_string()),
+                context_pills: Some(vec![ChatContextPill {
+                    label: "# pill".to_string(),
+                    value: "- fake list".to_string(),
+                }]),
+            }],
+        });
+
+        assert!(transcript.contains("# \\# hacked"));
+        assert!(transcript.contains("#### \\# pill"));
+        assert!(transcript.contains("````text\n---\ntype: injected\n```\n````"));
+        assert!(transcript.contains("```text\n- fake list\n```"));
+    }
 }

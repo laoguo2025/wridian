@@ -5,11 +5,17 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+const MAX_GRAPH_FILES: usize = 800;
+const MAX_GRAPH_DEPTH: usize = 8;
+const MAX_GRAPH_FILE_BYTES: u64 = 512 * 1024;
+const MAX_GRAPH_WARNINGS: usize = 20;
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct KnowledgeGraphResponse {
     nodes: Vec<KnowledgeGraphNode>,
     edges: Vec<KnowledgeGraphEdge>,
+    warnings: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -40,6 +46,7 @@ pub(crate) fn wridian_get_knowledge_graph() -> Result<KnowledgeGraphResponse, St
         return Ok(KnowledgeGraphResponse {
             nodes: Vec::new(),
             edges: Vec::new(),
+            warnings: Vec::new(),
         });
     }
     read_knowledge_graph(&root)
@@ -51,35 +58,62 @@ fn read_knowledge_graph(root: &Path) -> Result<KnowledgeGraphResponse, String> {
         .map_err(|error| format!("知识库目录解析失败：{error}"))?;
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
+    let mut warnings = Vec::new();
     let mut card_by_stem = HashMap::new();
     let mut card_paths = Vec::new();
 
     collect_graph_nodes(
         &root,
         &root,
+        0,
         &mut nodes,
         &mut edges,
         &mut card_by_stem,
         &mut card_paths,
+        &mut warnings,
     )?;
-    collect_wikilink_edges(&card_paths, &card_by_stem, &mut edges)?;
+    collect_wikilink_edges(&card_paths, &card_by_stem, &mut edges, &mut warnings);
     dedupe_edges(&mut edges);
 
-    Ok(KnowledgeGraphResponse { nodes, edges })
+    Ok(KnowledgeGraphResponse {
+        nodes,
+        edges,
+        warnings,
+    })
 }
 
 fn collect_graph_nodes(
     root: &Path,
     current: &Path,
+    depth: usize,
     nodes: &mut Vec<KnowledgeGraphNode>,
     edges: &mut Vec<KnowledgeGraphEdge>,
     card_by_stem: &mut HashMap<String, String>,
     card_paths: &mut Vec<PathBuf>,
+    warnings: &mut Vec<String>,
 ) -> Result<(), String> {
-    let mut entries = fs::read_dir(current)
-        .map_err(|error| format!("知识图谱目录读取失败：{error}"))?
-        .filter_map(Result::ok)
-        .collect::<Vec<_>>();
+    if depth > MAX_GRAPH_DEPTH {
+        push_warning(
+            warnings,
+            format!("知识图谱已跳过过深目录：{}", current.to_string_lossy()),
+        );
+        return Ok(());
+    }
+    if card_paths.len() >= MAX_GRAPH_FILES {
+        push_warning(
+            warnings,
+            format!("知识图谱已达到最多 {MAX_GRAPH_FILES} 个 Markdown 文件上限。"),
+        );
+        return Ok(());
+    }
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(current).map_err(|error| format!("知识图谱目录读取失败：{error}"))?
+    {
+        match entry {
+            Ok(entry) => entries.push(entry),
+            Err(error) => push_warning(warnings, format!("知识图谱目录项读取失败：{error}")),
+        }
+    }
     entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_lowercase());
 
     for entry in entries {
@@ -106,15 +140,56 @@ fn collect_graph_nodes(
                     kind: "contains".to_string(),
                 });
             }
-            collect_graph_nodes(root, &path, nodes, edges, card_by_stem, card_paths)?;
+            collect_graph_nodes(
+                root,
+                &path,
+                depth + 1,
+                nodes,
+                edges,
+                card_by_stem,
+                card_paths,
+                warnings,
+            )?;
         } else if is_markdown(&path) {
+            if card_paths.len() >= MAX_GRAPH_FILES {
+                push_warning(
+                    warnings,
+                    format!("知识图谱已达到最多 {MAX_GRAPH_FILES} 个 Markdown 文件上限。"),
+                );
+                break;
+            }
+            if let Ok(metadata) = fs::symlink_metadata(&path) {
+                if metadata.file_type().is_symlink() {
+                    push_warning(
+                        warnings,
+                        format!("知识图谱已跳过符号链接：{}", path.to_string_lossy()),
+                    );
+                    continue;
+                }
+                if metadata.len() > MAX_GRAPH_FILE_BYTES {
+                    push_warning(
+                        warnings,
+                        format!("知识图谱已跳过过大文件：{}", path.to_string_lossy()),
+                    );
+                    continue;
+                }
+            }
             let relative = relative_path(root, &path);
             let id = format!("card:{relative}");
             let title = name
                 .trim_end_matches(".markdown")
                 .trim_end_matches(".md")
                 .to_string();
-            let content = fs::read_to_string(&path).unwrap_or_default();
+            let content = match fs::read_to_string(&path) {
+                Ok(content) => content,
+                Err(error) => {
+                    push_warning(
+                        warnings,
+                        format!("知识卡读取失败（{}）：{error}", path.to_string_lossy()),
+                    );
+                    continue;
+                }
+            };
             nodes.push(KnowledgeGraphNode {
                 id: id.clone(),
                 label: title.clone(),
@@ -142,10 +217,19 @@ fn collect_wikilink_edges(
     card_paths: &[PathBuf],
     card_by_stem: &HashMap<String, String>,
     edges: &mut Vec<KnowledgeGraphEdge>,
-) -> Result<(), String> {
+    warnings: &mut Vec<String>,
+) {
     for path in card_paths {
-        let content = fs::read_to_string(path)
-            .map_err(|error| format!("知识卡读取失败（{}）：{error}", path.to_string_lossy()))?;
+        let content = match fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(error) => {
+                push_warning(
+                    warnings,
+                    format!("知识卡读取失败（{}）：{error}", path.to_string_lossy()),
+                );
+                continue;
+            }
+        };
         let Some(source_id) = path
             .file_stem()
             .map(|stem| stem.to_string_lossy().to_lowercase())
@@ -165,7 +249,6 @@ fn collect_wikilink_edges(
             }
         }
     }
-    Ok(())
 }
 
 fn extract_wikilinks(text: &str) -> HashSet<String> {
@@ -227,6 +310,12 @@ fn is_markdown(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+fn push_warning(warnings: &mut Vec<String>, warning: String) {
+    if warnings.len() < MAX_GRAPH_WARNINGS {
+        warnings.push(warning);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,5 +342,31 @@ mod tests {
             .edges
             .iter()
             .any(|edge| edge.source == "card:人物/阿宁.md" && edge.target == "card:城市.md"));
+        assert!(graph.warnings.is_empty());
+    }
+
+    #[test]
+    fn graph_skips_oversized_cards_with_warning() {
+        let root = std::env::temp_dir().join(format!(
+            "wridian-knowledge-graph-large-test-{}",
+            crate::runtime::unique_test_suffix()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("create root");
+        fs::write(root.join("small.md"), "关联 [[large]]").expect("write small");
+        fs::write(
+            root.join("large.md"),
+            "x".repeat((MAX_GRAPH_FILE_BYTES as usize) + 1),
+        )
+        .expect("write large");
+
+        let graph = read_knowledge_graph(&root).expect("graph");
+
+        assert!(graph.nodes.iter().any(|node| node.id == "card:small.md"));
+        assert!(!graph.nodes.iter().any(|node| node.id == "card:large.md"));
+        assert!(graph
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("过大文件")));
     }
 }

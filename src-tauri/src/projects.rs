@@ -1,11 +1,17 @@
 use crate::memory::read_project_compressed_memory;
 use crate::runtime::{ensure_workspace, runtime_root, wridian_data_dir};
-use crate::workspace::{allowed_work_roots, is_supported_writing_file, read_active_work_root, works_root};
+use crate::workspace::{
+    allowed_work_roots, is_supported_writing_file, read_active_work_root, works_root,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+const MAX_RELEVANT_SCAN_FILES: usize = 800;
+const MAX_RELEVANT_SCAN_DEPTH: usize = 8;
+const MAX_RELEVANT_FILE_BYTES: u64 = 512 * 1024;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -90,7 +96,11 @@ pub(crate) fn wridian_save_project(input: SaveProjectInput) -> Result<ProjectSta
         description: input.description.unwrap_or_default().trim().to_string(),
         model: input.model.and_then(|model| {
             let trimmed = model.trim().to_string();
-            if trimmed.is_empty() { None } else { Some(trimmed) }
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
         }),
         system_prompt: input.system_prompt.unwrap_or_default().trim().to_string(),
         inclusions: normalize_patterns(input.inclusions.unwrap_or_default()),
@@ -131,7 +141,9 @@ pub(crate) fn wridian_select_project(input: SelectProjectInput) -> Result<Projec
 }
 
 #[tauri::command]
-pub(crate) fn wridian_find_relevant_notes(input: RelevantNotesInput) -> Result<Vec<RelevantNote>, String> {
+pub(crate) fn wridian_find_relevant_notes(
+    input: RelevantNotesInput,
+) -> Result<Vec<RelevantNote>, String> {
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
     let state = read_project_state(&data_dir)?;
@@ -147,7 +159,11 @@ pub(crate) fn read_active_project_context(data_dir: &Path) -> Result<String, Str
     let Some(active_id) = state.active_project_id.as_deref() else {
         return Ok(String::new());
     };
-    let Some(project) = state.projects.iter().find(|project| project.id == active_id) else {
+    let Some(project) = state
+        .projects
+        .iter()
+        .find(|project| project.id == active_id)
+    else {
         return Ok(String::new());
     };
     let compressed_memory = read_project_compressed_memory(data_dir, &project.id)?;
@@ -185,7 +201,8 @@ fn read_project_state(data_dir: &Path) -> Result<ProjectState, String> {
             projects: Vec::new(),
         }
     } else {
-        let content = fs::read_to_string(path).map_err(|error| format!("项目配置读取失败：{error}"))?;
+        let content =
+            fs::read_to_string(path).map_err(|error| format!("项目配置读取失败：{error}"))?;
         serde_json::from_str(&content).map_err(|error| format!("项目配置格式损坏：{error}"))?
     };
     derive_project_state_from_work_folders(data_dir, persisted)
@@ -201,7 +218,9 @@ fn write_project_state(data_dir: &Path, state: &ProjectState) -> Result<(), Stri
 }
 
 fn project_state_path(data_dir: &Path) -> PathBuf {
-    runtime_root(data_dir).join("projects").join("projects.json")
+    runtime_root(data_dir)
+        .join("projects")
+        .join("projects.json")
 }
 
 fn derive_project_state_from_work_folders(
@@ -217,14 +236,21 @@ fn derive_project_state_from_work_folders(
     let root = works_root(data_dir)?;
     let mut projects = Vec::new();
     if root.is_dir() {
-        for entry in fs::read_dir(&root).map_err(|error| format!("作品项目目录读取失败：{error}"))? {
+        for entry in
+            fs::read_dir(&root).map_err(|error| format!("作品项目目录读取失败：{error}"))?
+        {
             let entry = entry.map_err(|error| format!("作品项目目录读取失败：{error}"))?;
             let path = entry.path();
             if !path.is_dir() {
                 continue;
             }
             let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with('.') || matches!(name.as_str(), ".wridian" | ".wridian-trash" | "node_modules") {
+            if name.starts_with('.')
+                || matches!(
+                    name.as_str(),
+                    ".wridian" | ".wridian-trash" | "node_modules"
+                )
+            {
                 continue;
             }
             let id = path
@@ -236,15 +262,23 @@ fn derive_project_state_from_work_folders(
             projects.push(ProjectConfig {
                 id: id.clone(),
                 name,
-                description: existing.map(|project| project.description.clone()).unwrap_or_default(),
+                description: existing
+                    .map(|project| project.description.clone())
+                    .unwrap_or_default(),
                 model: existing.and_then(|project| project.model.clone()),
                 system_prompt: existing
                     .map(|project| project.system_prompt.clone())
                     .filter(|prompt| !prompt.trim().is_empty())
-                    .unwrap_or_else(|| "当前作品项目的常驻上下文来自作品文件夹和该作品独立记忆。".to_string()),
+                    .unwrap_or_else(|| {
+                        "当前作品项目的常驻上下文来自作品文件夹和该作品独立记忆。".to_string()
+                    }),
                 inclusions: vec![id],
-                exclusions: existing.map(|project| project.exclusions.clone()).unwrap_or_default(),
-                web_urls: existing.map(|project| project.web_urls.clone()).unwrap_or_default(),
+                exclusions: existing
+                    .map(|project| project.exclusions.clone())
+                    .unwrap_or_default(),
+                web_urls: existing
+                    .map(|project| project.web_urls.clone())
+                    .unwrap_or_default(),
                 updated_at: existing
                     .map(|project| project.updated_at.clone())
                     .unwrap_or_else(crate::runtime::iso_timestamp),
@@ -293,8 +327,12 @@ fn find_relevant_notes(
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| path_text.clone());
-        let title_key = title.trim_end_matches(".md").trim_end_matches(".markdown").to_lowercase();
-        let has_outgoing_links = !source_links.is_disjoint(&candidate_links) || source_links.contains(&title_key);
+        let title_key = title
+            .trim_end_matches(".md")
+            .trim_end_matches(".markdown")
+            .to_lowercase();
+        let has_outgoing_links =
+            !source_links.is_disjoint(&candidate_links) || source_links.contains(&title_key);
         let has_backlinks = candidate_links.contains(&source_title_key(&source_path));
         let link_score = if has_outgoing_links && has_backlinks {
             0.3
@@ -316,7 +354,12 @@ fn find_relevant_notes(
             has_backlinks,
         });
     }
-    scored.sort_by(|left, right| right.score.partial_cmp(&left.score).unwrap_or(std::cmp::Ordering::Equal));
+    scored.sort_by(|left, right| {
+        right
+            .score
+            .partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     scored.truncate(input.limit.unwrap_or(8).min(20));
     Ok(scored)
 }
@@ -324,25 +367,53 @@ fn find_relevant_notes(
 fn collect_writing_files(roots: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     let mut files = Vec::new();
     for root in roots {
-        collect_writing_files_recursive(root, &mut files)?;
+        collect_writing_files_recursive(root, 0, &mut files)?;
+        if files.len() >= MAX_RELEVANT_SCAN_FILES {
+            break;
+        }
     }
     Ok(files)
 }
 
-fn collect_writing_files_recursive(root: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+fn collect_writing_files_recursive(
+    root: &Path,
+    depth: usize,
+    files: &mut Vec<PathBuf>,
+) -> Result<(), String> {
     if !root.is_dir() {
         return Ok(());
     }
-    for entry in fs::read_dir(root).map_err(|error| format!("相关稿件目录读取失败：{error}"))? {
+    if depth > MAX_RELEVANT_SCAN_DEPTH || files.len() >= MAX_RELEVANT_SCAN_FILES {
+        return Ok(());
+    }
+    for entry in fs::read_dir(root).map_err(|error| format!("相关稿件目录读取失败：{error}"))?
+    {
+        if files.len() >= MAX_RELEVANT_SCAN_FILES {
+            break;
+        }
         let entry = entry.map_err(|error| format!("相关稿件目录读取失败：{error}"))?;
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with('.') || matches!(name.as_str(), "node_modules" | ".wridian-trash" | ".wridian") {
+        if name.starts_with('.')
+            || matches!(
+                name.as_str(),
+                "node_modules" | ".wridian-trash" | ".wridian"
+            )
+        {
             continue;
         }
         if path.is_dir() {
-            collect_writing_files_recursive(&path, files)?;
+            collect_writing_files_recursive(&path, depth + 1, files)?;
         } else if is_supported_writing_file(&path) {
+            let metadata = fs::symlink_metadata(&path).map_err(|error| {
+                format!(
+                    "相关稿件文件信息读取失败（{}）：{error}",
+                    path.to_string_lossy()
+                )
+            })?;
+            if metadata.file_type().is_symlink() || metadata.len() > MAX_RELEVANT_FILE_BYTES {
+                continue;
+            }
             files.push(path);
         }
     }
@@ -376,7 +447,10 @@ fn tokenize_mixed(text: &str) -> HashSet<String> {
             tokens.insert(token.to_string());
         }
     }
-    let cjk: Vec<char> = text.chars().filter(|ch| ('\u{4e00}'..='\u{9fff}').contains(ch)).collect();
+    let cjk: Vec<char> = text
+        .chars()
+        .filter(|ch| ('\u{4e00}'..='\u{9fff}').contains(ch))
+        .collect();
     for window in cjk.windows(2) {
         tokens.insert(window.iter().collect());
     }
@@ -399,7 +473,12 @@ fn extract_wikilinks(text: &str) -> HashSet<String> {
         let Some(end) = rest.find("]]") else {
             break;
         };
-        let link = rest[..end].split('|').next().unwrap_or("").trim().to_lowercase();
+        let link = rest[..end]
+            .split('|')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
         if !link.is_empty() {
             links.insert(link);
         }
@@ -424,7 +503,10 @@ fn best_snippet(content: &str, terms: &HashSet<String>) -> String {
         .filter(|line| !line.is_empty())
         .max_by_key(|line| {
             let lower = line.to_lowercase();
-            terms.iter().filter(|term| lower.contains(term.as_str())).count()
+            terms
+                .iter()
+                .filter(|term| lower.contains(term.as_str()))
+                .count()
         })
         .unwrap_or_default()
         .chars()
@@ -447,7 +529,13 @@ fn normalize_path_text(path: &Path) -> String {
 fn sanitize_id(value: &str) -> String {
     value
         .chars()
-        .map(|ch| if ch.is_alphanumeric() || ch == '-' || ch == '_' { ch } else { '-' })
+        .map(|ch| {
+            if ch.is_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
         .collect::<String>()
         .trim_matches('-')
         .to_string()
@@ -499,5 +587,37 @@ mod tests {
 
         assert!(error.contains("相关稿件读取失败"));
         assert!(error.contains("candidate.md"));
+    }
+
+    #[test]
+    fn relevant_notes_skips_oversized_candidates() {
+        let data_dir = temp_data_dir("skip-large");
+        crate::runtime::ensure_workspace(&data_dir).expect("ensure workspace");
+        let vault = crate::runtime::vault_root(&data_dir);
+        let source = vault.join("source.md");
+        let large = vault.join("large.md");
+        fs::write(&source, "共同线索").expect("write source");
+        fs::write(
+            &large,
+            format!(
+                "共同线索 {}",
+                "x".repeat((MAX_RELEVANT_FILE_BYTES as usize) + 1)
+            ),
+        )
+        .expect("write large");
+
+        let notes = find_relevant_notes(
+            &data_dir,
+            &RelevantNotesInput {
+                source_path: source.to_string_lossy().into_owned(),
+                content: "共同线索".to_string(),
+                query: None,
+                limit: Some(8),
+            },
+            None,
+        )
+        .expect("find notes");
+
+        assert!(!notes.iter().any(|note| note.path.ends_with("large.md")));
     }
 }

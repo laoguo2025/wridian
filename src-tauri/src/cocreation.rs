@@ -151,7 +151,7 @@ async fn cocreate_with_model(
             body.chars().take(240).collect::<String>()
         ));
     }
-    let content = read_chat_completion_content(&body)?;
+    let content = read_model_response_text(&body)?;
     let parsed = parse_cocreation_model_output(&content)?;
     if parsed.reply.trim().is_empty() {
         Err("模型返回了空回复。".to_string())
@@ -358,18 +358,76 @@ fn render_context_items(items: &[DialogueContextItem]) -> String {
         .join("\n")
 }
 
-fn read_chat_completion_content(body: &str) -> Result<String, String> {
+pub(crate) fn read_model_response_text(body: &str) -> Result<String, String> {
     let value: serde_json::Value =
         serde_json::from_str(body).map_err(|error| format!("对话响应格式损坏：{error}"))?;
-    value
+    if let Some(content) = value
         .get("choices")
         .and_then(serde_json::Value::as_array)
         .and_then(|choices| choices.first())
         .and_then(|choice| choice.get("message"))
         .and_then(|message| message.get("content"))
+        .and_then(read_content_value)
+    {
+        return Ok(content);
+    }
+    if let Some(content) = value
+        .get("output_text")
         .and_then(serde_json::Value::as_str)
         .map(ToOwned::to_owned)
-        .ok_or_else(|| "对话响应缺少 choices[0].message.content。".to_string())
+    {
+        return Ok(content);
+    }
+    if let Some(content) = value
+        .get("output")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|output| read_responses_output_text(output))
+    {
+        return Ok(content);
+    }
+    Err("对话响应缺少可解析文本内容。".to_string())
+}
+
+fn read_content_value(value: &serde_json::Value) -> Option<String> {
+    if let Some(text) = value.as_str() {
+        return Some(text.to_string());
+    }
+    let content = value.as_array()?;
+    let mut parts = Vec::new();
+    for item in content {
+        if let Some(text) = item.get("text").and_then(serde_json::Value::as_str) {
+            parts.push(text.to_string());
+        } else if let Some(text) = item
+            .get("text")
+            .and_then(|text| text.get("value"))
+            .and_then(serde_json::Value::as_str)
+        {
+            parts.push(text.to_string());
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join(""))
+}
+
+fn read_responses_output_text(output: &[serde_json::Value]) -> Option<String> {
+    let mut parts = Vec::new();
+    for item in output {
+        if let Some(content) = item.get("content").and_then(serde_json::Value::as_array) {
+            for content_item in content {
+                if let Some(text) = content_item
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .or_else(|| {
+                        content_item
+                            .get("output_text")
+                            .and_then(serde_json::Value::as_str)
+                    })
+                {
+                    parts.push(text.to_string());
+                }
+            }
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join(""))
 }
 
 fn compact_text(text: &str, max_chars: usize) -> String {
@@ -597,16 +655,47 @@ mod tests {
     }
 
     #[test]
-    fn read_chat_completion_content_reads_first_choice_message() {
+    fn read_model_response_text_reads_first_choice_message() {
         let body = r#"{
             "choices": [
                 { "message": { "content": "可以先补一段动作。" } }
             ]
         }"#;
 
-        let content = read_chat_completion_content(body).expect("content exists");
+        let content = read_model_response_text(body).expect("content exists");
 
         assert_eq!(content, "可以先补一段动作。");
+    }
+
+    #[test]
+    fn read_model_response_text_reads_content_parts() {
+        let body = r#"{
+            "choices": [
+                { "message": { "content": [
+                    { "type": "text", "text": "第一段" },
+                    { "type": "text", "text": "第二段" }
+                ] } }
+            ]
+        }"#;
+
+        let content = read_model_response_text(body).expect("content exists");
+
+        assert_eq!(content, "第一段第二段");
+    }
+
+    #[test]
+    fn read_model_response_text_reads_responses_output_text() {
+        let body = r#"{
+            "output": [
+                { "content": [
+                    { "type": "output_text", "text": "{\"reply\":\"好\",\"edits\":[],\"memories\":[]}" }
+                ] }
+            ]
+        }"#;
+
+        let content = read_model_response_text(body).expect("content exists");
+
+        assert!(content.contains("\"reply\":\"好\""));
     }
 
     #[test]

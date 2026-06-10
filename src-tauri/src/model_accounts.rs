@@ -1,3 +1,4 @@
+use crate::cocreation::read_model_response_text;
 use crate::runtime::{ensure_workspace, model_accounts_path, wridian_data_dir};
 use keyring_core::{set_default_store, Entry, Error as KeyringError};
 use serde::{Deserialize, Serialize};
@@ -140,7 +141,12 @@ pub(crate) fn read_custom_api_settings(
     };
     let stored: StoredCustomApiSettingsFile = serde_json::from_value(custom_api.clone())
         .map_err(|error| format!("自定义 API 配置格式损坏：{error}"))?;
-    let api_key = if let Some(legacy_key) = stored.api_key.as_deref().map(str::trim).filter(|key| !key.is_empty()) {
+    let api_key = if let Some(legacy_key) = stored
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+    {
         store_api_key(legacy_key)?;
         write_custom_api_settings_file(
             data_dir,
@@ -278,9 +284,17 @@ async fn test_openai_compatible_chat(
         .map_err(|error| format!("自定义 API 连接失败：{error}"))?;
     let status = response.status();
     if status.is_success() {
+        let body = response
+            .text()
+            .await
+            .map_err(|error| format!("自定义 API 响应读取失败：{error}"))?;
+        let content = read_model_response_text(&body)?;
+        if content.trim().is_empty() {
+            return Err("自定义 API 返回了空文本，无法用于 Wridian 对话。".to_string());
+        }
         Ok(TestCustomApiResponse {
             ok: true,
-            message: "连接成功。".to_string(),
+            message: "连接成功，且响应格式可用于 Wridian 对话。".to_string(),
         })
     } else {
         let body = response

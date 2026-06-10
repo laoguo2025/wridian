@@ -418,6 +418,18 @@ button {
   padding: 8px;
 }
 
+.rail-warning {
+  display: grid;
+  gap: 3px;
+  border: 1px solid color-mix(in srgb, var(--border), var(--accent) 18%);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-selected), transparent 18%);
+  color: var(--text-muted);
+  font-size: calc(11px * var(--ui-font-scale, 1));
+  line-height: 16px;
+  padding: 8px;
+}
+
 .file-tree {
   min-height: 0;
   overflow: auto;
