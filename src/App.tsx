@@ -1816,6 +1816,7 @@ function KnowledgeGraphDrawer({
   const [nodePreview, setNodePreview] = useState<{ path: string; content: string; error: string } | null>(null);
   const [, forceGraphRender] = useState(0);
   const [dragging, setDragging] = useState(false);
+  const safeViewport = sanitizeKnowledgeGraphViewport(viewport, defaultViewport);
   const dragStateRef = useRef<{
     kind: "pan" | "node";
     pointerId: number;
@@ -1866,7 +1867,7 @@ function KnowledgeGraphDrawer({
     };
   };
 
-  const viewBoxToGraph = (point: { x: number; y: number }, view = viewport) => ({
+  const viewBoxToGraph = (point: { x: number; y: number }, view = safeViewport) => ({
     x: 50 + (point.x - view.x - 50) / view.scale,
     y: 50 + (point.y - view.y - 50) / view.scale,
   });
@@ -1880,9 +1881,13 @@ function KnowledgeGraphDrawer({
   const handleWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
     if (!graph.nodes.length) return;
     event.preventDefault();
-    setViewport((current) => ({
-      ...zoomKnowledgeGraphViewport(current, clientToViewBox(event), Math.exp(-event.deltaY * 0.0015)),
-    }));
+    setViewport((current) =>
+      zoomKnowledgeGraphViewport(
+        sanitizeKnowledgeGraphViewport(current, defaultViewport),
+        clientToViewBox(event),
+        Math.exp(-event.deltaY * 0.0015),
+      ),
+    );
   };
 
   const handleGraphPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -1900,8 +1905,8 @@ function KnowledgeGraphDrawer({
       startNodeX: node?.x,
       startNodeY: node?.y,
       node,
-      startX: viewport.x,
-      startY: viewport.y,
+      startX: safeViewport.x,
+      startY: safeViewport.y,
       moved: false,
     };
     setDragging(true);
@@ -1927,11 +1932,16 @@ function KnowledgeGraphDrawer({
       forceGraphRender((tick) => tick + 1);
       return;
     }
-    setViewport((current) => ({
-      ...current,
-      x: dragState.startX + svgDeltaX,
-      y: dragState.startY + svgDeltaY,
-    }));
+    setViewport((current) =>
+      sanitizeKnowledgeGraphViewport(
+        {
+          ...current,
+          x: dragState.startX + svgDeltaX,
+          y: dragState.startY + svgDeltaY,
+        },
+        defaultViewport,
+      ),
+    );
   };
 
   const handleGraphPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -2001,7 +2011,7 @@ function KnowledgeGraphDrawer({
             <div className="knowledge-graph-empty">先选择知识库文件夹</div>
           ) : graph.nodes.length ? (
             <svg className="knowledge-graph-canvas" viewBox="0 0 100 100" role="img" aria-label="知识库动态图谱">
-              <g className="graph-viewport" transform={`translate(${viewport.x} ${viewport.y}) translate(50 50) scale(${viewport.scale}) translate(-50 -50)`}>
+              <g className="graph-viewport" transform={`translate(${safeViewport.x} ${safeViewport.y}) translate(50 50) scale(${safeViewport.scale}) translate(-50 -50)`}>
                 <g className="graph-motion">
                   {layout.edges.map((edge) => (
                     <line
@@ -2247,19 +2257,36 @@ function fitKnowledgeGraphViewport(nodes: KnowledgeGraphLayoutNode[]): Knowledge
   };
 }
 
+function sanitizeKnowledgeGraphViewport(
+  viewport: KnowledgeGraphViewport,
+  fallback: KnowledgeGraphViewport = { scale: 1, x: 0, y: 0 },
+): KnowledgeGraphViewport {
+  const fallbackScale = Number.isFinite(fallback.scale) && fallback.scale > 0 ? fallback.scale : 1;
+  const fallbackX = Number.isFinite(fallback.x) ? fallback.x : 0;
+  const fallbackY = Number.isFinite(fallback.y) ? fallback.y : 0;
+  const scale = Number.isFinite(viewport.scale) && viewport.scale > 0 ? clamp(viewport.scale, 0.52, 3.2) : fallbackScale;
+  const x = Number.isFinite(viewport.x) ? clamp(viewport.x, -180, 180) : fallbackX;
+  const y = Number.isFinite(viewport.y) ? clamp(viewport.y, -180, 180) : fallbackY;
+  return { scale, x, y };
+}
+
 function zoomKnowledgeGraphViewport(
   viewport: KnowledgeGraphViewport,
   viewBoxPoint: { x: number; y: number },
   factor: number,
 ): KnowledgeGraphViewport {
-  const scale = clamp(viewport.scale * factor, 0.52, 3.2);
-  const graphX = 50 + (viewBoxPoint.x - viewport.x - 50) / viewport.scale;
-  const graphY = 50 + (viewBoxPoint.y - viewport.y - 50) / viewport.scale;
-  return {
+  const base = sanitizeKnowledgeGraphViewport(viewport);
+  const safeFactor = Number.isFinite(factor) && factor > 0 ? clamp(factor, 0.25, 4) : 1;
+  const anchorX = Number.isFinite(viewBoxPoint.x) ? clamp(viewBoxPoint.x, 0, 100) : 50;
+  const anchorY = Number.isFinite(viewBoxPoint.y) ? clamp(viewBoxPoint.y, 0, 100) : 50;
+  const scale = clamp(base.scale * safeFactor, 0.52, 3.2);
+  const graphX = 50 + (anchorX - base.x - 50) / base.scale;
+  const graphY = 50 + (anchorY - base.y - 50) / base.scale;
+  return sanitizeKnowledgeGraphViewport({
     scale,
-    x: viewBoxPoint.x - 50 - scale * (graphX - 50),
-    y: viewBoxPoint.y - 50 - scale * (graphY - 50),
-  };
+    x: anchorX - 50 - scale * (graphX - 50),
+    y: anchorY - 50 - scale * (graphY - 50),
+  });
 }
 
 function stableNumber(value: string) {
