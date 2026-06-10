@@ -31,6 +31,15 @@ export type SaveFileResponse = {
   savedAt: string;
 };
 
+export type CreativeSkillSource = {
+  available: boolean;
+  path?: string | null;
+};
+
+export type CreativeSkillSources = {
+  knowledgeOps: CreativeSkillSource;
+};
+
 export type CustomApiSettingsStatus = {
   configured: boolean;
   baseUrl?: string | null;

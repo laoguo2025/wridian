@@ -1770,6 +1770,16 @@ button {
   white-space: nowrap;
 }
 
+.creative-skill-source {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: calc(11px * var(--ui-font-scale, 1));
+  line-height: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .skill-toggle {
   width: 36px;
   height: 20px;

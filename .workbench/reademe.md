@@ -25,3 +25,4 @@
   - `.workbench/governance/2026-06-10-knowledge-inbox-derived-state.md`
   - `.workbench/governance/2026-06-10-revert-knowledge-inbox.md`
   - `.workbench/governance/2026-06-10-default-knowledge-governance-files.md`
+  - `.workbench/governance/2026-06-10-knowledge-ops-skill-context.md`

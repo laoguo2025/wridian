@@ -1,5 +1,6 @@
 mod chat_persistence;
 mod cocreation;
+mod creative_skills;
 mod knowledge_graph;
 mod memory;
 mod model_accounts;
@@ -30,6 +31,7 @@ pub fn run() {
             projects::wridian_save_project,
             projects::wridian_select_project,
             projects::wridian_find_relevant_notes,
+            creative_skills::wridian_get_creative_skill_sources,
             knowledge_graph::wridian_get_knowledge_graph,
             cocreation::wridian_cocreate,
             chat_persistence::wridian_save_chat_transcript,
