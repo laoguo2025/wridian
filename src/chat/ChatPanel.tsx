@@ -1,12 +1,12 @@
 import { useEffect, useRef } from "react";
-import { CopilotPromptEditor } from "./CopilotPromptEditor";
+import { WridianPromptEditor } from "./WridianPromptEditor";
 import {
   findPreviousUserMessage,
   restorePromptPillsFromMessage,
   type ChatMessage,
 } from "./messageRepository";
-import type { PromptContextPill, PromptSuggestion } from "./promptContext";
-import type { ProjectConfig } from "./projectContext";
+import type { PromptContextLoadStatus, PromptContextPill, PromptSuggestion } from "./promptContext";
+import type { ProjectConfig, RelevantNote } from "./projectContext";
 import type { ConfiguredModelStatus } from "../appTypes";
 
 export function ChatPanel({
@@ -16,15 +16,17 @@ export function ChatPanel({
   messages,
   onCopy,
   onEditUserMessage,
+  onForkMessage,
   onPromptChange,
   onPromptPillsChange,
   onImagePaste,
   onRemovePill,
   onRetry,
-  onSaveKnowledgeCard,
+  onSelectRelevantNote,
   onSelectModel,
   onSelectSuggestion,
   onSelectProject,
+  onStop,
   onSubmit,
   pending,
   projectError,
@@ -32,9 +34,10 @@ export function ChatPanel({
   prompt,
   promptPills,
   promptSuggestions,
+  relevantNotes,
+  relevantNotesError,
   selectedProjectId,
   selectedModelId,
-  savingKnowledgeMessageId,
 }: {
   activeModelLabel: string;
   configuredModels: ConfiguredModelStatus[];
@@ -42,15 +45,17 @@ export function ChatPanel({
   messages: ChatMessage[];
   onCopy: (text: string) => void;
   onEditUserMessage: (message: ChatMessage) => void;
+  onForkMessage: (message: ChatMessage) => void;
   onPromptChange: (value: string) => void;
   onPromptPillsChange: (pills: PromptContextPill[]) => void;
   onImagePaste: (files: File[]) => void;
   onRemovePill: (id: string) => void;
   onRetry: (message: ChatMessage) => void;
-  onSaveKnowledgeCard: (assistantMessage: ChatMessage, userMessage?: ChatMessage) => void;
+  onSelectRelevantNote: (note: RelevantNote) => void;
   onSelectModel: (id: string) => void;
   onSelectSuggestion: (suggestion: PromptSuggestion) => void;
   onSelectProject: (id: string) => void;
+  onStop: () => void;
   onSubmit: () => void;
   pending: boolean;
   projectError: string;
@@ -58,9 +63,10 @@ export function ChatPanel({
   prompt: string;
   promptPills: PromptContextPill[];
   promptSuggestions: PromptSuggestion[];
+  relevantNotes: RelevantNote[];
+  relevantNotesError: string;
   selectedProjectId: string;
   selectedModelId: string;
-  savingKnowledgeMessageId: string;
 }) {
   const threadRef = useRef<HTMLDivElement | null>(null);
 
@@ -89,9 +95,8 @@ export function ChatPanel({
                 message={message}
                 onCopy={onCopy}
                 onEditUserMessage={onEditUserMessage}
+                onForkMessage={onForkMessage}
                 onRetry={onRetry}
-                onSaveKnowledgeCard={onSaveKnowledgeCard}
-                savingKnowledgeMessageId={savingKnowledgeMessageId}
                 userForRetry={findPreviousUserMessage(messages, index)}
               />
             ))
@@ -99,6 +104,29 @@ export function ChatPanel({
         {pending ? <div className="chat-status">正在回复。</div> : null}
         {error ? <div className="chat-status error">{error}</div> : null}
       </div>
+
+      {relevantNotes.length || relevantNotesError ? (
+        <section className="relevant-notes" aria-label="相关内容">
+          <div className="relevant-notes-header">相关内容</div>
+          {relevantNotesError ? <div className="relevant-notes-error">{relevantNotesError}</div> : null}
+          {relevantNotes.map((note) => (
+            <button
+              className="relevant-note"
+              key={note.path}
+              onClick={() => onSelectRelevantNote(note)}
+              title={note.reasons.join("；")}
+              type="button"
+            >
+              <span className="relevant-note-title">
+                <span className="relevant-note-kind">{note.kind === "knowledge" ? "知识卡" : "稿件"}</span>
+                {note.title}
+              </span>
+              {note.snippet ? <small>{note.snippet}</small> : null}
+              {note.reasons.length ? <em>{note.reasons.join("；")}</em> : null}
+            </button>
+          ))}
+        </section>
+      ) : null}
 
       <form
         className="prompt-bar"
@@ -120,7 +148,7 @@ export function ChatPanel({
             ))}
           </div>
         ) : null}
-        <CopilotPromptEditor
+        <WridianPromptEditor
           value={prompt}
           onChange={onPromptChange}
           onImagePaste={onImagePaste}
@@ -148,8 +176,14 @@ export function ChatPanel({
               {activeModelLabel || "未配置模型"}
             </span>
           )}
-          <button type="submit" className="prompt-send" aria-label={pending ? "停止" : "发送"} disabled={pending || (!prompt.trim() && !promptPills.length)}>
-            {pending ? "..." : "发送"}
+          <button
+            type={pending ? "button" : "submit"}
+            className="prompt-send"
+            aria-label={pending ? "停止" : "发送"}
+            disabled={!pending && (!prompt.trim() && !promptPills.length)}
+            onClick={pending ? onStop : undefined}
+          >
+            {pending ? "停止" : "发送"}
           </button>
         </div>
       </form>
@@ -161,20 +195,19 @@ function ChatMessageView({
   message,
   onCopy,
   onEditUserMessage,
+  onForkMessage,
   onRetry,
-  onSaveKnowledgeCard,
-  savingKnowledgeMessageId,
   userForRetry,
 }: {
   message: ChatMessage;
   onCopy: (text: string) => void;
   onEditUserMessage: (message: ChatMessage) => void;
+  onForkMessage: (message: ChatMessage) => void;
   onRetry: (message: ChatMessage) => void;
-  onSaveKnowledgeCard: (assistantMessage: ChatMessage, userMessage?: ChatMessage) => void;
-  savingKnowledgeMessageId: string;
   userForRetry?: ChatMessage;
 }) {
   const contextPills = restorePromptPillsFromMessage(message);
+  const contextLoadStatus = message.contextLoadStatus ?? [];
 
   return (
     <article className={`chat-message ${message.role}`}>
@@ -187,6 +220,7 @@ function ChatMessageView({
           ))}
         </div>
       ) : null}
+      {contextLoadStatus.length ? <ContextLoadStatusView status={contextLoadStatus} /> : null}
       <div className="chat-message-body">{message.text}</div>
       <div className="message-actions">
         {message.role === "user" ? (
@@ -203,13 +237,8 @@ function ChatMessageView({
             <button type="button" onClick={() => userForRetry ? onRetry(userForRetry) : undefined} disabled={!userForRetry} title="重试">
               重试
             </button>
-            <button
-              type="button"
-              onClick={() => onSaveKnowledgeCard(message, userForRetry)}
-              disabled={savingKnowledgeMessageId === message.id}
-              title="存为知识卡"
-            >
-              {savingKnowledgeMessageId === message.id ? "保存中" : "存为卡"}
+            <button type="button" onClick={() => onForkMessage(message)} title="从这条回复分叉">
+              分叉
             </button>
             <button type="button" onClick={() => onCopy(message.text)} title="复制">
               复制
@@ -218,6 +247,33 @@ function ChatMessageView({
         )}
       </div>
     </article>
+  );
+}
+
+function ContextLoadStatusView({ status }: { status: PromptContextLoadStatus[] }) {
+  const loaded = status.filter((item) => item.loaded).length;
+  const truncated = status.some((item) => item.truncated);
+  return (
+    <details className="message-context-status">
+      <summary>
+        上下文 {loaded}/{status.length}
+        {truncated ? <span>有裁剪</span> : null}
+      </summary>
+      <ul>
+        {status.map((item) => (
+          <li className={item.loaded ? "loaded" : ""} key={item.key}>
+            <span>{item.label}</span>
+            <small>
+              {item.loaded ? "已加载" : "未加载"}
+              {item.itemCount ? ` · ${item.itemCount}项` : ""}
+              {item.budgetChars ? ` · ${item.includedChars}/${item.budgetChars}` : ""}
+              {item.truncated ? " · 已裁剪" : ""}
+            </small>
+            {item.note ? <em>{item.note}</em> : null}
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 

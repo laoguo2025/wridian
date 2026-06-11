@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { DraftKind, PromptContextPill } from "./promptContext";
+import type { DraftKind, PromptContextLoadStatus, PromptContextPill } from "./promptContext";
 
 export type CoCreateEdit = {
   target: string;
@@ -8,6 +8,7 @@ export type CoCreateEdit = {
 };
 
 export type CoCreateResponse = {
+  contextLoadStatus: PromptContextLoadStatus[];
   reply: string;
   edits: CoCreateEdit[];
   memoriesUsed: string[];
@@ -18,6 +19,7 @@ export type CoCreateRequest = {
   content: string;
   contextItems: PromptContextPill[];
   draftKind: DraftKind;
+  requestId: string;
   selectedModelId?: string;
   selectedText: string;
   sourcePath: string;
@@ -28,6 +30,7 @@ export type CoCreateRequest = {
 export async function requestCocreation(request: CoCreateRequest) {
   return invoke<CoCreateResponse>("wridian_cocreate", {
     input: {
+      requestId: request.requestId,
       sourcePath: request.sourcePath || "未选择文件",
       title: request.title || "未选择文件",
       content: request.content,
@@ -43,5 +46,12 @@ export async function requestCocreation(request: CoCreateRequest) {
       userInput: request.userInput,
       selectedText: request.selectedText || null,
     },
+  });
+}
+
+export async function abortCocreation(requestId: string) {
+  if (!requestId.trim()) return;
+  await invoke("wridian_abort_cocreate", {
+    input: { requestId },
   });
 }

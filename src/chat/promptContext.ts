@@ -1,4 +1,5 @@
 import type { CreativeSkill } from "../creativeSkills";
+import type { CreativeSkillSources } from "../appTypes";
 
 export type PromptContextPillKind =
   | "selection"
@@ -21,6 +22,17 @@ export type PromptContextPill = {
   value: string;
 };
 
+export type PromptContextLoadStatus = {
+  budgetChars: number;
+  includedChars: number;
+  itemCount: number;
+  key: string;
+  label: string;
+  loaded: boolean;
+  note?: string | null;
+  truncated: boolean;
+};
+
 export type PromptContextRange = {
   end: number;
   start: number;
@@ -40,6 +52,7 @@ export type PromptSuggestion = {
 
 export type PromptSuggestionInput = {
   creativeSkills?: CreativeSkill[];
+  creativeSkillSources?: CreativeSkillSources;
   draftKind: DraftKind;
   knowledgeCards: PromptKnowledgeCardCandidate[];
   knowledgeCategories?: PromptKnowledgeCategoryCandidate[];
@@ -205,13 +218,16 @@ export function buildPromptSuggestions(input: PromptSuggestionInput): PromptSugg
   }
 
   for (const skill of input.creativeSkills ?? []) {
+    const source = input.creativeSkillSources?.[skill.id];
     suggestions.push({
       id: `creative-skill:${skill.id}`,
       label: skill.title,
       detail: skill.status,
-      insertText: skill.prompt,
+      insertText: source?.path ? `path:${source.path}` : skill.prompt,
       kind: "command",
       pillKind: "tool",
+      relativePath: source?.path ? `skills/${skill.id}/SKILL.md` : undefined,
+      sourcePath: source?.path ?? undefined,
     });
   }
 

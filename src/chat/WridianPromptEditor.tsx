@@ -24,7 +24,7 @@ import {
 import { createPromptPillFromSuggestion, type PromptContextPill, type PromptSuggestion } from "./promptContext";
 import { $collectPromptPills, $createPromptPillNode, $isPromptPillNode, createNodesFromPromptText, PromptPillNode } from "./promptPillNodes";
 
-export function CopilotPromptEditor({
+export function WridianPromptEditor({
   onChange,
   onImagePaste,
   onPillsChange,
@@ -76,7 +76,7 @@ export function CopilotPromptEditor({
         <HistoryPlugin />
         <PromptKeyboardPlugin onSubmit={onSubmit} />
         <PromptPillSyncPlugin onPillsChange={onPillsChange} />
-        <PromptPillDeletionPlugin />
+        <PromptPillDeletionPlugin onPillsChange={onPillsChange} />
         <PromptPastePlugin onImagePaste={onImagePaste} />
         <PromptTypeaheadPlugin onSelectSuggestion={onSelectSuggestion} suggestions={suggestions} />
         <PromptValueSyncPlugin value={value} />
@@ -336,7 +336,7 @@ function PromptPillSyncPlugin({ onPillsChange }: { onPillsChange: (pills: Prompt
   return null;
 }
 
-function PromptPillDeletionPlugin() {
+function PromptPillDeletionPlugin({ onPillsChange }: { onPillsChange: (pills: PromptContextPill[]) => void }) {
   const [editor] = useLexicalComposerContext();
 
   useEffect(() => {
@@ -344,6 +344,7 @@ function PromptPillDeletionPlugin() {
       DELETE_CHARACTER_COMMAND,
       (isBackward: boolean) => {
         let handled = false;
+        let pills: PromptContextPill[] | null = null;
         editor.update(() => {
           const selection = $getSelection();
           if (!$isRangeSelection(selection) || !selection.isCollapsed()) return;
@@ -359,12 +360,18 @@ function PromptPillDeletionPlugin() {
             previous.remove();
             handled = true;
           }
+          if (handled) {
+            pills = $collectPromptPills();
+          }
         });
+        if (pills) {
+          onPillsChange(pills);
+        }
         return handled;
       },
       COMMAND_PRIORITY_CRITICAL,
     );
-  }, [editor]);
+  }, [editor, onPillsChange]);
 
   return null;
 }

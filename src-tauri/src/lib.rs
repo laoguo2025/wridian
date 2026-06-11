@@ -1,10 +1,11 @@
 mod chat_persistence;
 mod cocreation;
 mod creative_skills;
-mod file_lock;
 mod knowledge_graph;
 mod memory;
 mod model_accounts;
+mod opener;
+mod path_safety;
 mod projects;
 mod runtime;
 mod workspace;
@@ -36,17 +37,16 @@ pub fn run() {
             model_accounts::wridian_anthropic_oauth_complete,
             model_accounts::wridian_openai_oauth_login,
             model_accounts::wridian_google_gemini_oauth_login,
-            model_accounts::wridian_get_custom_api_settings,
-            model_accounts::wridian_save_custom_api_settings,
-            model_accounts::wridian_test_custom_api,
+            opener::wridian_open_local_path,
             projects::wridian_get_project_state,
             projects::wridian_save_project,
             projects::wridian_select_project,
             projects::wridian_find_relevant_notes,
             knowledge_graph::wridian_get_knowledge_graph,
             cocreation::wridian_cocreate,
+            cocreation::wridian_abort_cocreate,
+            chat_persistence::wridian_load_chat_continuity,
             chat_persistence::wridian_save_chat_transcript,
-            chat_persistence::wridian_save_chat_knowledge_card,
             memory::wridian_get_memory_state,
             memory::wridian_get_memory_state_for_source,
             memory::wridian_get_memory_tree,

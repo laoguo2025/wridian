@@ -6,10 +6,11 @@ import {
 } from "./chat/messageRepository";
 import { useChatManager, type ChatDraftEdit } from "./chat/chatManager";
 import { ChatPanel } from "./chat/ChatPanel";
-import { saveChatKnowledgeCard } from "./chat/chatPersistence";
 import {
+  findRelevantNotes,
   getProjectState,
   selectProject,
+  type RelevantNote,
   type ProjectState,
 } from "./chat/projectContext";
 import {
@@ -89,15 +90,46 @@ type FilePreviewState = {
   type: "image" | "pdf" | "external";
 };
 
+type SendPromptSnapshotInput = {
+  content: string;
+  contextPills: PromptContextPill[];
+  draftSelection: TextSelection;
+  overrideSelectedText?: string;
+  prompt: string;
+  text?: string;
+};
+
 const DEFAULT_LEFT_PANE_WIDTH = 218;
-const DEFAULT_RIGHT_PANE_WIDTH = 292;
+const DEFAULT_RIGHT_PANE_WIDTH = 332;
 const MIN_LEFT_PANE_WIDTH = 168;
 const MAX_LEFT_PANE_WIDTH = 360;
 const MIN_RIGHT_PANE_WIDTH = 240;
-const MAX_RIGHT_PANE_WIDTH = 420;
+const MAX_RIGHT_PANE_WIDTH = 460;
 const MIN_WRITING_PANE_WIDTH = 360;
 const WORKSPACE_RESIZER_WIDTH = 12;
 const WORKSPACE_RESIZER_COUNT = 2;
+const BUILTIN_CREATIVE_SKILL_SOURCES: CreativeSkillSources = {
+  knowledgeOps: {
+    available: true,
+    source: "builtin-resource",
+    label: "知识库运维",
+  },
+  workDecompose: {
+    available: true,
+    source: "builtin-resource",
+    label: "作品拆解",
+  },
+  knowledgeCard: {
+    available: true,
+    source: "builtin-resource",
+    label: "知识卡提炼",
+  },
+  authorDistill: {
+    available: true,
+    source: "builtin-resource",
+    label: "大神蒸馏",
+  },
+};
 const FONT_SIZE_SCALE: Record<FontSizeMode, number> = {
   default: 1,
   large: 1.12,
@@ -120,13 +152,32 @@ function filePreviewType(path: string): FilePreviewState["type"] {
   return "external";
 }
 
-function knowledgeCardTitleFromMessage(message: string) {
-  const line = message
-    .split(/\r?\n/)
-    .map((item) => item.trim().replace(/^#+\s*/, ""))
-    .find(Boolean);
-  if (!line) return "Wridian 对话沉淀";
-  return line.length > 48 ? `${line.slice(0, 48)}` : line;
+function createCocreationRequestId() {
+  return `cocreate-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createSendPromptSnapshot(input: SendPromptSnapshotInput) {
+  const selectionStart = Math.max(0, Math.min(input.draftSelection.start, input.content.length));
+  const selectionEnd = Math.max(selectionStart, Math.min(input.draftSelection.end, input.content.length));
+  const selectedText = (input.overrideSelectedText ?? input.content.slice(selectionStart, selectionEnd)).trim();
+  const contextPills = input.contextPills.map(clonePromptContextPill);
+  const selectionAlreadyIncluded = contextPills.some((pill) => pill.kind === "selection");
+  if (selectedText && !selectionAlreadyIncluded) {
+    contextPills.push(createSelectionPromptPill(selectedText, { start: selectionStart, end: selectionEnd }));
+  }
+  return {
+    content: input.content,
+    contextPills,
+    selectedText,
+    text: (input.text ?? input.prompt).trim(),
+  };
+}
+
+function clonePromptContextPill(pill: PromptContextPill): PromptContextPill {
+  return {
+    ...pill,
+    range: pill.range ? { ...pill.range } : undefined,
+  };
 }
 
 function App() {
@@ -136,18 +187,17 @@ function App() {
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [knowledgeGraphOpen, setKnowledgeGraphOpen] = useState(false);
   const [creativeSkillsOpen, setCreativeSkillsOpen] = useState(false);
-  const [knowledgeGraphState, setKnowledgeGraphState] = useState<KnowledgeGraphState>({ nodes: [], edges: [], relationships: [], warnings: [] });
+  const [knowledgeGraphState, setKnowledgeGraphState] = useState<KnowledgeGraphState>({ nodes: [], edges: [], warnings: [] });
   const [knowledgeGraphError, setKnowledgeGraphError] = useState("");
   const [creativeSkillEnabled, setCreativeSkillEnabled] = useState<Record<CreativeSkillId, boolean>>(DEFAULT_CREATIVE_SKILL_STATE);
-  const [creativeSkillSources, setCreativeSkillSources] = useState<CreativeSkillSources>({ knowledgeOps: { available: false } });
+  const [creativeSkillSources, setCreativeSkillSources] = useState<CreativeSkillSources>(BUILTIN_CREATIVE_SKILL_SOURCES);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [workspace, setWorkspace] = useState<WorkspaceInfo | null>(null);
   const [workspaceError, setWorkspaceError] = useState("");
-  const [workspaceNotice, setWorkspaceNotice] = useState("");
   const [prompt, setPrompt] = useState("");
   const [pendingEdits, setPendingEdits] = useState<DraftEdit[]>([]);
   const [promptPills, setPromptPills] = useState<PromptContextPill[]>([]);
-  const [savingKnowledgeMessageId, setSavingKnowledgeMessageId] = useState("");
+  const promptPillsRef = useRef<PromptContextPill[]>([]);
   const [promptFileContentCache, setPromptFileContentCache] = useState<Record<string, string>>({});
   const [selectedKnowledgeCategoryId, setSelectedKnowledgeCategoryId] = useState("");
   const [activeModelLabel, setActiveModelLabel] = useState("");
@@ -155,6 +205,8 @@ function App() {
   const [selectedModelId, setSelectedModelId] = useState("");
   const [projectState, setProjectState] = useState<ProjectState>({ projects: [] });
   const [projectError, setProjectError] = useState("");
+  const [relevantNotes, setRelevantNotes] = useState<RelevantNote[]>([]);
+  const [relevantNotesError, setRelevantNotesError] = useState("");
   const [hasDraftSelection, setHasDraftSelection] = useState(false);
   const [selectedPath, setSelectedPath] = useState("");
   const [filePreview, setFilePreview] = useState<FilePreviewState | null>(null);
@@ -177,6 +229,14 @@ function App() {
   const draftEditorRef = useRef<HTMLDivElement | null>(null);
   const fontSizeControlRef = useRef<HTMLDivElement | null>(null);
   const draftSelectionRef = useRef<TextSelection>({ start: editorContent.length, end: editorContent.length });
+  const openFileRequestSeqRef = useRef(0);
+  const updatePromptPills = useCallback((
+    next: PromptContextPill[] | ((current: PromptContextPill[]) => PromptContextPill[]),
+  ) => {
+    const value = typeof next === "function" ? next(promptPillsRef.current) : next;
+    promptPillsRef.current = value;
+    setPromptPills(value);
+  }, []);
   const appendDraftEdits = useCallback((edits: DraftEdit[]) => {
     setPendingEdits((current) => [...current, ...edits]);
   }, []);
@@ -235,24 +295,32 @@ function App() {
     }
   }, []);
 
-  const sendPrompt = async (override?: { text: string; selectedText?: string }) => {
-    const contextPills = override ? [] : promptPills;
-    const userInput = (override?.text ?? prompt).trim() || (contextPills.length ? "请按已选择的技能执行。" : "");
+  const sendPrompt = async (override?: { contextPills?: PromptContextPill[]; text: string; selectedText?: string }) => {
+    const snapshot = createSendPromptSnapshot({
+      content: editorContent,
+      contextPills: override?.contextPills ?? promptPillsRef.current,
+      draftSelection: draftSelectionRef.current,
+      overrideSelectedText: override?.selectedText,
+      prompt,
+      text: override?.text,
+    });
+    const userInput = snapshot.text || (snapshot.contextPills.length ? "请按已选择的技能执行。" : "");
     if (!userInput || chatManager.pending) return;
     if (!override) setPrompt("");
     setMemoryOpen(false);
     const sent = await chatManager.sendPrompt({
-      content: editorContent,
-      contextPills,
+      content: snapshot.content,
+      contextPills: snapshot.contextPills,
       draftKind,
-      selectedText: override?.selectedText,
+      requestId: createCocreationRequestId(),
+      selectedText: snapshot.selectedText,
       selectedModelId,
       sourcePath: selectedPath,
       text: userInput,
       title: editorTitle,
     });
     if (sent && !override) {
-      setPromptPills([]);
+      updatePromptPills([]);
     }
   };
 
@@ -273,7 +341,7 @@ function App() {
     if (!selection) return;
     const selected = editorContent.slice(selection.start, selection.end).trim();
     if (!selected) return;
-    setPromptPills((current) => upsertPromptContextPill(current, createSelectionPromptPill(selected, selection)));
+    updatePromptPills((current) => upsertPromptContextPill(current, createSelectionPromptPill(selected, selection)));
     setPrompt((current) => current || "请修改这段。");
   };
 
@@ -307,7 +375,7 @@ function App() {
   useEffect(() => {
     void invoke<CreativeSkillSources>("wridian_get_creative_skill_sources")
       .then(setCreativeSkillSources)
-      .catch(() => setCreativeSkillSources({ knowledgeOps: { available: false } }));
+      .catch(() => setCreativeSkillSources(BUILTIN_CREATIVE_SKILL_SOURCES));
   }, []);
 
   useEffect(() => {
@@ -315,6 +383,37 @@ function App() {
       .then(setProjectState)
       .catch((error) => setProjectError(error instanceof Error ? error.message : String(error)));
   }, [workspace?.files.length, workspace?.filesRootPath]);
+
+  useEffect(() => {
+    if (!selectedPath || !editorContent.trim()) {
+      setRelevantNotes([]);
+      setRelevantNotesError("");
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void findRelevantNotes({
+        sourcePath: selectedPath,
+        content: editorContent,
+        query: prompt,
+        limit: 6,
+      })
+        .then((notes) => {
+          if (cancelled) return;
+          setRelevantNotes(notes);
+          setRelevantNotesError("");
+        })
+        .catch((error) => {
+          if (cancelled) return;
+          setRelevantNotes([]);
+          setRelevantNotesError(error instanceof Error ? error.message : String(error));
+        });
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [editorContent, projectState.activeProjectId, prompt, selectedPath, workspace?.files.length, workspace?.knowledgeFiles.length]);
 
   const files = workspace?.files ?? [];
   const knowledgeFiles = workspace?.knowledgeFiles ?? [];
@@ -329,20 +428,23 @@ function App() {
   const dirty = isRealFile && !loadingPath && editorContent !== lastSavedContent;
 
   const saveCurrentFile = useCallback(async () => {
-    if (!isRealFile || loadingPath || !dirty) return;
+    if (!isRealFile || loadingPath || !dirty) return true;
     const pathToSave = selectedPath;
     const contentToSave = editorContent;
     setSaveStatus("saving");
     setSaveError("");
     try {
       await saveWorkFile(pathToSave, contentToSave);
+      setPromptFileContentCache((current) => ({ ...current, [pathToSave]: contentToSave }));
       if (selectedPath === pathToSave && editorContent === contentToSave) {
         setLastSavedContent(contentToSave);
       }
       setSaveStatus("saved");
+      return true;
     } catch (error) {
       setSaveStatus("error");
       setSaveError(error instanceof Error ? error.message : String(error));
+      return false;
     }
   }, [dirty, editorContent, isRealFile, loadingPath, selectedPath]);
 
@@ -370,6 +472,8 @@ function App() {
 
   const switchModel = async (id: string) => {
     const localLabel = configuredModels.find((model) => model.id === id)?.label ?? "未配置模型";
+    const previousSelectedModelId = selectedModelId;
+    const previousActiveModelLabel = activeModelLabel;
     setSelectedModelId(id);
     setActiveModelLabel(localLabel);
     try {
@@ -379,6 +483,8 @@ function App() {
       setSelectedModelId(activeId);
       setActiveModelLabel(status.activeModelLabel ?? status.configuredModels.find((model) => model.id === activeId)?.label ?? localLabel);
     } catch (error) {
+      setSelectedModelId(previousSelectedModelId);
+      setActiveModelLabel(previousActiveModelLabel);
       chatManager.setError(error instanceof Error ? error.message : String(error));
     }
   };
@@ -386,10 +492,6 @@ function App() {
   const refreshWorkspace = (response: WorkspaceInfo) => {
     setWorkspace(response);
     setWorkspaceError("");
-    const repair = response.lastLinkRepair;
-    setWorkspaceNotice(repair && repair.changedLinkCount > 0
-      ? `已同步修复 ${repair.changedFileCount} 个文件中的 ${repair.changedLinkCount} 处 wikilink；回滚记录已生成。`
-      : "");
   };
 
   const workspaceRootPath = libraryTab === "knowledge"
@@ -461,14 +563,14 @@ function App() {
       const cached = promptFileContentCache[path];
       const content = cached ?? (await openWorkFile(path)).content;
       setPromptFileContentCache((current) => ({ ...current, [path]: content }));
-      setPromptPills((current) => upsertPromptContextPill(
+      updatePromptPills((current) => upsertPromptContextPill(
         current,
         relativePath
           ? createReferencedFileContentPromptPill(name, path, relativePath, content)
           : createFileContentPromptPill(name, path, content),
       ));
     } catch {
-      setPromptPills((current) => upsertPromptContextPill(current, createFilePromptPill(name, path, relativePath)));
+      updatePromptPills((current) => upsertPromptContextPill(current, createFilePromptPill(name, path, relativePath)));
     }
   };
 
@@ -488,6 +590,11 @@ function App() {
   }, [fileMenu]);
 
   const openFilePath = async (requestedPath: string, fallbackName = "") => {
+    const requestSeq = openFileRequestSeqRef.current + 1;
+    openFileRequestSeqRef.current = requestSeq;
+    const saved = await saveCurrentFile();
+    if (!saved || openFileRequestSeqRef.current !== requestSeq) return;
+
     if (!isEditableWorkspaceFile(requestedPath)) {
       const name = fallbackName || requestedPath.split(/[\\/]/).pop() || "未命名文件";
       setSelectedPath("");
@@ -500,7 +607,7 @@ function App() {
       setEditorTitle(name);
       setEditorContent("");
       setLastSavedContent("");
-      setPromptPills([]);
+      updatePromptPills([]);
       setPendingEdits([]);
       setSaveError("");
       setSaveStatus("saved");
@@ -513,6 +620,7 @@ function App() {
     setSaveStatus("idle");
     try {
       const response = await openWorkFile(requestedPath);
+      if (openFileRequestSeqRef.current !== requestSeq) return;
       setSelectedPath(response.path);
       setEditorTitle(response.name);
       setEditorContent(response.content);
@@ -520,7 +628,7 @@ function App() {
       setPromptFileContentCache((current) => ({ ...current, [response.path]: response.content }));
       draftSelectionRef.current = { start: response.content.length, end: response.content.length };
       setHasDraftSelection(false);
-      setPromptPills([]);
+      updatePromptPills([]);
       setPendingEdits([]);
       setSaveStatus("saved");
       const project = projectState.projects.find((item) => response.path.startsWith(item.id));
@@ -530,10 +638,13 @@ function App() {
         void switchProject("");
       }
     } catch (error) {
+      if (openFileRequestSeqRef.current !== requestSeq) return;
       setSaveStatus("error");
       setSaveError(error instanceof Error ? error.message : String(error));
     } finally {
-      setLoadingPath((current) => (current === requestedPath ? "" : current));
+      if (openFileRequestSeqRef.current === requestSeq) {
+        setLoadingPath((current) => (current === requestedPath ? "" : current));
+      }
     }
   };
 
@@ -550,8 +661,7 @@ function App() {
   const openPreviewInSystem = async () => {
     if (!filePreview) return;
     try {
-      const { openPath } = await import("@tauri-apps/plugin-opener");
-      await openPath(filePreview.path);
+      await invoke("wridian_open_local_path", { input: { path: filePreview.path } });
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : String(error));
     }
@@ -588,41 +698,29 @@ function App() {
 
   const editUserMessage = (message: ChatMessage) => {
     setPrompt(message.text);
-    setPromptPills(restorePromptPillsFromMessage(message));
+    updatePromptPills(restorePromptPillsFromMessage(message));
   };
 
   const retryLastUserMessage = (message: ChatMessage) => {
-    setPromptPills(restorePromptPillsFromMessage(message));
-    void sendPrompt({ text: message.text, selectedText: message.selectedText });
+    const contextPills = restorePromptPillsFromMessage(message);
+    updatePromptPills(contextPills);
+    void sendPrompt({ contextPills, text: message.text, selectedText: message.selectedText });
   };
 
-  const saveAssistantMessageAsKnowledgeCard = async (assistantMessage: ChatMessage, userMessage?: ChatMessage) => {
-    if (assistantMessage.role !== "assistant" || savingKnowledgeMessageId) return;
-    setSavingKnowledgeMessageId(assistantMessage.id);
+  const forkFromAssistantMessage = (message: ChatMessage) => {
+    const selection = draftSelectionRef.current;
+    const selectedText = editorContent.slice(selection.start, selection.end).trim();
+    const forked = chatManager.forkFromMessage(message.id, {
+      content: editorContent,
+      selectedText,
+      sourcePath: selectedPath,
+      title: editorTitle,
+    });
+    if (!forked) return;
+    setPrompt("按另一个方向继续。");
+    updatePromptPills([]);
+    setPendingEdits([]);
     chatManager.setError("");
-    try {
-      const contextPills = userMessage
-        ? restorePromptPillsFromMessage(userMessage).map((pill) => ({ label: pill.label, value: pill.value }))
-        : [];
-      const response = await saveChatKnowledgeCard({
-        assistantMessage: assistantMessage.text,
-        cardTitle: knowledgeCardTitleFromMessage(assistantMessage.text),
-        contextPills,
-        sessionId: chatManager.sessionId,
-        sourcePath: selectedPath || filePreview?.path || "",
-        title: editorTitle || filePreview?.name || "Wridian 对话",
-        userMessage: userMessage?.text,
-      });
-      refreshWorkspace(await initWorkspace());
-      setWorkspaceNotice(`已存为待核查知识卡：${response.title}`);
-      if (knowledgeGraphOpen) {
-        void loadKnowledgeGraph();
-      }
-    } catch (error) {
-      chatManager.setError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setSavingKnowledgeMessageId("");
-    }
   };
 
   const acceptEdit = (id: string) => {
@@ -686,11 +784,13 @@ function App() {
   );
   const promptSuggestions = useMemo(() => buildPromptSuggestions({
     creativeSkills: enabledCreativeSkills,
+    creativeSkillSources,
     draftKind,
     knowledgeCards: knowledgeSuggestionIndex.cards,
     knowledgeCategories: knowledgeSuggestionIndex.categories,
     selectedKnowledgeCategoryId,
   }), [
+    creativeSkillSources,
     draftKind,
     enabledCreativeSkills,
     knowledgeSuggestionIndex,
@@ -789,8 +889,7 @@ function App() {
       return;
     }
     try {
-      const { openPath } = await import("@tauri-apps/plugin-opener");
-      await openPath(`${workspace.runtimePath}\\memory-tree`);
+      await invoke("wridian_open_local_path", { input: { path: `${workspace.runtimePath}\\memory-tree` } });
       setMemoryError("");
     } catch (error) {
       setMemoryError(error instanceof Error ? error.message : String(error));
@@ -902,7 +1001,6 @@ function App() {
             </div>
           </div>
           {workspaceError ? <div className="rail-error">{workspaceError}</div> : null}
-          {workspaceNotice ? <div className="rail-warning">{workspaceNotice}</div> : null}
           <div className="file-tree">
             {visibleFiles.length ? (
               visibleFiles.map((node) => (
@@ -1007,7 +1105,20 @@ function App() {
                 )}
               </div>
             ) : (
-              <div className="empty-editor" aria-label="空文件编辑区">文件编辑区</div>
+              <div className="empty-editor" aria-label="空文件编辑区">
+                <div className="empty-brand" aria-label="Wridian">
+                  Wridian
+                </div>
+                <div className="empty-slogan">让故事有记忆，让知识可调用</div>
+                <div className="empty-actions" aria-label="开始使用">
+                  <button type="button" className="empty-action primary" onClick={() => void chooseLibraryRoot("works")}>
+                    选择作品库
+                  </button>
+                  <button type="button" className="empty-action" onClick={() => setMemoryOpen(true)}>
+                    查看记忆树
+                  </button>
+                </div>
+              </div>
             )}
             {saveError ? <div className="paper-error">{saveError}</div> : null}
           </section>
@@ -1028,33 +1139,38 @@ function App() {
           messages={chatManager.messages}
           onCopy={copyText}
           onEditUserMessage={editUserMessage}
+          onForkMessage={forkFromAssistantMessage}
           onRetry={retryLastUserMessage}
-          onSaveKnowledgeCard={saveAssistantMessageAsKnowledgeCard}
+          onSelectRelevantNote={(note) => {
+            void addFileToPrompt(note.title, note.path, note.relativePath ?? "");
+          }}
           pending={chatManager.pending}
           prompt={prompt}
           promptPills={promptPills}
           promptSuggestions={promptSuggestions}
+          relevantNotes={relevantNotes}
+          relevantNotesError={relevantNotesError}
           activeModelLabel={activeModelLabel}
           selectedModelId={selectedModelId}
           projectError={projectError}
           projects={projectState.projects}
           selectedProjectId={projectState.activeProjectId ?? ""}
-          savingKnowledgeMessageId={savingKnowledgeMessageId}
           onSelectModel={(id) => void switchModel(id)}
           onSelectProject={(id) => void switchProject(id)}
+          onStop={chatManager.stopPrompt}
           onPromptChange={setPrompt}
-          onPromptPillsChange={setPromptPills}
+          onPromptPillsChange={updatePromptPills}
           onImagePaste={(files) => {
-            setPromptPills((current) => files.reduce(
+            updatePromptPills((current) => files.reduce(
               (next, file) => upsertPromptContextPill(next, createImagePromptPill(file.name || "pasted-image", file.size)),
               current,
             ));
           }}
-          onRemovePill={(id) => setPromptPills((current) => current.filter((pill) => pill.id !== id))}
+          onRemovePill={(id) => updatePromptPills((current) => current.filter((pill) => pill.id !== id))}
           onSelectSuggestion={(suggestion) => {
             if (suggestion.kind === "command") {
               if (suggestion.pillKind === "tool") {
-                setPromptPills((current) => upsertPromptContextPill(current, createPromptPillFromSuggestion(suggestion)));
+                updatePromptPills((current) => upsertPromptContextPill(current, createPromptPillFromSuggestion(suggestion)));
               }
               return;
             }
@@ -1071,7 +1187,7 @@ function App() {
               setSelectedKnowledgeCategoryId("");
               return;
             }
-            setPromptPills((current) => upsertPromptContextPill(current, createPromptPillFromSuggestion(suggestion)));
+            updatePromptPills((current) => upsertPromptContextPill(current, createPromptPillFromSuggestion(suggestion)));
           }}
           onSubmit={() => void sendPrompt()}
         />
@@ -1085,7 +1201,9 @@ function App() {
           onDeleteFile={deleteMemoryTreeFile}
           onOpenMemoryFolder={openMemoryFolder}
           onSaveFile={saveMemoryTreeFile}
+          projects={projectState.projects}
           saving={savingMemoryTree}
+          selectedProjectId={projectState.activeProjectId}
         />
       ) : null}
       {knowledgeGraphOpen ? (
@@ -1105,7 +1223,6 @@ function App() {
           onToggle={(id) => {
             setCreativeSkillEnabled((current) => ({ ...current, [id]: !current[id] }));
           }}
-          sources={creativeSkillSources}
           skills={CREATIVE_SKILLS}
         />
       ) : null}

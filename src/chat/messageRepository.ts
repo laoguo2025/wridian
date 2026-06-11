@@ -1,11 +1,13 @@
-import type { PromptContextPill } from "./promptContext";
+import type { PromptContextLoadStatus, PromptContextPill } from "./promptContext";
 
 export type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   text: string;
+  createdAt?: number;
   selectedText?: string;
   contextPills?: PromptContextPill[];
+  contextLoadStatus?: PromptContextLoadStatus[];
 };
 
 function createChatMessageId(prefix: ChatMessage["role"]) {
@@ -22,6 +24,7 @@ export function createUserChatMessage(params: {
     id: createChatMessageId("user"),
     role: "user",
     text: params.text,
+    createdAt: Date.now(),
     selectedText: selectedText || undefined,
     contextPills: params.contextPills.length ? params.contextPills : undefined,
   };
@@ -32,6 +35,17 @@ export function createAssistantChatMessage(text: string): ChatMessage {
     id: createChatMessageId("assistant"),
     role: "assistant",
     text,
+    createdAt: Date.now(),
+  };
+}
+
+export function attachContextLoadStatus(message: ChatMessage, status: PromptContextLoadStatus[]): ChatMessage {
+  if (!status.length) {
+    return message;
+  }
+  return {
+    ...message,
+    contextLoadStatus: status,
   };
 }
 

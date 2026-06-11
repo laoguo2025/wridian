@@ -1,45 +1,56 @@
-use crate::file_lock::with_file_write_lock;
-use crate::runtime::{ensure_workspace, iso_timestamp, runtime_root, wridian_data_dir};
-use crate::workspace::resolved_knowledge_root;
+use crate::runtime::{ensure_workspace, runtime_root, wridian_data_dir};
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::{Path, PathBuf};
+use serde_json::Value;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SaveChatTranscriptInput {
     session_id: String,
+    parent_session_id: Option<String>,
+    forked_from_message_id: Option<String>,
     title: String,
     source_path: String,
+    active_context: Option<Value>,
     messages: Vec<ChatTranscriptMessage>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct ChatTranscriptMessage {
+    id: String,
     role: String,
     text: String,
     selected_text: Option<String>,
     context_pills: Option<Vec<ChatContextPill>>,
+    context_load_status: Option<Vec<ChatContextLoadStatus>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct ChatContextPill {
+    id: Option<String>,
+    kind: Option<String>,
     label: String,
     value: String,
+    source_path: Option<String>,
+    relative_path: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct SaveChatKnowledgeCardInput {
-    session_id: String,
-    source_path: String,
-    title: String,
-    card_title: Option<String>,
-    user_message: Option<String>,
-    assistant_message: String,
-    context_pills: Option<Vec<ChatContextPill>>,
+struct ChatContextLoadStatus {
+    key: String,
+    label: String,
+    loaded: bool,
+    item_count: usize,
+    included_chars: usize,
+    budget_chars: usize,
+    truncated: bool,
+    note: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -48,11 +59,67 @@ pub(crate) struct SaveChatTranscriptResponse {
     path: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LoadChatContinuityResponse {
+    session_id: String,
+    parent_session_id: Option<String>,
+    forked_from_message_id: Option<String>,
+    title: String,
+    source_path: String,
+    active_context: Option<Value>,
+    messages: Vec<ChatTranscriptMessage>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatSessionIndex {
+    schema_version: u8,
+    active_session_id: String,
+    updated_at: u128,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatSessionState {
+    schema_version: u8,
+    session_id: String,
+    parent_session_id: Option<String>,
+    forked_from_message_id: Option<String>,
+    current_node_id: Option<String>,
+    title: String,
+    source_path: String,
+    active_context: Option<Value>,
+    compact_summary: String,
+    updated_at: u128,
+    nodes: Vec<ChatSessionNode>,
+    messages: Vec<ChatTranscriptMessage>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatSessionNode {
+    id: String,
+    parent_id: Option<String>,
+    role: String,
+    preview: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct SaveChatKnowledgeCardResponse {
-    path: String,
-    title: String,
+struct ChatSessionHistoryEvent<'a> {
+    schema_version: u8,
+    event: &'a str,
+    session_id: &'a str,
+    parent_session_id: Option<&'a str>,
+    forked_from_message_id: Option<&'a str>,
+    current_node_id: Option<&'a str>,
+    title: &'a str,
+    source_path: &'a str,
+    active_context: Option<&'a Value>,
+    compact_summary: &'a str,
+    message_count: usize,
+    updated_at: u128,
 }
 
 #[tauri::command]
@@ -66,10 +133,10 @@ pub(crate) fn wridian_save_chat_transcript(
 
     let file_name = format!("{}.md", sanitize_file_name(&input.session_id));
     let path = chat_dir.join(file_name);
-    with_file_write_lock(&data_dir, &path, || {
-        fs::write(&path, render_chat_transcript(&input))
-            .map_err(|error| format!("聊天记录写入失败：{error}"))
-    })?;
+    fs::write(&path, render_chat_transcript(&input))
+        .map_err(|error| format!("聊天记录写入失败：{error}"))?;
+    write_chat_session_state(&chat_dir, &input)?;
+    write_active_context_files(&data_dir, &chat_dir, input.active_context.as_ref())?;
 
     Ok(SaveChatTranscriptResponse {
         path: path.to_string_lossy().into_owned(),
@@ -77,35 +144,191 @@ pub(crate) fn wridian_save_chat_transcript(
 }
 
 #[tauri::command]
-pub(crate) fn wridian_save_chat_knowledge_card(
-    input: SaveChatKnowledgeCardInput,
-) -> Result<SaveChatKnowledgeCardResponse, String> {
+pub(crate) fn wridian_load_chat_continuity() -> Result<LoadChatContinuityResponse, String> {
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
-    let knowledge_root = resolved_knowledge_root(&data_dir)?;
-    let card_dir = knowledge_root.join("00知识库治理").join("对话沉淀");
-    fs::create_dir_all(&card_dir).map_err(|error| format!("知识卡目录创建失败：{error}"))?;
-
-    let title = normalize_card_title(
-        input
-            .card_title
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| {
-                first_non_empty_line(&input.assistant_message).unwrap_or("Wridian 对话沉淀")
-            }),
-    );
-    let slug = format!("{}-{}", chrono_like_date(), sanitize_file_name(&title));
-    let path = unique_markdown_path(&card_dir, &slug);
-    let content = render_chat_knowledge_card(&input, &title);
-    with_file_write_lock(&data_dir, &path, || {
-        fs::write(&path, content).map_err(|error| format!("知识卡写入失败：{error}"))
-    })?;
-
-    Ok(SaveChatKnowledgeCardResponse {
-        path: path.to_string_lossy().into_owned(),
-        title,
+    let chat_dir = runtime_root(&data_dir).join("chat");
+    let index_path = chat_dir.join("session-index.json");
+    let Ok(index_content) = fs::read_to_string(index_path) else {
+        return Ok(empty_chat_continuity());
+    };
+    let index: ChatSessionIndex = serde_json::from_str(&index_content)
+        .map_err(|error| format!("对话索引读取失败：{error}"))?;
+    let session_path = chat_dir
+        .join("sessions")
+        .join(format!("{}.json", sanitize_file_name(&index.active_session_id)));
+    let Ok(session_content) = fs::read_to_string(session_path) else {
+        return Ok(empty_chat_continuity());
+    };
+    let state: ChatSessionState = serde_json::from_str(&session_content)
+        .map_err(|error| format!("对话续接读取失败：{error}"))?;
+    Ok(LoadChatContinuityResponse {
+        session_id: state.session_id,
+        parent_session_id: state.parent_session_id,
+        forked_from_message_id: state.forked_from_message_id,
+        title: state.title,
+        source_path: state.source_path,
+        active_context: state.active_context,
+        messages: state.messages,
     })
+}
+
+fn empty_chat_continuity() -> LoadChatContinuityResponse {
+    LoadChatContinuityResponse {
+        session_id: String::new(),
+        parent_session_id: None,
+        forked_from_message_id: None,
+        title: String::new(),
+        source_path: String::new(),
+        active_context: None,
+        messages: Vec::new(),
+    }
+}
+
+fn write_chat_session_state(chat_dir: &Path, input: &SaveChatTranscriptInput) -> Result<(), String> {
+    let updated_at = timestamp_millis();
+    let current_node_id = input.messages.last().map(|message| message.id.clone());
+    let compact_summary = compact_summary_from_active_context(input.active_context.as_ref());
+    let state = ChatSessionState {
+        schema_version: 1,
+        session_id: input.session_id.clone(),
+        parent_session_id: clean_optional(input.parent_session_id.as_deref()),
+        forked_from_message_id: clean_optional(input.forked_from_message_id.as_deref()),
+        current_node_id,
+        title: input.title.clone(),
+        source_path: input.source_path.clone(),
+        active_context: input.active_context.clone(),
+        compact_summary,
+        updated_at,
+        nodes: build_session_nodes(&input.messages),
+        messages: input.messages.clone(),
+    };
+
+    let sessions_dir = chat_dir.join("sessions");
+    fs::create_dir_all(&sessions_dir).map_err(|error| format!("对话树目录创建失败：{error}"))?;
+    let session_path = sessions_dir.join(format!("{}.json", sanitize_file_name(&input.session_id)));
+    fs::write(
+        session_path,
+        serde_json::to_string_pretty(&state).map_err(|error| format!("对话树序列化失败：{error}"))?,
+    )
+    .map_err(|error| format!("对话树写入失败：{error}"))?;
+
+    let index = ChatSessionIndex {
+        schema_version: 1,
+        active_session_id: input.session_id.clone(),
+        updated_at,
+    };
+    fs::write(
+        chat_dir.join("session-index.json"),
+        serde_json::to_string_pretty(&index).map_err(|error| format!("对话索引序列化失败：{error}"))?,
+    )
+    .map_err(|error| format!("对话索引写入失败：{error}"))?;
+
+    append_chat_history_event(chat_dir, input, &state)?;
+    Ok(())
+}
+
+fn append_chat_history_event(
+    chat_dir: &Path,
+    input: &SaveChatTranscriptInput,
+    state: &ChatSessionState,
+) -> Result<(), String> {
+    let history_dir = chat_dir.join("session-history");
+    fs::create_dir_all(&history_dir).map_err(|error| format!("对话历史目录创建失败：{error}"))?;
+    let history_path = history_dir.join(format!("{}.jsonl", sanitize_file_name(&input.session_id)));
+    let event = ChatSessionHistoryEvent {
+        schema_version: 1,
+        event: "snapshot",
+        session_id: &input.session_id,
+        parent_session_id: state.parent_session_id.as_deref(),
+        forked_from_message_id: state.forked_from_message_id.as_deref(),
+        current_node_id: state.current_node_id.as_deref(),
+        title: &input.title,
+        source_path: &input.source_path,
+        active_context: input.active_context.as_ref(),
+        compact_summary: &state.compact_summary,
+        message_count: input.messages.len(),
+        updated_at: state.updated_at,
+    };
+    let line = serde_json::to_string(&event).map_err(|error| format!("对话历史序列化失败：{error}"))?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(history_path)
+        .map_err(|error| format!("对话历史写入失败：{error}"))?;
+    writeln!(file, "{line}").map_err(|error| format!("对话历史写入失败：{error}"))?;
+    Ok(())
+}
+
+fn write_active_context_files(
+    data_dir: &Path,
+    chat_dir: &Path,
+    active_context: Option<&Value>,
+) -> Result<(), String> {
+    let Some(active_context) = active_context else {
+        return Ok(());
+    };
+    fs::write(
+        runtime_root(data_dir).join("active-context.json"),
+        serde_json::to_string_pretty(active_context)
+            .map_err(|error| format!("当前现场序列化失败：{error}"))?,
+    )
+    .map_err(|error| format!("当前现场写入失败：{error}"))?;
+    fs::write(chat_dir.join("compact-summary.md"), compact_summary_from_active_context(Some(active_context)))
+        .map_err(|error| format!("创作交接卡写入失败：{error}"))?;
+    Ok(())
+}
+
+fn build_session_nodes(messages: &[ChatTranscriptMessage]) -> Vec<ChatSessionNode> {
+    messages
+        .iter()
+        .enumerate()
+        .map(|(index, message)| ChatSessionNode {
+            id: message.id.clone(),
+            parent_id: index
+                .checked_sub(1)
+                .and_then(|previous| messages.get(previous))
+                .map(|previous| previous.id.clone()),
+            role: message.role.clone(),
+            preview: compact_plain_text(&message.text, 120),
+        })
+        .collect()
+}
+
+fn compact_summary_from_active_context(active_context: Option<&Value>) -> String {
+    let Some(context) = active_context else {
+        return "# 创作交接卡\n\n暂无当前现场。\n".to_string();
+    };
+    context
+        .get("compactSummary")
+        .and_then(Value::as_str)
+        .filter(|text| !text.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| {
+            let last_intent = context
+                .get("lastUserIntent")
+                .and_then(Value::as_str)
+                .unwrap_or("暂无");
+            let last_judgment = context
+                .get("lastJudgment")
+                .and_then(Value::as_str)
+                .unwrap_or("暂无");
+            format!("# 创作交接卡\n\n- 上次用户意图：{last_intent}\n- 上次判断：{last_judgment}\n")
+        })
+}
+
+fn clean_optional(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn timestamp_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
 }
 
 fn render_chat_transcript(input: &SaveChatTranscriptInput) -> String {
@@ -157,64 +380,9 @@ fn render_chat_transcript(input: &SaveChatTranscriptInput) -> String {
     content
 }
 
-fn render_chat_knowledge_card(input: &SaveChatKnowledgeCardInput, title: &str) -> String {
-    let created_at = iso_timestamp();
-    let mut content = String::new();
-    content.push_str("---\n");
-    content.push_str("type: knowledge_card\n");
-    content.push_str("wridian_type: conversation_distillation\n");
-    content.push_str("status: draft\n");
-    content.push_str("review_status: 待核查\n");
-    content.push_str("source: wridian-chat\n");
-    content.push_str(&format!(
-        "chat_session: {}\n",
-        escape_yaml(&input.session_id)
-    ));
-    content.push_str(&format!(
-        "writing_context: {}\n",
-        escape_yaml(&input.source_path)
-    ));
-    content.push_str(&format!("created_at: {}\n", escape_yaml(&created_at)));
-    content.push_str(&format!("updated_at: {}\n", escape_yaml(&created_at)));
-    content.push_str("---\n\n");
-    content.push_str(&format!("# {}\n\n", escape_markdown_heading(title)));
-    content.push_str(
-        "> 待核查草稿。建议后续用 zhishiku-skill 提炼、蒸馏或体检后再转为正式知识卡。\n\n",
-    );
-    content.push_str("## 可沉淀内容\n\n");
-    content.push_str(input.assistant_message.trim());
-    content.push_str("\n\n## 来自对话\n\n");
-    content.push_str(&format!(
-        "- 对话：{}\n- 写作现场：{}\n- 当前标题：{}\n\n",
-        input.session_id.trim(),
-        input.source_path.trim(),
-        input.title.trim()
-    ));
-    if let Some(user_message) = input
-        .user_message
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        content.push_str("### 用户提问\n\n");
-        content.push_str(&fenced_block(user_message));
-        content.push_str("\n\n");
-    }
-    if let Some(pills) = &input.context_pills {
-        if !pills.is_empty() {
-            content.push_str("### 写作上下文\n\n");
-            for pill in pills {
-                content.push_str(&format!(
-                    "#### {}\n\n{}\n\n",
-                    escape_markdown_heading(pill.label.trim()),
-                    fenced_block(&pill.value)
-                ));
-            }
-        }
-    }
-    content.push_str("### Wridian 回复原文\n\n");
-    content.push_str(&fenced_block(&input.assistant_message));
-    content.push('\n');
-    content
+fn compact_plain_text(value: &str, max_chars: usize) -> String {
+    let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    compact.chars().take(max_chars).collect()
 }
 
 fn sanitize_file_name(value: &str) -> String {
@@ -231,53 +399,6 @@ fn sanitize_file_name(value: &str) -> String {
     } else {
         trimmed.to_string()
     }
-}
-
-fn normalize_card_title(value: &str) -> String {
-    let title = value
-        .lines()
-        .next()
-        .unwrap_or("")
-        .trim()
-        .trim_start_matches('#')
-        .trim()
-        .chars()
-        .take(48)
-        .collect::<String>();
-    if title.is_empty() {
-        "Wridian 对话沉淀".to_string()
-    } else {
-        title
-    }
-}
-
-fn first_non_empty_line(value: &str) -> Option<&str> {
-    value.lines().map(str::trim).find(|line| !line.is_empty())
-}
-
-fn unique_markdown_path(folder: &Path, slug: &str) -> PathBuf {
-    let mut path = folder.join(format!("{slug}.md"));
-    if !path.exists() {
-        return path;
-    }
-    for index in 2..100 {
-        path = folder.join(format!("{slug}-{index}.md"));
-        if !path.exists() {
-            return path;
-        }
-    }
-    folder.join(format!("{slug}-{}.md", chrono_like_timestamp()))
-}
-
-fn chrono_like_date() -> String {
-    iso_timestamp().chars().take(10).collect()
-}
-
-fn chrono_like_timestamp() -> String {
-    iso_timestamp()
-        .chars()
-        .filter(|character| character.is_ascii_alphanumeric())
-        .collect()
 }
 
 fn escape_yaml(value: &str) -> String {
@@ -321,16 +442,25 @@ mod tests {
     fn render_chat_transcript_fences_untrusted_content() {
         let transcript = render_chat_transcript(&SaveChatTranscriptInput {
             session_id: "session-1".to_string(),
+            parent_session_id: None,
+            forked_from_message_id: None,
             title: "# hacked".to_string(),
             source_path: "source.md".to_string(),
+            active_context: None,
             messages: vec![ChatTranscriptMessage {
+                id: "user-1".to_string(),
                 role: "user".to_string(),
                 text: "---\ntype: injected\n```".to_string(),
                 selected_text: Some("## not heading".to_string()),
                 context_pills: Some(vec![ChatContextPill {
+                    id: None,
+                    kind: None,
                     label: "# pill".to_string(),
                     value: "- fake list".to_string(),
+                    source_path: None,
+                    relative_path: None,
                 }]),
+                context_load_status: None,
             }],
         });
 
@@ -338,31 +468,5 @@ mod tests {
         assert!(transcript.contains("#### \\# pill"));
         assert!(transcript.contains("````text\n---\ntype: injected\n```\n````"));
         assert!(transcript.contains("```text\n- fake list\n```"));
-    }
-
-    #[test]
-    fn render_chat_knowledge_card_marks_draft_for_review() {
-        let card = render_chat_knowledge_card(
-            &SaveChatKnowledgeCardInput {
-                session_id: "session-1".to_string(),
-                source_path: "chapter.md".to_string(),
-                title: "第一章".to_string(),
-                card_title: Some("反转技巧".to_string()),
-                user_message: Some("怎么强化反转？".to_string()),
-                assistant_message: "先建立误导，再回收伏笔。".to_string(),
-                context_pills: Some(vec![ChatContextPill {
-                    label: "选区".to_string(),
-                    value: "她没有说实话。".to_string(),
-                }]),
-            },
-            "反转技巧",
-        );
-
-        assert!(card.contains("type: knowledge_card"));
-        assert!(card.contains("status: draft"));
-        assert!(card.contains("review_status: 待核查"));
-        assert!(card.contains("source: wridian-chat"));
-        assert!(card.contains("## 可沉淀内容"));
-        assert!(card.contains("### 用户提问"));
     }
 }

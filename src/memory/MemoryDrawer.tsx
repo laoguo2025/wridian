@@ -1,5 +1,6 @@
 import { type CSSProperties, useEffect, useMemo, useState } from "react";
 import type { MemoryTreeNode, MemoryTreeState } from "../appTypes";
+import type { ProjectConfig } from "../chat/projectContext";
 import memoryTreeBase from "../assets/memory-tree-base.png";
 
 export function MemoryDrawer({
@@ -9,7 +10,9 @@ export function MemoryDrawer({
   onDeleteFile,
   onOpenMemoryFolder,
   onSaveFile,
+  projects,
   saving,
+  selectedProjectId,
 }: {
   memoryError: string;
   memoryTree: MemoryTreeState;
@@ -17,19 +20,37 @@ export function MemoryDrawer({
   onDeleteFile: (path: string) => Promise<boolean>;
   onOpenMemoryFolder: () => void;
   onSaveFile: (path: string, content: string) => Promise<boolean>;
+  projects: ProjectConfig[];
   saving: boolean;
+  selectedProjectId?: string | null;
 }) {
-  const viewModel = useMemo(() => buildMemoryTreeViewModel(memoryTree.roots), [memoryTree.roots]);
+  const [projectFilterId, setProjectFilterId] = useState(selectedProjectId ?? "");
+  const viewModel = useMemo(
+    () => buildMemoryTreeViewModel(memoryTree.roots, projectFilterId),
+    [memoryTree.roots, projectFilterId],
+  );
   const [selectedPath, setSelectedPath] = useState("");
   const [editorSide, setEditorSide] = useState<"left" | "right">("right");
   const selectedNode = useMemo(() => findMemoryNodeByPath(memoryTree.roots, selectedPath), [memoryTree.roots, selectedPath]);
   const [draft, setDraft] = useState(selectedNode?.content ?? "");
   const [transitionSaving, setTransitionSaving] = useState(false);
   const isBusy = saving || transitionSaving;
+  const selectedProject = projects.find((project) => project.id === projectFilterId);
+  const selectedCanDelete = canDeleteMemoryNode(selectedNode);
 
   useEffect(() => {
     setDraft(selectedNode?.content ?? "");
   }, [selectedNode?.content, selectedNode?.path]);
+
+  useEffect(() => {
+    setProjectFilterId(selectedProjectId ?? "");
+  }, [selectedProjectId]);
+
+  useEffect(() => {
+    if (selectedNode && !nodeVisibleInViewModel(viewModel.branches, selectedNode.path ?? "")) {
+      setSelectedPath("");
+    }
+  }, [selectedNode, viewModel.branches]);
 
   const saveDirtyDraft = async () => {
     if (!selectedNode?.path || draft === (selectedNode.content ?? "")) return true;
@@ -99,6 +120,20 @@ export function MemoryDrawer({
             <div className="drawer-title">创作记忆树</div>
           </div>
           <div className="drawer-header-actions">
+            {projects.length ? (
+              <select
+                className="memory-project-filter"
+                value={projectFilterId}
+                onChange={(event) => setProjectFilterId(event.currentTarget.value)}
+                aria-label="按作品项目过滤记忆树"
+                disabled={isBusy}
+              >
+                <option value="">全部记忆</option>
+                {projects.map((project) => (
+                  <option value={project.id} key={project.id}>{project.name}</option>
+                ))}
+              </select>
+            ) : null}
             <button type="button" className="small-action" onClick={onOpenMemoryFolder} disabled={isBusy}>
               记忆文件夹
             </button>
@@ -113,6 +148,12 @@ export function MemoryDrawer({
         <div className="memory-forest-shell" aria-label="创作记忆树仿真视图">
           <div className="memory-forest" aria-label="创作记忆树" onMouseDown={() => void closeEditorFromBlank()}>
             <img className="memory-tree-base" src={memoryTreeBase} alt="" aria-hidden="true" />
+            {projectFilterId ? (
+              <div className="memory-project-scope">
+                <strong>{selectedProject?.name ?? "当前作品"}</strong>
+                <span>续接记忆：project.md / compressed.md / 必要叶子</span>
+              </div>
+            ) : null}
             <div className="memory-tree-roots">
               <button
                 type="button"
@@ -153,12 +194,14 @@ export function MemoryDrawer({
                 <div className="memory-tree-editor-header">
                   <div>
                     <h2>{selectedNode.label}</h2>
-                    <p>{selectedNode.description}</p>
+                    <p>{memoryNodeRelationLabel(selectedNode, viewModel.branches) || selectedNode.description}</p>
                   </div>
                   <div className="memory-tree-editor-actions">
-                    <button type="button" className="delete-memory" onClick={() => void deleteSelected()} disabled={isBusy}>
-                      删除
-                    </button>
+                    {selectedCanDelete ? (
+                      <button type="button" className="delete-memory" onClick={() => void deleteSelected()} disabled={isBusy}>
+                        删除
+                      </button>
+                    ) : null}
                     <button type="button" onClick={() => void save()} disabled={isBusy || draft === (selectedNode.content ?? "")}>
                       {isBusy ? "保存中" : "保存"}
                     </button>
@@ -199,7 +242,7 @@ const MEMORY_BRANCH_LAYOUT = [
   { key: "awareness", label: "AWARENESS.md", labelCn: "复盘反思" },
 ] as const;
 
-function buildMemoryTreeViewModel(roots: MemoryTreeNode[]) {
+function buildMemoryTreeViewModel(roots: MemoryTreeNode[], projectFilterId = "") {
   const rootLayer = roots.find((node) => node.id === "totem");
   const branchLayer = roots.find((node) => node.id === "branches");
   const leafLayer = roots.find((node) => node.id === "leaves");
@@ -212,7 +255,7 @@ function buildMemoryTreeViewModel(roots: MemoryTreeNode[]) {
       key,
       label,
       labelCn,
-      leaves: flattenMemoryLeaves(leafRoot),
+      leaves: flattenMemoryLeaves(leafRoot).filter((leaf) => memoryNodeMatchesProject(leaf, projectFilterId)),
       rule,
     };
   });
@@ -262,20 +305,20 @@ function MemoryBranchArm({
         disabled={disabled}
       >
         <strong>{branch.labelCn}</strong>
-        <small>{branch.label}</small>
+        <small>{branch.label} · {branch.leaves.length}叶</small>
       </button>
       <div className="memory-leaf-dots" aria-label={`${branch.labelCn}叶子`}>
         {branch.leaves.map((leaf, leafIndex) => (
           <button
             type="button"
             key={leaf.id}
-            className={`memory-leaf-dot ${leaf.path === selectedPath ? "active" : ""}`}
+            className={`memory-leaf-dot role-${memoryLeafRole(leaf)} ${leaf.path === selectedPath ? "active" : ""}`}
             style={{
               "--leaf-angle": `${-120 + (leafIndex % leafSlots) * (240 / Math.max(1, leafSlots - 1))}deg`,
               "--leaf-radius": `${34 + Math.floor(leafIndex / 18) * 14 + (leafIndex % 3) * 8}px`,
             } as CSSProperties}
-            title={leaf.label}
-            aria-label={`打开记忆叶子 ${leaf.label}`}
+            title={memoryLeafTitle(leaf)}
+            aria-label={`打开${memoryLeafTitle(leaf)}`}
             onMouseDown={(event) => event.stopPropagation()}
             onClick={() => onSelect(leaf, editorSide)}
             disabled={disabled}
@@ -307,4 +350,64 @@ function findMemoryNodeByPath(nodes: MemoryTreeNode[], path: string): MemoryTree
     if (child) return child;
   }
   return undefined;
+}
+
+function nodeVisibleInViewModel(branches: MemoryBranchView[], path: string) {
+  if (!path) return true;
+  const normalized = normalizePath(path);
+  if (!normalized.includes("/leaves/") && !normalized.includes("/branches/")) return true;
+  return branches.some((branch) => branch.rule?.path === path || branch.leaves.some((leaf) => leaf.path === path));
+}
+
+function memoryNodeMatchesProject(node: MemoryTreeNode, projectFilterId: string) {
+  if (!projectFilterId) return true;
+  const source = memorySourcePath(node.content ?? "");
+  if (!source) return false;
+  return normalizePath(source).startsWith(normalizePath(projectFilterId));
+}
+
+function memorySourcePath(content: string) {
+  const line = content.split(/\r?\n/).find((item) => item.trim().toLowerCase().startsWith("source:"));
+  return line?.split(":").slice(1).join(":").trim() ?? "";
+}
+
+function memoryLeafRole(node: MemoryTreeNode) {
+  const label = node.label.toLowerCase();
+  if (label === "compressed.md") return "compressed";
+  if (label === "project.md") return "project";
+  if (node.kind === "knowledge-card") return "knowledge";
+  return "leaf";
+}
+
+function memoryLeafTitle(node: MemoryTreeNode) {
+  const role = memoryLeafRole(node);
+  const projectName = projectNameFromMemoryNode(node);
+  const roleLabel = role === "compressed" ? "项目压缩记忆" : role === "project" ? "项目长期记忆" : "记忆叶子";
+  return [projectName, roleLabel, node.label].filter(Boolean).join(" / ");
+}
+
+function memoryNodeRelationLabel(node: MemoryTreeNode, branches: MemoryBranchView[]) {
+  const branch = branches.find((item) => item.rule?.path === node.path || item.leaves.some((leaf) => leaf.path === node.path));
+  const role = memoryLeafRole(node);
+  const roleLabel = role === "compressed" ? "项目压缩记忆" : role === "project" ? "项目长期记忆" : role === "knowledge" ? "知识卡引用" : "普通叶子";
+  return [branch?.labelCn, projectNameFromMemoryNode(node), roleLabel, node.description].filter(Boolean).join(" · ");
+}
+
+function projectNameFromMemoryNode(node: MemoryTreeNode) {
+  const source = memorySourcePath(node.content ?? "");
+  if (!source) return "";
+  return source.split(/[\\/]/).filter(Boolean).pop() ?? "";
+}
+
+function canDeleteMemoryNode(node: MemoryTreeNode | undefined) {
+  if (!node?.path) return false;
+  const normalized = normalizePath(node.path);
+  if (!normalized.includes("/leaves/")) return false;
+  if (node.kind === "knowledge-card") return false;
+  const role = memoryLeafRole(node);
+  return role !== "compressed" && role !== "project";
+}
+
+function normalizePath(path: string) {
+  return path.replace(/\\/g, "/").toLowerCase();
 }

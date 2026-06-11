@@ -19,10 +19,8 @@ export type VendorPreset = {
   baseUrl: string;
   defaultEnvOverrides: Record<string, string>;
   defaultModels: CatalogModel[];
-  defaultRoleModels?: Record<string, string>;
   fields: ProviderField[];
   bucket: ProviderBucket;
-  iconKey: string;
   sdkProxyOnly?: boolean;
   meta?: {
     apiKeyUrl?: string;
@@ -38,6 +36,12 @@ const ANTHROPIC_DEFAULT_MODELS: CatalogModel[] = [
   { modelId: "haiku", displayName: "Haiku 4.5", role: "haiku" },
 ];
 
+const ANTHROPIC_FIRST_PARTY_MODELS: CatalogModel[] = [
+  { modelId: "sonnet", upstreamModelId: "claude-sonnet-4-6", displayName: "Sonnet 4.6", role: "sonnet" },
+  { modelId: "opus", upstreamModelId: "claude-opus-4-7", displayName: "Opus 4.7", role: "opus" },
+  { modelId: "haiku", upstreamModelId: "claude-haiku-4-5-20251001", displayName: "Haiku 4.5", role: "haiku" },
+];
+
 export const VENDOR_PRESETS: VendorPreset[] = [
   {
     key: "anthropic-official",
@@ -47,10 +51,9 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     authStyle: "oauth_external",
     baseUrl: "https://api.anthropic.com",
     defaultEnvOverrides: {},
-    defaultModels: ANTHROPIC_DEFAULT_MODELS,
+    defaultModels: ANTHROPIC_FIRST_PARTY_MODELS,
     fields: ["model_names"],
     bucket: "official",
-    iconKey: "anthropic",
     meta: {
       apiKeyUrl: "https://claude.ai/oauth/authorize",
       docsUrl: "https://platform.claude.com/docs/en/api/overview",
@@ -79,7 +82,6 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     ],
     fields: ["model_names"],
     bucket: "official",
-    iconKey: "openai",
     meta: {
       apiKeyUrl: "https://auth.openai.com/oauth/authorize",
       docsUrl: "https://platform.openai.com/docs",
@@ -106,7 +108,6 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     ],
     fields: ["api_key", "model_names"],
     bucket: "official",
-    iconKey: "google",
     meta: {
       apiKeyUrl: "https://aistudio.google.com/api-keys",
       docsUrl: "https://ai.google.dev/gemini-api/docs",
@@ -127,7 +128,6 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     ],
     fields: ["model_names"],
     bucket: "official",
-    iconKey: "google",
     meta: {
       apiKeyUrl: "https://accounts.google.com/o/oauth2/v2/auth",
       docsUrl: "https://ai.google.dev/gemini-api/docs",
@@ -151,7 +151,6 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     defaultModels: ANTHROPIC_DEFAULT_MODELS,
     fields: ["name", "api_key", "base_url", "model_mapping", "env_overrides"],
     bucket: "compatible",
-    iconKey: "anthropic",
     meta: { billingModel: "gateway" },
   },
   {
@@ -165,8 +164,81 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     defaultModels: [],
     fields: ["name", "api_key", "base_url", "model_names"],
     bucket: "compatible",
-    iconKey: "openai",
     meta: { billingModel: "gateway" },
+  },
+  {
+    key: "deepseek-openai",
+    name: "DeepSeek API",
+    descriptionZh: "DeepSeek OpenAI 兼容直连 API",
+    protocol: "openai-compatible",
+    authStyle: "api_key",
+    baseUrl: "https://api.deepseek.com/v1",
+    defaultEnvOverrides: {},
+    defaultModels: [
+      { modelId: "deepseek-chat", displayName: "DeepSeek Chat", role: "default" },
+      { modelId: "deepseek-reasoner", displayName: "DeepSeek Reasoner" },
+    ],
+    fields: ["api_key", "model_names"],
+    bucket: "compatible",
+    meta: { apiKeyUrl: "https://platform.deepseek.com/api_keys", docsUrl: "https://api-docs.deepseek.com", billingModel: "pay_as_you_go" },
+  },
+  {
+    key: "moonshot-openai",
+    name: "Moonshot API",
+    descriptionZh: "月之暗面 OpenAI 兼容直连 API",
+    protocol: "openai-compatible",
+    authStyle: "api_key",
+    baseUrl: "https://api.moonshot.cn/v1",
+    defaultEnvOverrides: {},
+    defaultModels: [{ modelId: "kimi-k2-turbo-preview", displayName: "Kimi K2 Turbo Preview", role: "default" }],
+    fields: ["api_key", "base_url", "model_names"],
+    bucket: "compatible",
+    meta: { apiKeyUrl: "https://platform.moonshot.cn/console/api-keys", docsUrl: "https://platform.moonshot.cn/docs", billingModel: "pay_as_you_go" },
+  },
+  {
+    key: "zai-openai",
+    name: "Z.AI API",
+    descriptionZh: "智谱 GLM / Z.AI OpenAI 兼容直连 API",
+    protocol: "openai-compatible",
+    authStyle: "api_key",
+    baseUrl: "https://api.z.ai/api/paas/v4",
+    defaultEnvOverrides: {},
+    defaultModels: [
+      { modelId: "glm-5", displayName: "GLM-5", role: "default" },
+      { modelId: "glm-4.5-flash", displayName: "GLM-4.5 Flash" },
+    ],
+    fields: ["api_key", "model_names"],
+    bucket: "compatible",
+    meta: { apiKeyUrl: "https://z.ai/manage-apikey/apikey-list", docsUrl: "https://docs.z.ai", billingModel: "pay_as_you_go" },
+  },
+  {
+    key: "xiaomi-mimo-openai",
+    name: "Xiaomi MiMo API",
+    descriptionZh: "小米 MiMo OpenAI 兼容直连 API",
+    protocol: "openai-compatible",
+    authStyle: "api_key",
+    baseUrl: "https://api.xiaomimimo.com/v1",
+    defaultEnvOverrides: {},
+    defaultModels: [
+      { modelId: "mimo-v2.5-pro", displayName: "MiMo-V2.5-Pro", role: "default" },
+      { modelId: "mimo-v2.5-pro-ultraspeed", displayName: "MiMo-V2.5-Pro-UltraSpeed" },
+    ],
+    fields: ["api_key", "model_names"],
+    bucket: "compatible",
+    meta: { apiKeyUrl: "https://platform.xiaomimimo.com/#/console/api-keys", docsUrl: "https://platform.xiaomimimo.com/#/docs/integration/openai", billingModel: "pay_as_you_go" },
+  },
+  {
+    key: "alibaba-coding-intl",
+    name: "Alibaba Coding API",
+    descriptionZh: "阿里云 Coding Plan 国际站 OpenAI 兼容 API",
+    protocol: "openai-compatible",
+    authStyle: "api_key",
+    baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
+    defaultEnvOverrides: {},
+    defaultModels: [],
+    fields: ["api_key", "model_names"],
+    bucket: "compatible",
+    meta: { apiKeyUrl: "https://bailian.console.aliyun.com", docsUrl: "https://help.aliyun.com/zh/model-studio", billingModel: "coding_plan" },
   },
   {
     key: "glm-cn",
@@ -183,7 +255,6 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     ],
     fields: ["api_key"],
     bucket: "coding-plan",
-    iconKey: "zhipu",
     sdkProxyOnly: true,
     meta: { apiKeyUrl: "https://bigmodel.cn/usercenter/proj-mgmt/apikeys", docsUrl: "https://docs.bigmodel.cn/cn/coding-plan/tool/claude", billingModel: "coding_plan", notes: ["高峰时段（14:00-18:00 UTC+8）消耗 3 倍积分"] },
   },
@@ -202,7 +273,6 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     ],
     fields: ["api_key"],
     bucket: "coding-plan",
-    iconKey: "zhipu",
     sdkProxyOnly: true,
     meta: { apiKeyUrl: "https://z.ai/manage-apikey/apikey-list", docsUrl: "https://docs.z.ai/devpack/tool/claude", billingModel: "coding_plan", notes: ["高峰时段（14:00-18:00 UTC+8）消耗 3 倍积分"] },
   },
@@ -217,7 +287,6 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     defaultModels: [{ modelId: "sonnet", displayName: "Kimi K2.5", role: "default" }],
     fields: ["api_key"],
     bucket: "coding-plan",
-    iconKey: "kimi",
     sdkProxyOnly: true,
     meta: { apiKeyUrl: "https://www.kimi.com/code/console", docsUrl: "https://www.kimi.com/code/docs/more/third-party-agents.html", billingModel: "pay_as_you_go" },
   },
@@ -230,12 +299,23 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     baseUrl: "https://api.minimaxi.com/anthropic",
     defaultEnvOverrides: { API_TIMEOUT_MS: "3000000", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" },
     defaultModels: [{ modelId: "sonnet", upstreamModelId: "MiniMax-M2.7", displayName: "MiniMax-M2.7", role: "default" }],
-    defaultRoleModels: { default: "MiniMax-M2.7", sonnet: "MiniMax-M2.7", opus: "MiniMax-M2.7", haiku: "MiniMax-M2.7" },
     fields: ["api_key"],
     bucket: "coding-plan",
-    iconKey: "minimax",
     sdkProxyOnly: true,
     meta: { apiKeyUrl: "https://platform.minimaxi.com/user-center/payment/token-plan", docsUrl: "https://platform.minimaxi.com/docs/token-plan/claude-code", billingModel: "token_plan" },
+  },
+  {
+    key: "minimax-api-cn",
+    name: "MiniMax API (CN)",
+    descriptionZh: "MiniMax 中国区 Anthropic 兼容直连 API",
+    protocol: "anthropic",
+    authStyle: "api_key",
+    baseUrl: "https://api.minimaxi.com/anthropic",
+    defaultEnvOverrides: {},
+    defaultModels: [{ modelId: "MiniMax-M3", displayName: "MiniMax-M3", role: "default" }],
+    fields: ["api_key", "model_names"],
+    bucket: "compatible",
+    meta: { apiKeyUrl: "https://platform.minimaxi.com/user-center/basic-information/interface-key", docsUrl: "https://platform.minimaxi.com/docs", billingModel: "pay_as_you_go" },
   },
   {
     key: "minimax-global",
@@ -246,12 +326,23 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     baseUrl: "https://api.minimax.io/anthropic",
     defaultEnvOverrides: { API_TIMEOUT_MS: "3000000", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" },
     defaultModels: [{ modelId: "sonnet", upstreamModelId: "MiniMax-M2.7", displayName: "MiniMax-M2.7", role: "default" }],
-    defaultRoleModels: { default: "MiniMax-M2.7", sonnet: "MiniMax-M2.7", opus: "MiniMax-M2.7", haiku: "MiniMax-M2.7" },
     fields: ["api_key"],
     bucket: "coding-plan",
-    iconKey: "minimax",
     sdkProxyOnly: true,
     meta: { apiKeyUrl: "https://platform.minimax.io/user-center/payment/token-plan", docsUrl: "https://platform.minimax.io/docs/token-plan/opencode", billingModel: "token_plan" },
+  },
+  {
+    key: "minimax-api-global",
+    name: "MiniMax API (Global)",
+    descriptionZh: "MiniMax 国际区 Anthropic 兼容直连 API",
+    protocol: "anthropic",
+    authStyle: "api_key",
+    baseUrl: "https://api.minimax.io/anthropic",
+    defaultEnvOverrides: {},
+    defaultModels: [{ modelId: "MiniMax-M3", displayName: "MiniMax-M3", role: "default" }],
+    fields: ["api_key", "model_names"],
+    bucket: "compatible",
+    meta: { apiKeyUrl: "https://platform.minimax.io/user-center/basic-information/interface-key", docsUrl: "https://platform.minimax.io/docs", billingModel: "pay_as_you_go" },
   },
   {
     key: "volcengine",
@@ -274,7 +365,6 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     ],
     fields: ["api_key", "model_names"],
     bucket: "coding-plan",
-    iconKey: "volcengine",
     sdkProxyOnly: true,
     meta: { apiKeyUrl: "https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement", docsUrl: "https://www.volcengine.com/docs/82379/1928262", billingModel: "coding_plan", notes: ["需先在控制台激活 Endpoint", "API Key 为临时凭证"] },
   },
@@ -290,10 +380,8 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       { modelId: "sonnet", upstreamModelId: "mimo-v2.5-pro", displayName: "MiMo-V2.5-Pro", role: "default" },
       { modelId: "mimo-v2.5-pro-ultraspeed", upstreamModelId: "mimo-v2.5-pro-ultraspeed", displayName: "MiMo-V2.5-Pro-UltraSpeed" },
     ],
-    defaultRoleModels: { default: "mimo-v2.5-pro", sonnet: "mimo-v2.5-pro", opus: "mimo-v2.5-pro", haiku: "mimo-v2.5-pro" },
     fields: ["api_key", "model_names"],
     bucket: "coding-plan",
-    iconKey: "xiaomi-mimo",
     sdkProxyOnly: true,
     meta: { apiKeyUrl: "https://platform.xiaomimimo.com/#/console/api-keys", docsUrl: "https://platform.xiaomimimo.com/#/docs/integration/claudecode", billingModel: "pay_as_you_go" },
   },
@@ -308,10 +396,8 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     defaultModels: [
       { modelId: "sonnet", upstreamModelId: "mimo-v2.5-pro", displayName: "MiMo-V2.5-Pro", role: "default" },
     ],
-    defaultRoleModels: { default: "mimo-v2.5-pro", sonnet: "mimo-v2.5-pro", opus: "mimo-v2.5-pro", haiku: "mimo-v2.5-pro" },
     fields: ["api_key", "model_names"],
     bucket: "coding-plan",
-    iconKey: "xiaomi-mimo",
     sdkProxyOnly: true,
     meta: { apiKeyUrl: "https://platform.xiaomimimo.com/#/console/plan-manage", docsUrl: "https://platform.xiaomimimo.com/#/docs/integration/claudecode", billingModel: "token_plan" },
   },
@@ -336,7 +422,6 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     ],
     fields: ["api_key"],
     bucket: "coding-plan",
-    iconKey: "bailian",
     sdkProxyOnly: true,
     meta: { apiKeyUrl: "https://bailian.console.aliyun.com", docsUrl: "https://help.aliyun.com/zh/model-studio/coding-plan", billingModel: "coding_plan", notes: ["必须使用 Coding Plan 专用 Key（以 sk-sp- 开头）", "普通 DashScope Key 无法使用"] },
   },
@@ -353,10 +438,8 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       { modelId: "glm-5", displayName: "GLM-5" },
       { modelId: "MiniMax-M2.5", displayName: "MiniMax-M2.5" },
     ],
-    defaultRoleModels: { default: "qwen3.6-plus", sonnet: "qwen3.6-plus", opus: "qwen3.6-plus", haiku: "qwen3.6-plus" },
     fields: ["api_key"],
     bucket: "coding-plan",
-    iconKey: "bailian",
     sdkProxyOnly: true,
     meta: { apiKeyUrl: "https://bailian.console.aliyun.com", docsUrl: "https://help.aliyun.com/zh/model-studio/token-plan", billingModel: "token_plan" },
   },
@@ -373,10 +456,8 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       { modelId: "deepseek-v4-pro", upstreamModelId: "deepseek-v4-pro", displayName: "DeepSeek V4 Pro", role: "default" },
       { modelId: "deepseek-v4-flash", upstreamModelId: "deepseek-v4-flash", displayName: "DeepSeek V4 Flash", role: "haiku" },
     ],
-    defaultRoleModels: { default: "deepseek-v4-pro[1m]", opus: "deepseek-v4-pro[1m]", sonnet: "deepseek-v4-pro[1m]", haiku: "deepseek-v4-flash" },
     fields: ["api_key"],
     bucket: "coding-plan",
-    iconKey: "deepseek",
     sdkProxyOnly: true,
     meta: { apiKeyUrl: "https://platform.deepseek.com/api_keys", docsUrl: "https://api-docs.deepseek.com", billingModel: "pay_as_you_go" },
   },
@@ -400,5 +481,6 @@ export function accessTypeLabel(preset: VendorPreset) {
 export function protocolLabel(protocol: ProviderProtocol | string) {
   if (protocol === "anthropic") return "Anthropic";
   if (protocol === "google") return "Google Gemini";
-  return "OpenAI-compatible";
+  if (protocol === "openai-compatible") return "OpenAI-compatible";
+  return "未知协议";
 }

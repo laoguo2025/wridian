@@ -1,8 +1,26 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { ChatMessage } from "./messageRepository";
 
+export type ActiveChatContext = {
+  schemaVersion: 1;
+  sessionId: string;
+  currentWork: {
+    source: string;
+    title: string;
+  };
+  currentFragment: string;
+  lastUserIntent: string;
+  lastJudgment: string;
+  nextSuggestions: string[];
+  compactSummary: string;
+  updatedAt: string;
+};
+
 export type SaveChatTranscriptRequest = {
+  activeContext?: ActiveChatContext;
+  forkedFromMessageId?: string;
   messages: ChatMessage[];
+  parentSessionId?: string;
   sessionId: string;
   sourcePath: string;
   title: string;
@@ -12,18 +30,13 @@ export type SaveChatTranscriptResponse = {
   path: string;
 };
 
-export type SaveChatKnowledgeCardRequest = {
-  assistantMessage: string;
-  cardTitle?: string;
-  contextPills?: Array<{ label: string; value: string }>;
+export type LoadChatContinuityResponse = {
+  activeContext?: ActiveChatContext;
+  forkedFromMessageId?: string | null;
+  messages: ChatMessage[];
+  parentSessionId?: string | null;
   sessionId: string;
   sourcePath: string;
-  title: string;
-  userMessage?: string;
-};
-
-export type SaveChatKnowledgeCardResponse = {
-  path: string;
   title: string;
 };
 
@@ -37,8 +50,6 @@ export async function saveChatTranscript(request: SaveChatTranscriptRequest) {
   });
 }
 
-export async function saveChatKnowledgeCard(request: SaveChatKnowledgeCardRequest) {
-  return invoke<SaveChatKnowledgeCardResponse>("wridian_save_chat_knowledge_card", {
-    input: request,
-  });
+export async function loadChatContinuity() {
+  return invoke<LoadChatContinuityResponse>("wridian_load_chat_continuity");
 }

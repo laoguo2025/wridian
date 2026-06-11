@@ -18,10 +18,7 @@ export function KnowledgeGraphDrawer({
   onOpenFile: (path: string) => void;
   onRefresh: () => void;
 }) {
-  const [activeView, setActiveView] = useState<KnowledgeGraphGovernanceView>("all");
-  const viewCounts = useMemo(() => buildKnowledgeGraphViewCounts(graph), [graph]);
-  const filteredGraph = useMemo(() => filterKnowledgeGraphState(graph, activeView), [activeView, graph]);
-  const layout = useMemo(() => buildKnowledgeGraphLayout(filteredGraph), [filteredGraph]);
+  const layout = useMemo(() => buildKnowledgeGraphLayout(graph), [graph]);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const graphAnimationFrameRef = useRef<number | null>(null);
   const [stageSize, setStageSize] = useState({ height: 520, width: 780 });
@@ -69,7 +66,7 @@ export function KnowledgeGraphDrawer({
   }, [defaultCamera]);
 
   useEffect(() => {
-    if (!knowledgeRootConfigured || !filteredGraph.nodes.length) return;
+    if (!knowledgeRootConfigured || !graph.nodes.length) return;
     let cancelled = false;
     const render = (time: number) => {
       if (cancelled) return;
@@ -84,7 +81,7 @@ export function KnowledgeGraphDrawer({
         graphAnimationFrameRef.current = null;
       }
     };
-  }, [filteredGraph.nodes.length, graphRenderTick, knowledgeRootConfigured, layout, safeCamera, hoveredNode?.id]);
+  }, [graph.nodes.length, graphRenderTick, knowledgeRootConfigured, layout, safeCamera, hoveredNode?.id]);
 
   useEffect(() => {
     if (!hoveredNode || hoveredNode.kind === "folder" || !hoveredNode.path) {
@@ -127,7 +124,7 @@ export function KnowledgeGraphDrawer({
   };
 
   const handleWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
-    if (!filteredGraph.nodes.length) return;
+    if (!graph.nodes.length) return;
     event.preventDefault();
     const bounds = event.currentTarget.getBoundingClientRect();
     const anchor = {
@@ -144,7 +141,7 @@ export function KnowledgeGraphDrawer({
   };
 
   const handleGraphPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!filteredGraph.nodes.length || event.button !== 0) return;
+    if (!graph.nodes.length || event.button !== 0) return;
     const graphPoint = clientToGraph(event);
     const node = findEventNode(event);
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -227,7 +224,6 @@ export function KnowledgeGraphDrawer({
     setCamera(fitKnowledgeGraphCamera(layout.nodes, stageSize));
   };
   const activePreview = hoveredNode?.path && nodePreview?.path === hoveredNode.path ? nodePreview : null;
-  const activeNeighborhood = useMemo(() => buildKnowledgeGraphNeighborhood(graph, hoveredNode), [graph, hoveredNode]);
 
   return (
     <div className="drawer-backdrop" onMouseDown={onClose} role="presentation">
@@ -235,7 +231,6 @@ export function KnowledgeGraphDrawer({
         <div className="drawer-header">
           <div>
             <div className="drawer-title">知识图谱</div>
-            <div className="drawer-subtitle">{graph.relationships.length} 条关系，{graph.nodes.filter((node) => node.id.startsWith("card:")).length} 张卡片</div>
           </div>
           <div className="drawer-header-actions">
             <button type="button" className="small-action" onClick={resetGraphView}>
@@ -248,26 +243,6 @@ export function KnowledgeGraphDrawer({
               ×
             </button>
           </div>
-        </div>
-
-        <div className="knowledge-graph-viewbar" role="tablist" aria-label="知识治理视图">
-          {KNOWLEDGE_GRAPH_VIEWS.map((view) => (
-            <button
-              key={view.id}
-              type="button"
-              className={activeView === view.id ? "active" : ""}
-              title={view.description}
-              onClick={() => setActiveView(view.id)}
-            >
-              <span>{view.label}</span>
-              <small>{viewCounts[view.id]}</small>
-            </button>
-          ))}
-        </div>
-
-        <div className="knowledge-graph-health-strip">
-          <span>质量闸门：素材出处、关联索引、采纳沉淀、版本进化</span>
-          <span>体检动作：补出处、补关联、合并、归档、重写</span>
         </div>
 
         {graphError ? <div className="rail-error">{graphError}</div> : null}
@@ -290,52 +265,33 @@ export function KnowledgeGraphDrawer({
           onWheel={handleWheel}
           onMouseLeave={() => setHoveredNode(null)}
         >
+          {knowledgeRootConfigured && graph.nodes.length ? (
+            <div className="knowledge-graph-legend" aria-hidden="true">
+              <span><i className="folder" />分类</span>
+              <span><i className="card" />知识卡</span>
+              <span><b className="solid" />关系</span>
+              <span><b className="dashed" />引用</span>
+            </div>
+          ) : null}
           {!knowledgeRootConfigured ? (
             <div className="knowledge-graph-empty">先选择知识库文件夹</div>
-          ) : filteredGraph.nodes.length ? (
+          ) : graph.nodes.length ? (
             <canvas ref={canvasRef} className="knowledge-graph-canvas" aria-label="知识库动态图谱" />
           ) : (
-            <div className="knowledge-graph-empty">{activeView === "all" ? "知识库里还没有 Markdown 知识卡" : "当前治理视图没有命中项"}</div>
+            <div className="knowledge-graph-empty">知识库里还没有 Markdown 知识卡</div>
           )}
           {hoveredNode ? (
             <div className="knowledge-graph-preview">
-              <div className="knowledge-graph-preview-title">{hoveredNode.typeIcon ? `${hoveredNode.typeIcon} ` : ""}{hoveredNode.label}</div>
+              <div className="knowledge-graph-preview-title">{hoveredNode.label}</div>
               <div className="knowledge-graph-preview-path">{hoveredNode.path ?? hoveredNode.group}</div>
               {hoveredNode.kind === "folder" ? (
                 <div className="knowledge-graph-preview-body">分类文件夹</div>
               ) : activePreview?.content ? (
-                <>
-                  <div className="knowledge-graph-preview-meta">
-                    <span>{knowledgeGraphNodeKindLabel(hoveredNode.kind)}</span>
-                    <span>入链 {hoveredNode.inboundCount}</span>
-                    <span>出链 {hoveredNode.outboundCount}</span>
-                    {hoveredNode.usedByWorks.length ? <span>作品引用 {hoveredNode.usedByWorks.length}</span> : null}
-                    {hoveredNode.reviewStatus ? <span>体检 {hoveredNode.reviewStatus}</span> : null}
-                    {hoveredNode.hasConflict ? <span>有冲突</span> : null}
-                    {hoveredNode.hasUncertainty ? <span>待核查</span> : null}
-                  </div>
-                  {hoveredNode.defaultFields.length ? (
-                    <div className="knowledge-graph-preview-fields">{hoveredNode.defaultFields.slice(0, 5).map(knowledgeGraphRelationLabel).join(" / ")}</div>
-                  ) : null}
-                  {hoveredNode.referencedBy.length ? (
-                    <div className="knowledge-graph-preview-fields">被知识卡引用：{hoveredNode.referencedBy.slice(0, 4).join(" / ")}</div>
-                  ) : null}
-                  {hoveredNode.usedByWorks.length ? (
-                    <div className="knowledge-graph-preview-fields">被作品引用：{hoveredNode.usedByWorks.slice(0, 4).join(" / ")}</div>
-                  ) : null}
-                  <KnowledgeGraphNeighborhoodPanel neighborhood={activeNeighborhood} />
-                  <div className="knowledge-graph-preview-body">{activePreview.content}</div>
-                </>
+                <div className="knowledge-graph-preview-body">{activePreview.content}</div>
               ) : activePreview?.error ? (
-                <>
-                  <KnowledgeGraphNeighborhoodPanel neighborhood={activeNeighborhood} />
-                  <div className="knowledge-graph-preview-body">{activePreview.error}</div>
-                </>
+                <div className="knowledge-graph-preview-body">{activePreview.error}</div>
               ) : (
-                <>
-                  <KnowledgeGraphNeighborhoodPanel neighborhood={activeNeighborhood} />
-                  <div className="knowledge-graph-preview-body">读取中...</div>
-                </>
+                <div className="knowledge-graph-preview-body">读取中...</div>
               )}
             </div>
           ) : null}
@@ -355,88 +311,6 @@ type KnowledgeGraphLayoutNode = KnowledgeGraphNode & {
   y: number;
 };
 
-type KnowledgeGraphNeighborhoodItem = {
-  bidirectional: boolean;
-  id: string;
-  label: string;
-  path?: string | null;
-  relationLabel: string;
-};
-
-type KnowledgeGraphNeighborhoodGroup = {
-  count: number;
-  label: string;
-};
-
-type KnowledgeGraphNeighborhood = {
-  groups: KnowledgeGraphNeighborhoodGroup[];
-  inbound: KnowledgeGraphNeighborhoodItem[];
-  outbound: KnowledgeGraphNeighborhoodItem[];
-};
-
-function KnowledgeGraphNeighborhoodPanel({ neighborhood }: { neighborhood: KnowledgeGraphNeighborhood }) {
-  const hasLinks = neighborhood.outbound.length > 0 || neighborhood.inbound.length > 0;
-  if (!hasLinks) {
-    return (
-      <div className="knowledge-graph-neighborhood">
-        <div className="knowledge-graph-neighborhood-title">关系邻域</div>
-        <div className="knowledge-graph-neighborhood-empty">暂无出链或反链</div>
-      </div>
-    );
-  }
-  return (
-    <div className="knowledge-graph-neighborhood">
-      <div className="knowledge-graph-neighborhood-title">关系邻域</div>
-      {neighborhood.groups.length ? (
-        <div className="knowledge-graph-neighborhood-groups">
-          {neighborhood.groups.slice(0, 5).map((group) => (
-            <span key={group.label}>{group.label} {group.count}</span>
-          ))}
-        </div>
-      ) : null}
-      <KnowledgeGraphNeighborhoodList title="指向" items={neighborhood.outbound} />
-      <KnowledgeGraphNeighborhoodList title="反链" items={neighborhood.inbound} />
-    </div>
-  );
-}
-
-function KnowledgeGraphNeighborhoodList({ items, title }: { items: KnowledgeGraphNeighborhoodItem[]; title: string }) {
-  if (!items.length) return null;
-  return (
-    <div className="knowledge-graph-neighborhood-list">
-      <div className="knowledge-graph-neighborhood-list-title">{title}</div>
-      {items.slice(0, 4).map((item) => (
-        <div className="knowledge-graph-neighborhood-row" key={`${title}:${item.id}:${item.relationLabel}`}>
-          <span>{item.relationLabel}{item.bidirectional ? "·双向" : ""}</span>
-          <strong>{item.label}</strong>
-        </div>
-      ))}
-      {items.length > 4 ? <div className="knowledge-graph-neighborhood-more">还有 {items.length - 4} 个节点</div> : null}
-    </div>
-  );
-}
-
-type KnowledgeGraphGovernanceView =
-  | "all"
-  | "noSource"
-  | "unreferenced"
-  | "adoptedOpen"
-  | "islands"
-  | "duplicateTitles"
-  | "reviewNeeded"
-  | "staleHighReference";
-
-const KNOWLEDGE_GRAPH_VIEWS: { id: KnowledgeGraphGovernanceView; label: string; description: string }[] = [
-  { id: "all", label: "全部", description: "查看当前知识库所有 Markdown 节点和关系。" },
-  { id: "noSource", label: "缺素材出处", description: "优先补素材出处；S 级知识卡必须能回到原始材料或拆解报告。" },
-  { id: "unreferenced", label: "关联索引空", description: "检查是否缺少关联索引，或是否应降级、合并、归档。" },
-  { id: "adoptedOpen", label: "采纳未沉淀", description: "已被作品采纳，但尚未改写沉淀为作品设定或规则。" },
-  { id: "islands", label: "孤岛待归档", description: "没有入链也没有出链，优先判断补关联还是归档。" },
-  { id: "duplicateTitles", label: "重复待合并", description: "标题重复，进入合并、改名或区分概念候选。" },
-  { id: "reviewNeeded", label: "待核查冲突", description: "展示 zhishiku-skill 标记的冲突、不确定性或待核查知识卡。" },
-  { id: "staleHighReference", label: "高频老化", description: "被高频引用但长期未进化，优先复查或重写。" },
-];
-
 type KnowledgeGraphCamera = {
   offsetX: number;
   offsetY: number;
@@ -453,8 +327,8 @@ function buildKnowledgeGraphLayout(graph: KnowledgeGraphState) {
     const groupHash = stableNumber(`${node.group}:${node.id}`);
     const depthRing = 9 + Math.min(depth, 5) * 8.4 + (node.kind === "folder" ? 0 : 4.8);
     const angle = ((siblingIndex / siblingCount) * 360 + (depth % 2) * 23 + (groupHash % 18)) * (Math.PI / 180);
-    const radius = node.kind === "folder" ? 1.28 + Math.min(0.38, node.size / 42) : 0.78 + Math.min(0.32, node.size / 42);
-    const showLabel = node.kind === "folder" || index < 38;
+    const radius = node.kind === "folder" ? 1.46 + Math.min(0.46, node.size / 42) : 0.7 + Math.min(0.3, node.size / 42);
+    const showLabel = node.kind === "folder" || index < 32;
     const labelRadius = showLabel ? Math.min(10.5, Math.max(3.8, node.label.length * 0.46)) : 0;
     return {
       ...node,
@@ -478,100 +352,6 @@ function buildKnowledgeGraphLayout(graph: KnowledgeGraphState) {
     .slice(0, 260);
   relaxKnowledgeGraphLayout(nodes, edges);
   return { edges, nodes };
-}
-
-function filterKnowledgeGraphState(graph: KnowledgeGraphState, view: KnowledgeGraphGovernanceView): KnowledgeGraphState {
-  if (view === "all") return graph;
-  const nodes = graph.nodes.filter((node) => nodeMatchesKnowledgeGraphView(node, view));
-  const nodeIds = new Set(nodes.map((node) => node.id));
-  return {
-    ...graph,
-    nodes,
-    edges: graph.edges.filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target)),
-  };
-}
-
-function buildKnowledgeGraphViewCounts(graph: KnowledgeGraphState): Record<KnowledgeGraphGovernanceView, number> {
-  return KNOWLEDGE_GRAPH_VIEWS.reduce((counts, view) => {
-    counts[view.id] = view.id === "all"
-      ? graph.nodes.filter((node) => node.id.startsWith("card:")).length
-      : graph.nodes.filter((node) => nodeMatchesKnowledgeGraphView(node, view.id)).length;
-    return counts;
-  }, {} as Record<KnowledgeGraphGovernanceView, number>);
-}
-
-function nodeMatchesKnowledgeGraphView(node: KnowledgeGraphNode, view: KnowledgeGraphGovernanceView) {
-  if (!node.id.startsWith("card:") || node.kind === "type-definition") return false;
-  if (view === "noSource") return isSourceRequiredKnowledgeNode(node) && !node.hasSource;
-  if (view === "unreferenced") return node.outboundCount === 0;
-  if (view === "adoptedOpen") return node.adoptedButNotDistilled;
-  if (view === "islands") return node.inboundCount === 0 && node.outboundCount === 0;
-  if (view === "duplicateTitles") return node.duplicateTitle || node.duplicateConcept;
-  if (view === "reviewNeeded") return node.hasConflict || node.hasUncertainty || knowledgeGraphReviewStatusNeedsAttention(node.reviewStatus);
-  if (view === "staleHighReference") return node.staleHighReference;
-  return true;
-}
-
-function knowledgeGraphReviewStatusNeedsAttention(status?: string | null) {
-  if (!status) return false;
-  return /待|需|冲突|不确定|核查|复审|过期|老化|review|conflict|uncertain|stale/i.test(status);
-}
-
-function isSourceRequiredKnowledgeNode(node: KnowledgeGraphNode) {
-  const kind = node.kind.toLowerCase();
-  return kind === "knowledge_card" || kind === "knowledge-card" || kind === "method" || kind === "skill_output" || kind === "skill-output";
-}
-
-function buildKnowledgeGraphNeighborhood(graph: KnowledgeGraphState, node: KnowledgeGraphNode | null): KnowledgeGraphNeighborhood {
-  if (!node || node.kind === "folder" || !node.id.startsWith("card:")) {
-    return { groups: [], inbound: [], outbound: [] };
-  }
-  const nodesById = new Map(graph.nodes.map((candidate) => [candidate.id, candidate]));
-  const bidirectionalKeys = new Set(
-    graph.relationships
-      .filter((relation) => relation.bidirectional)
-      .flatMap((relation) => {
-        const source = `card:${relation.sourceFile}`;
-        const target = `card:${relation.targetFile}`;
-        const kind = `frontmatter:${relation.fieldName}`;
-        return [`${source}->${target}->${kind}`, `${target}->${source}->${kind}`];
-      }),
-  );
-  const itemForEdge = (edge: { source: string; target: string; kind: string }, direction: "inbound" | "outbound"): KnowledgeGraphNeighborhoodItem | null => {
-    const neighborId = direction === "outbound" ? edge.target : edge.source;
-    const neighbor = nodesById.get(neighborId);
-    if (!neighbor || neighbor.kind === "folder") return null;
-    return {
-      bidirectional: bidirectionalKeys.has(`${edge.source}->${edge.target}->${edge.kind}`),
-      id: neighbor.id,
-      label: neighbor.label,
-      path: neighbor.path,
-      relationLabel: knowledgeGraphRelationLabel(edge.kind),
-    };
-  };
-  const relationEdges = graph.edges.filter((edge) => edge.kind !== "contains" && (edge.source === node.id || edge.target === node.id));
-  const outbound = relationEdges
-    .filter((edge) => edge.source === node.id)
-    .map((edge) => itemForEdge(edge, "outbound"))
-    .filter((item): item is KnowledgeGraphNeighborhoodItem => Boolean(item))
-    .sort(knowledgeGraphNeighborhoodItemSort);
-  const inbound = relationEdges
-    .filter((edge) => edge.target === node.id)
-    .map((edge) => itemForEdge(edge, "inbound"))
-    .filter((item): item is KnowledgeGraphNeighborhoodItem => Boolean(item))
-    .sort(knowledgeGraphNeighborhoodItemSort);
-  const groupCounts = new Map<string, number>();
-  for (const item of [...outbound, ...inbound]) {
-    groupCounts.set(item.relationLabel, (groupCounts.get(item.relationLabel) ?? 0) + 1);
-  }
-  const groups = [...groupCounts.entries()]
-    .map(([label, count]) => ({ count, label }))
-    .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label, "zh-Hans-CN"));
-  return { groups, inbound, outbound };
-}
-
-function knowledgeGraphNeighborhoodItemSort(left: KnowledgeGraphNeighborhoodItem, right: KnowledgeGraphNeighborhoodItem) {
-  return left.relationLabel.localeCompare(right.relationLabel, "zh-Hans-CN") || left.label.localeCompare(right.label, "zh-Hans-CN");
 }
 
 function relaxKnowledgeGraphLayout(
@@ -641,14 +421,13 @@ function knowledgeGraphNodeColor(depth: number) {
 }
 
 function knowledgeGraphTypedNodeColor(node: KnowledgeGraphNode, depth: number) {
-  if (node.typeColor && /^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(node.typeColor)) return node.typeColor;
   if (node.kind === "folder") return knowledgeGraphNodeColor(depth);
   const normalizedKind = node.kind.toLowerCase();
   if (normalizedKind.includes("source")) return "#5f8f7b";
+  if (normalizedKind.includes("analysis") || normalizedKind.includes("report")) return "#8d7cc3";
   if (normalizedKind.includes("skill")) return "#c69348";
-  if (normalizedKind.includes("concept")) return "#5f79b8";
-  if (normalizedKind.includes("entity")) return "#6f7fb7";
   if (normalizedKind.includes("method") || normalizedKind.includes("knowledge")) return "#dc7d57";
+  if (normalizedKind.includes("concept") || normalizedKind.includes("entity")) return "#5f79b8";
   return knowledgeGraphNodeColor(depth);
 }
 
@@ -784,8 +563,10 @@ function drawKnowledgeGraphCanvas(
     context.strokeStyle = knowledgeGraphEdgeColor(relationKind);
     context.lineWidth = knowledgeGraphEdgeWidth(relationKind);
     context.setLineDash(knowledgeGraphEdgeDash(relationKind));
+    context.globalAlpha = knowledgeGraphEdgeAlpha(relationKind);
     context.lineDashOffset = relationKind === "frontmatter" ? 0 : edgeDashOffset;
     context.stroke();
+    context.globalAlpha = 1;
     if (relationKind === "frontmatter") {
       drawKnowledgeGraphEdgeLabel(context, source, target, knowledgeGraphRelationLabel(edge.kind));
     }
@@ -795,33 +576,22 @@ function drawKnowledgeGraphCanvas(
 
   for (const [index, node] of layout.nodes.entries()) {
     const point = knowledgeGraphToCanvasPoint(node, safeCamera);
-    const pulseWave = Math.sin(motion * 2.05 + index * 0.42);
-    const pulse = 0.5 + pulseWave * 0.5;
-    const baseRadius = Math.max(3.4, node.radius * safeCamera.scale);
-    const radius = baseRadius * (1 + pulseWave * (node.kind === "card" ? 0.075 : 0.055));
+    const pulse = 0.5 + Math.sin(motion * 1.65 + index * 0.42) * 0.5;
+    const radius = Math.max(node.kind === "folder" ? 5.2 : 3.1, node.radius * safeCamera.scale) + pulse * (node.kind === "folder" ? 0.5 : 0.35);
     const hovered = hoveredNodeId === node.id;
-    if (node.kind !== "card" || hovered) {
-      const haloRadius = radius * (hovered ? 2.05 : 1.42 + pulse * 0.42);
-      const haloAlpha = hovered ? 0.34 : 0.13 + pulse * 0.18;
+    if (node.kind === "folder" || hovered) {
       context.beginPath();
-      context.arc(point.x, point.y, haloRadius, 0, Math.PI * 2);
-      context.fillStyle = hexToRgba(node.color, haloAlpha);
+      context.arc(point.x, point.y, radius + (hovered ? 9 : 6 + pulse * 1.6), 0, Math.PI * 2);
+      context.fillStyle = hexToRgba(node.color, hovered ? 0.2 : 0.09 + pulse * 0.04);
       context.fill();
     }
     context.beginPath();
-    context.arc(point.x, point.y, radius * (hovered ? 1.12 : 1), 0, Math.PI * 2);
-    context.fillStyle = node.color;
+    context.arc(point.x, point.y, radius + (hovered ? 1.4 : 0), 0, Math.PI * 2);
+    context.fillStyle = node.kind === "folder" ? hexToRgba(node.color, 0.94) : hexToRgba(node.color, 0.78);
     context.fill();
-    context.lineWidth = hovered ? 1.8 : 0.9 + pulse * 0.55;
-    context.strokeStyle = hovered ? "rgba(248, 245, 238, 0.92)" : "rgba(248, 245, 238, 0.68)";
+    context.lineWidth = hovered ? 1.9 : node.kind === "folder" ? 1.4 : 0.8;
+    context.strokeStyle = hovered ? "rgba(248, 245, 238, 0.92)" : node.kind === "folder" ? "rgba(248, 245, 238, 0.78)" : "rgba(248, 245, 238, 0.46)";
     context.stroke();
-    if (node.typeIcon && radius >= 7) {
-      context.font = `${clamp(radius * 0.92, 8, 15)}px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif`;
-      context.textAlign = "center";
-      context.textBaseline = "middle";
-      context.fillStyle = "rgba(248, 245, 238, 0.92)";
-      context.fillText(node.typeIcon.slice(0, 2), point.x, point.y + 0.5, radius * 1.5);
-    }
   }
 
   context.textAlign = "center";
@@ -835,9 +605,9 @@ function drawKnowledgeGraphCanvas(
     const label = ellipsizeCanvasLabel(node.label, hoveredNodeId === node.id ? 22 : 14);
     context.font = `${labelFontSize}px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif`;
     context.lineWidth = Math.max(2, labelFontSize * 0.28);
-    context.strokeStyle = "rgba(31, 29, 26, 0.72)";
+    context.strokeStyle = "rgba(249, 246, 239, 0.92)";
     context.strokeText(label, point.x, labelTop);
-    context.fillStyle = "rgba(236, 229, 219, 0.86)";
+    context.fillStyle = node.kind === "folder" ? "rgba(62, 55, 48, 0.9)" : "rgba(96, 86, 76, 0.78)";
     context.fillText(label, point.x, labelTop);
   }
   context.restore();
@@ -845,7 +615,7 @@ function drawKnowledgeGraphCanvas(
 
 function knowledgeGraphLabelFontSize(nodePixelRadius: number, hovered: boolean) {
   const base = nodePixelRadius * 0.72 + 3.2;
-  return clamp(hovered ? base + 1.2 : base, 7, 13.5);
+  return clamp(hovered ? base + 1.2 : base, 7, 12.5);
 }
 
 function hexToRgba(hex: string, alpha: number) {
@@ -870,73 +640,25 @@ function knowledgeGraphRelationKind(kind: string) {
 }
 
 function knowledgeGraphRelationLabel(kind: string) {
-  const normalized = kind.replace(/^frontmatter:/, "").trim();
-  const labels: Record<string, string> = {
-    abstracted_from_draft: "从稿件抽象",
-    adopts_knowledge: "已采纳",
-    appears_in: "出现于",
-    belongs_to: "归属",
-    contains: "包含",
-    derived_from_knowledge: "已沉淀",
-    distilled_from_memory: "从记忆蒸馏",
-    derived_from: "提炼自",
-    evidence: "依据材料",
-    excerpted_from_project: "从作品摘录",
-    extracts_to: "提炼为",
-    quotes: "引用摘录",
-    source: "素材来源",
-    conflicts_with: "冲突对象",
-    冲突对象: "冲突对象",
-    冲突卡片: "冲突对象",
-    uncertainty: "不确定性",
-    不确定性: "不确定性",
-    references_knowledge: "引用知识",
-    related_to: "关联",
-    source_ref: "素材出处",
-    source_refs: "素材出处",
-    supports: "支撑",
-    used_by_projects: "被作品使用",
-    uses_elements: "使用元素",
-    wikilink: "正文链接",
-  };
-  const fallback = /[\u4e00-\u9fff]/.test(normalized) ? normalized : "扩展关系";
-  return (labels[normalized] ?? fallback).slice(0, 22);
-}
-
-function knowledgeGraphNodeKindLabel(kind: string) {
-  const normalized = kind.toLowerCase();
-  const labels: Record<string, string> = {
-    analysis: "拆解报告",
-    card: "知识卡",
-    concept: "概念",
-    entity: "实体",
-    folder: "分类",
-    knowledge_card: "知识卡",
-    "knowledge-card": "知识卡",
-    knowledge_concept: "概念卡",
-    knowledge_entity: "实体卡",
-    knowledge_source: "来源资料",
-    method: "方法卡",
-    note: "普通笔记",
-    skill: "技能产物",
-    skill_output: "技能产物",
-    "skill-output": "技能产物",
-    source: "来源资料",
-    "type-definition": "类型定义",
-  };
-  return labels[normalized] ?? kind;
+  return kind.replace(/^frontmatter:/, "").replace(/_/g, " ").slice(0, 22);
 }
 
 function knowledgeGraphEdgeColor(kind: string) {
-  if (kind === "frontmatter") return "rgba(220, 125, 87, 0.9)";
-  if (kind === "wikilink") return "rgba(220, 125, 87, 0.72)";
-  return "rgba(138, 129, 118, 0.64)";
+  if (kind === "frontmatter") return "rgba(160, 91, 66, 0.82)";
+  if (kind === "wikilink") return "rgba(116, 107, 94, 0.58)";
+  return "rgba(116, 107, 94, 0.34)";
 }
 
 function knowledgeGraphEdgeWidth(kind: string) {
-  if (kind === "frontmatter") return 1.85;
-  if (kind === "wikilink") return 1.35;
-  return 1.1;
+  if (kind === "frontmatter") return 2.15;
+  if (kind === "wikilink") return 1.2;
+  return 0.9;
+}
+
+function knowledgeGraphEdgeAlpha(kind: string) {
+  if (kind === "frontmatter") return 0.92;
+  if (kind === "wikilink") return 0.72;
+  return 0.54;
 }
 
 function knowledgeGraphEdgeDash(kind: string) {

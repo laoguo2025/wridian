@@ -1,17 +1,14 @@
 import type { CreativeSkill, CreativeSkillId } from "../creativeSkills";
-import type { CreativeSkillSources } from "../appTypes";
 
 export function CreativeSkillsDrawer({
   enabled,
   onClose,
   onToggle,
-  sources,
   skills,
 }: {
   enabled: Record<CreativeSkillId, boolean>;
   onClose: () => void;
   onToggle: (id: CreativeSkillId) => void;
-  sources: CreativeSkillSources;
   skills: CreativeSkill[];
 }) {
   return (
@@ -32,11 +29,6 @@ export function CreativeSkillsDrawer({
               <div className="creative-skill-main">
                 <div className="creative-skill-title">{skill.title}</div>
                 <div className="creative-skill-meta">{skill.status}</div>
-                {skill.id === "knowledgeOps" ? (
-                  <div className="creative-skill-source">
-                    {sources.knowledgeOps.available ? `来源：${sources.knowledgeOps.path ?? "zhishiku-skill"}` : "来源：内置最小协议"}
-                  </div>
-                ) : null}
               </div>
               <button
                 type="button"

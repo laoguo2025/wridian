@@ -18,12 +18,15 @@ export type ProjectState = {
 };
 
 export type RelevantNote = {
+  kind: "draft" | "knowledge";
   path: string;
+  relativePath?: string | null;
   title: string;
   snippet: string;
   score: number;
   hasOutgoingLinks: boolean;
   hasBacklinks: boolean;
+  reasons: string[];
 };
 
 export async function getProjectState() {

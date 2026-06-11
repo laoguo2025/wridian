@@ -1,19 +1,23 @@
-use crate::file_lock::with_file_write_lock;
 use crate::memory::{read_relevant_memory_snippets, write_memory_leaves, MemoryLeafDraft};
 use crate::model_accounts::{
-    anthropic_messages_url, is_openai_oauth_settings, openai_chat_completions_url,
+    anthropic_messages_url, apply_openai_compatible_provider_extras, ensure_supported_protocol,
+    gemini_generate_content_url, is_openai_oauth_settings, openai_chat_completions_url,
     openai_oauth_account_id, read_active_model_settings, read_anthropic_response_text,
     read_gemini_response_text, response_body_summary, ActiveModelSettings,
+    GEMINI_DEFAULT_MAX_OUTPUT_TOKENS,
 };
 use crate::projects::{active_project_model, read_active_project_context};
-use crate::runtime::{ensure_workspace, iso_timestamp, runtime_root, wridian_data_dir};
+use crate::runtime::{ensure_workspace, runtime_root, wridian_data_dir};
 use crate::workspace::{read_active_work_root, resolved_knowledge_root};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::fs;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
+use tauri::{path::BaseDirectory, AppHandle, Manager};
 
 const BUDGET_ACTIVE_CONTEXT_CHARS: usize = 1200;
 const BUDGET_CURRENT_DRAFT_CHARS: usize = 7000;
@@ -22,15 +26,13 @@ const BUDGET_EXPLICIT_TOTAL_CHARS: usize = 4200;
 const BUDGET_MEMORY_TOTAL_CHARS: usize = 2200;
 const BUDGET_PROJECT_CONTEXT_CHARS: usize = 2600;
 const BUDGET_SELECTION_CHARS: usize = 3000;
-const BUDGET_HOT_KNOWLEDGE_ITEM_CHARS: usize = 760;
-const BUDGET_HOT_KNOWLEDGE_TOTAL_CHARS: usize = 1800;
 const BUDGET_TOOL_ITEM_CHARS: usize = 1800;
 const BUDGET_TOOL_TOTAL_CHARS: usize = 2600;
-const MAX_HOT_CACHE_ENTRIES: usize = 40;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CoCreateInput {
+    request_id: Option<String>,
     source_path: String,
     title: String,
     content: String,
@@ -40,6 +42,18 @@ pub(crate) struct CoCreateInput {
     selected_model_id: Option<String>,
     #[serde(default)]
     context_items: Vec<DialogueContextItem>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AbortCoCreateInput {
+    request_id: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AbortCoCreateResponse {
+    aborted: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -55,10 +69,24 @@ pub(crate) struct DialogueContextItem {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CoCreateResponse {
+    context_load_status: Vec<ContextLoadStatus>,
     reply: String,
     edits: Vec<CoCreateEdit>,
     memories_used: Vec<String>,
     memories_written: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ContextLoadStatus {
+    key: String,
+    label: String,
+    loaded: bool,
+    item_count: usize,
+    included_chars: usize,
+    budget_chars: usize,
+    truncated: bool,
+    note: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -70,17 +98,61 @@ pub(crate) struct CoCreateEdit {
 }
 
 #[tauri::command]
-pub(crate) async fn wridian_cocreate(mut input: CoCreateInput) -> Result<CoCreateResponse, String> {
+pub(crate) async fn wridian_cocreate(
+    app: AppHandle,
+    input: CoCreateInput,
+) -> Result<CoCreateResponse, String> {
+    let request_id = input
+        .request_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(ToOwned::to_owned);
+    if let Some(id) = request_id.as_deref() {
+        begin_cocreation_request(id);
+    }
+    let result = run_cocreation(app, input, request_id.as_deref()).await;
+    if let Some(id) = request_id.as_deref() {
+        finish_cocreation_request(id);
+    }
+    result
+}
+
+#[tauri::command]
+pub(crate) fn wridian_abort_cocreate(
+    input: AbortCoCreateInput,
+) -> Result<AbortCoCreateResponse, String> {
+    let request_id = input.request_id.trim();
+    if request_id.is_empty() {
+        return Ok(AbortCoCreateResponse { aborted: false });
+    }
+    cancel_cocreation_request(request_id);
+    Ok(AbortCoCreateResponse { aborted: true })
+}
+
+async fn run_cocreation(
+    app: AppHandle,
+    mut input: CoCreateInput,
+    request_id: Option<&str>,
+) -> Result<CoCreateResponse, String> {
     let user_input = input.user_input.trim();
     if user_input.is_empty() {
         return Err("对话输入不能为空。".to_string());
     }
+    check_cocreation_cancelled(request_id)?;
 
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
-    input.context_items = expand_context_items(&data_dir, &input.context_items)?;
-    let hot_knowledge = read_hot_knowledge_snippets(&data_dir, &input);
-    let _ = record_hot_cache_from_context(&data_dir, &input.context_items);
+    let skill_resource_root = app
+        .path()
+        .resolve("resources/skills", BaseDirectory::Resource)
+        .ok();
+    input.context_items = expand_context_items(
+        &data_dir,
+        skill_resource_root.as_deref(),
+        &input.context_items,
+    )?;
+    check_cocreation_cancelled(request_id)?;
     let settings = read_active_model_settings(&data_dir, input.selected_model_id.as_deref())?
         .ok_or_else(|| "请先在模型设置里保存模型账户。".to_string())?;
     let memories_used =
@@ -88,16 +160,25 @@ pub(crate) async fn wridian_cocreate(mut input: CoCreateInput) -> Result<CoCreat
     let active_context = read_active_context(&data_dir);
     let active_project_context = read_active_project_context(&data_dir)?;
     let project_model = active_project_model(&data_dir)?;
-    let model_output = cocreate_with_model(
-        &settings,
-        project_model.as_deref(),
+    let context_load_status = build_context_load_status(
         &input,
         &memories_used,
         &active_context,
         &active_project_context,
-        &hot_knowledge,
+    );
+    let model_output = await_cancellable(
+        request_id,
+        cocreate_with_model(
+            &settings,
+            project_model.as_deref(),
+            &input,
+            &memories_used,
+            &active_context,
+            &active_project_context,
+        ),
     )
     .await?;
+    check_cocreation_cancelled(request_id)?;
 
     let memories_written = write_memory_leaves(&data_dir, &model_output.memories)?
         .into_iter()
@@ -105,11 +186,84 @@ pub(crate) async fn wridian_cocreate(mut input: CoCreateInput) -> Result<CoCreat
         .collect();
 
     Ok(CoCreateResponse {
+        context_load_status,
         reply: model_output.reply,
         edits: model_output.edits,
         memories_used,
         memories_written,
     })
+}
+
+static ACTIVE_COCREATION_REQUESTS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+static CANCELLED_COCREATION_REQUESTS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+fn active_cocreation_requests() -> &'static Mutex<HashSet<String>> {
+    ACTIVE_COCREATION_REQUESTS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn cancelled_cocreation_requests() -> &'static Mutex<HashSet<String>> {
+    CANCELLED_COCREATION_REQUESTS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn begin_cocreation_request(request_id: &str) {
+    if let Ok(mut cancelled) = cancelled_cocreation_requests().lock() {
+        cancelled.remove(request_id);
+    }
+    if let Ok(mut active) = active_cocreation_requests().lock() {
+        active.insert(request_id.to_string());
+    }
+}
+
+fn finish_cocreation_request(request_id: &str) {
+    if let Ok(mut active) = active_cocreation_requests().lock() {
+        active.remove(request_id);
+    }
+    if let Ok(mut cancelled) = cancelled_cocreation_requests().lock() {
+        cancelled.remove(request_id);
+    }
+}
+
+fn cancel_cocreation_request(request_id: &str) {
+    if let Ok(mut cancelled) = cancelled_cocreation_requests().lock() {
+        cancelled.insert(request_id.to_string());
+    }
+}
+
+fn cocreation_request_cancelled(request_id: &str) -> bool {
+    cancelled_cocreation_requests()
+        .lock()
+        .map(|cancelled| cancelled.contains(request_id))
+        .unwrap_or(false)
+}
+
+fn check_cocreation_cancelled(request_id: Option<&str>) -> Result<(), String> {
+    if request_id.is_some_and(cocreation_request_cancelled) {
+        Err("对话已停止。".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+async fn await_cancellable<T, Fut>(request_id: Option<&str>, future: Fut) -> Result<T, String>
+where
+    Fut: Future<Output = Result<T, String>>,
+{
+    let Some(request_id) = request_id else {
+        return future.await;
+    };
+    tokio::select! {
+        result = future => result,
+        _ = wait_for_cocreation_cancel(request_id.to_string()) => Err("对话已停止。".to_string()),
+    }
+}
+
+async fn wait_for_cocreation_cancel(request_id: String) {
+    loop {
+        if cocreation_request_cancelled(&request_id) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -135,8 +289,8 @@ async fn cocreate_with_model(
     memories: &[String],
     active_context: &str,
     active_project_context: &str,
-    hot_knowledge: &str,
 ) -> Result<ParsedCoCreateResponse, String> {
+    ensure_supported_protocol(&settings.protocol)?;
     if is_openai_oauth_settings(settings) {
         return cocreate_with_openai_oauth(
             settings,
@@ -145,7 +299,6 @@ async fn cocreate_with_model(
             memories,
             active_context,
             active_project_context,
-            hot_knowledge,
         )
         .await;
     }
@@ -158,7 +311,6 @@ async fn cocreate_with_model(
                 memories,
                 active_context,
                 active_project_context,
-                hot_knowledge,
             )
             .await
         }
@@ -170,11 +322,10 @@ async fn cocreate_with_model(
                 memories,
                 active_context,
                 active_project_context,
-                hot_knowledge,
             )
             .await
         }
-        _ => {
+        "openai-compatible" => {
             cocreate_with_openai_compatible(
                 settings,
                 project_model,
@@ -182,10 +333,10 @@ async fn cocreate_with_model(
                 memories,
                 active_context,
                 active_project_context,
-                hot_knowledge,
             )
             .await
         }
+        _ => unreachable!("protocol checked before dispatch"),
     }
 }
 
@@ -196,7 +347,6 @@ async fn cocreate_with_openai_oauth(
     memories: &[String],
     active_context: &str,
     active_project_context: &str,
-    hot_knowledge: &str,
 ) -> Result<ParsedCoCreateResponse, String> {
     let url = format!("{}/responses", settings.base_url.trim_end_matches('/'));
     let client = reqwest::Client::builder()
@@ -211,7 +361,7 @@ async fn cocreate_with_openai_oauth(
         .json(&json!({
             "model": project_model.unwrap_or(&settings.model),
             "instructions": cocreation_system_prompt(),
-            "input": build_cocreation_prompt(input, memories, active_context, active_project_context, hot_knowledge),
+            "input": build_cocreation_prompt(input, memories, active_context, active_project_context),
             "store": false,
             "temperature": 0.7
         }))
@@ -246,31 +396,20 @@ async fn cocreate_with_openai_compatible(
     memories: &[String],
     active_context: &str,
     active_project_context: &str,
-    hot_knowledge: &str,
 ) -> Result<ParsedCoCreateResponse, String> {
     let url = openai_chat_completions_url(&settings.base_url);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(90))
         .build()
         .map_err(|error| format!("对话客户端创建失败：{error}"))?;
+    let model = project_model.unwrap_or(&settings.model);
+    let prompt = build_cocreation_prompt(input, memories, active_context, active_project_context);
+    let mut body = openai_compatible_cocreation_body(model, &prompt, true);
+    apply_openai_compatible_provider_extras(settings, model, &mut body);
     let response = client
-        .post(url)
+        .post(url.clone())
         .bearer_auth(&settings.api_key)
-        .json(&json!({
-            "model": project_model.unwrap_or(&settings.model),
-            "messages": [
-                {
-                    "role": "system",
-                    "content": cocreation_system_prompt()
-                },
-                {
-                    "role": "user",
-                    "content": build_cocreation_prompt(input, memories, active_context, active_project_context, hot_knowledge)
-                }
-            ],
-            "response_format": { "type": "json_object" },
-            "temperature": 0.7
-        }))
+        .json(&body)
         .send()
         .await
         .map_err(|error| format!("对话请求失败：{error}"))?;
@@ -279,13 +418,41 @@ async fn cocreate_with_openai_compatible(
         .text()
         .await
         .map_err(|error| format!("对话响应读取失败：{error}"))?;
-    if !status.is_success() {
+    let body = if !status.is_success()
+        && should_retry_without_response_format(status.as_u16(), &body)
+        && body_mentions_response_format(&body)
+    {
+        let mut retry_body = openai_compatible_cocreation_body(model, &prompt, false);
+        apply_openai_compatible_provider_extras(settings, model, &mut retry_body);
+        let retry = client
+            .post(url)
+            .bearer_auth(&settings.api_key)
+            .json(&retry_body)
+            .send()
+            .await
+            .map_err(|error| format!("对话请求重试失败：{error}"))?;
+        let retry_status = retry.status();
+        let retry_body = retry
+            .text()
+            .await
+            .map_err(|error| format!("对话重试响应读取失败：{error}"))?;
+        if !retry_status.is_success() {
+            return Err(format!(
+                "对话请求失败：HTTP {} {}",
+                retry_status.as_u16(),
+                response_body_summary(&retry_body)
+            ));
+        }
+        retry_body
+    } else if !status.is_success() {
         return Err(format!(
             "对话请求失败：HTTP {} {}",
             status.as_u16(),
             response_body_summary(&body)
         ));
-    }
+    } else {
+        body
+    };
     let content = read_model_response_text(&body)?;
     let parsed = parse_cocreation_model_output(&content)?;
     if parsed.reply.trim().is_empty() {
@@ -295,6 +462,39 @@ async fn cocreate_with_openai_compatible(
     }
 }
 
+fn openai_compatible_cocreation_body(model: &str, prompt: &str, strict_json: bool) -> Value {
+    let mut body = json!({
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": cocreation_system_prompt()
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "temperature": 0.7
+    });
+    if strict_json {
+        body["response_format"] = json!({ "type": "json_object" });
+    }
+    body
+}
+
+fn should_retry_without_response_format(status: u16, body: &str) -> bool {
+    matches!(status, 400 | 404 | 422)
+        && (body.to_ascii_lowercase().contains("unsupported")
+            || body.to_ascii_lowercase().contains("invalid")
+            || body_mentions_response_format(body))
+}
+
+fn body_mentions_response_format(body: &str) -> bool {
+    let body = body.to_ascii_lowercase();
+    body.contains("response_format") || body.contains("json_object")
+}
+
 async fn cocreate_with_anthropic(
     settings: &ActiveModelSettings,
     project_model: Option<&str>,
@@ -302,7 +502,6 @@ async fn cocreate_with_anthropic(
     memories: &[String],
     active_context: &str,
     active_project_context: &str,
-    hot_knowledge: &str,
 ) -> Result<ParsedCoCreateResponse, String> {
     let url = anthropic_messages_url(&settings.base_url);
     let client = reqwest::Client::builder()
@@ -328,7 +527,7 @@ async fn cocreate_with_anthropic(
             "messages": [
                 {
                     "role": "user",
-                    "content": build_cocreation_prompt(input, memories, active_context, active_project_context, hot_knowledge)
+                    "content": build_cocreation_prompt(input, memories, active_context, active_project_context)
                 }
             ],
             "max_tokens": 2048,
@@ -365,21 +564,18 @@ async fn cocreate_with_gemini(
     memories: &[String],
     active_context: &str,
     active_project_context: &str,
-    hot_knowledge: &str,
 ) -> Result<ParsedCoCreateResponse, String> {
     let model = project_model.unwrap_or(&settings.model);
-    let url = format!("{}/models/{}:generateContent", settings.base_url, model);
+    let url = gemini_generate_content_url(&settings.base_url, model);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(90))
         .build()
         .map_err(|error| format!("对话客户端创建失败：{error}"))?;
-    let mut request = client.post(if settings.auth_style == "oauth_external" {
-        url
-    } else {
-        format!("{}?key={}", url, settings.api_key)
-    });
+    let mut request = client.post(url);
     if settings.auth_style == "oauth_external" {
         request = request.bearer_auth(&settings.api_key);
+    } else {
+        request = request.header("x-goog-api-key", &settings.api_key);
     }
     let response = request
         .json(&json!({
@@ -390,12 +586,13 @@ async fn cocreate_with_gemini(
                 {
                     "role": "user",
                     "parts": [
-                        { "text": build_cocreation_prompt(input, memories, active_context, active_project_context, hot_knowledge) }
+                        { "text": build_cocreation_prompt(input, memories, active_context, active_project_context) }
                     ]
                 }
             ],
             "generationConfig": {
                 "responseMimeType": "application/json",
+                "maxOutputTokens": GEMINI_DEFAULT_MAX_OUTPUT_TOKENS,
                 "temperature": 0.7
             }
         }))
@@ -430,284 +627,27 @@ fn read_active_context(data_dir: &Path) -> String {
         .unwrap_or_default()
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct KnowledgeHotCache {
-    schema_version: u32,
-    entries: Vec<KnowledgeHotCacheEntry>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct KnowledgeHotCacheEntry {
-    path: String,
-    relative_path: String,
-    title: String,
-    last_used: String,
-    hits: usize,
-    related_terms: Vec<String>,
-}
-
-fn knowledge_hot_cache_path(data_dir: &Path) -> PathBuf {
-    runtime_root(data_dir).join("knowledge-hot-cache.json")
-}
-
-fn read_hot_knowledge_snippets(data_dir: &Path, input: &CoCreateInput) -> String {
-    let knowledge_root = match resolved_knowledge_root(data_dir).and_then(|path| {
-        path.canonicalize()
-            .map_err(|error| format!("知识库目录解析失败：{error}"))
-    }) {
-        Ok(root) => root,
-        Err(_) => return String::new(),
-    };
-    let cache = read_hot_cache(data_dir);
-    if cache.entries.is_empty() {
-        return String::new();
-    }
-    let explicit_paths = input
-        .context_items
-        .iter()
-        .filter_map(|item| item.source_path.as_deref())
-        .filter_map(|path| PathBuf::from(path).canonicalize().ok())
-        .collect::<HashSet<_>>();
-    let query = hot_cache_query_text(input);
-    let mut scored = cache
-        .entries
-        .iter()
-        .filter_map(|entry| {
-            let path = PathBuf::from(&entry.path).canonicalize().ok()?;
-            if !path.is_file()
-                || !path.starts_with(&knowledge_root)
-                || explicit_paths.contains(&path)
-            {
-                return None;
-            }
-            let score = hot_cache_entry_score(entry, &query);
-            (score > 0).then_some((score, entry, path))
-        })
-        .collect::<Vec<_>>();
-    scored.sort_by(|left, right| {
-        right
-            .0
-            .cmp(&left.0)
-            .then_with(|| right.1.hits.cmp(&left.1.hits))
-    });
-
-    let mut rendered = String::new();
-    for (_, entry, path) in scored.into_iter().take(3) {
-        let Ok(content) = fs::read_to_string(&path) else {
-            continue;
-        };
-        let block = format!(
-            "【hot｜{}｜{}】\n{}\n",
-            entry.title,
-            entry.relative_path,
-            compact_text(&content, BUDGET_HOT_KNOWLEDGE_ITEM_CHARS)
-        );
-        if rendered.chars().count() + block.chars().count() > BUDGET_HOT_KNOWLEDGE_TOTAL_CHARS {
-            break;
-        }
-        rendered.push_str(&block);
-    }
-    rendered.trim().to_string()
-}
-
-fn record_hot_cache_from_context(
-    data_dir: &Path,
-    items: &[DialogueContextItem],
-) -> Result<(), String> {
-    let knowledge_root = resolved_knowledge_root(data_dir)?
-        .canonicalize()
-        .map_err(|error| format!("知识库目录解析失败：{error}"))?;
-    let mut cache = read_hot_cache(data_dir);
-    cache.schema_version = 1;
-    let now = iso_timestamp();
-
-    for item in items.iter().filter(|item| item.kind.trim() != "tool") {
-        let Some(source_path) = item.source_path.as_deref() else {
-            continue;
-        };
-        let Ok(path) = PathBuf::from(source_path).canonicalize() else {
-            continue;
-        };
-        if !path.is_file() || !path.starts_with(&knowledge_root) {
-            continue;
-        }
-        let relative_path = path
-            .strip_prefix(&knowledge_root)
-            .unwrap_or(&path)
-            .to_string_lossy()
-            .replace('\\', "/");
-        let title = if item.label.trim().is_empty() {
-            path.file_stem()
-                .map(|stem| stem.to_string_lossy().into_owned())
-                .unwrap_or_else(|| relative_path.clone())
-        } else {
-            item.label.trim().to_string()
-        };
-        let related_terms = hot_cache_terms(&format!("{title}\n{relative_path}\n{}", item.value));
-        let canonical_path = path.to_string_lossy().into_owned();
-        if let Some(entry) = cache
-            .entries
-            .iter_mut()
-            .find(|entry| entry.path == canonical_path)
-        {
-            entry.title = title;
-            entry.relative_path = relative_path;
-            entry.last_used = now.clone();
-            entry.hits = entry.hits.saturating_add(1);
-            entry.related_terms = merge_hot_terms(&entry.related_terms, &related_terms);
-        } else {
-            cache.entries.push(KnowledgeHotCacheEntry {
-                path: canonical_path,
-                relative_path,
-                title,
-                last_used: now.clone(),
-                hits: 1,
-                related_terms,
-            });
-        }
-    }
-
-    cache.entries.sort_by(|left, right| {
-        right
-            .last_used
-            .cmp(&left.last_used)
-            .then_with(|| right.hits.cmp(&left.hits))
-    });
-    cache.entries.truncate(MAX_HOT_CACHE_ENTRIES);
-    write_hot_cache(data_dir, &cache)
-}
-
-fn read_hot_cache(data_dir: &Path) -> KnowledgeHotCache {
-    fs::read_to_string(knowledge_hot_cache_path(data_dir))
-        .ok()
-        .and_then(|content| serde_json::from_str::<KnowledgeHotCache>(&content).ok())
-        .unwrap_or(KnowledgeHotCache {
-            schema_version: 1,
-            entries: Vec::new(),
-        })
-}
-
-fn write_hot_cache(data_dir: &Path, cache: &KnowledgeHotCache) -> Result<(), String> {
-    let path = knowledge_hot_cache_path(data_dir);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| format!("hot cache 目录创建失败：{error}"))?;
-    }
-    let content = serde_json::to_string_pretty(cache).map_err(|error| error.to_string())?;
-    with_file_write_lock(data_dir, &path, || {
-        fs::write(&path, content).map_err(|error| format!("hot cache 写入失败：{error}"))
-    })
-}
-
-fn hot_cache_query_text(input: &CoCreateInput) -> String {
-    let explicit = input
-        .context_items
-        .iter()
-        .map(|item| {
-            format!(
-                "{} {}",
-                item.label,
-                item.relative_path.as_deref().unwrap_or("")
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!(
-        "{}\n{}\n{}\n{}\n{}",
-        input.title,
-        input.user_input,
-        input.selected_text.as_deref().unwrap_or(""),
-        input.content.chars().take(1600).collect::<String>(),
-        explicit
-    )
-}
-
-fn hot_cache_entry_score(entry: &KnowledgeHotCacheEntry, query: &str) -> usize {
-    let query = query.to_lowercase();
-    let mut score = entry.hits.min(6);
-    for term in &entry.related_terms {
-        if term.chars().count() >= 2 && query.contains(term) {
-            score += 10;
-        }
-    }
-    for token in hot_cache_terms(&format!("{}\n{}", entry.title, entry.relative_path)) {
-        if query.contains(&token) {
-            score += 14;
-        }
-    }
-    score
-}
-
-fn hot_cache_terms(text: &str) -> Vec<String> {
-    let mut terms = HashSet::new();
-    for token in text
-        .split(|ch: char| !(ch.is_alphanumeric() || ('\u{4e00}'..='\u{9fff}').contains(&ch)))
-        .map(|token| token.trim().to_lowercase())
-    {
-        if token.chars().count() >= 2 && token.chars().count() <= 32 {
-            terms.insert(token);
-        }
-    }
-    extract_wikilink_like_terms(text, &mut terms);
-    let mut terms = terms.into_iter().collect::<Vec<_>>();
-    terms.sort();
-    terms.truncate(24);
-    terms
-}
-
-fn extract_wikilink_like_terms(text: &str, terms: &mut HashSet<String>) {
-    let mut rest = text;
-    while let Some(start) = rest.find("[[") {
-        rest = &rest[start + 2..];
-        let Some(end) = rest.find("]]") else {
-            break;
-        };
-        let term = rest[..end]
-            .split('|')
-            .next()
-            .unwrap_or("")
-            .trim()
-            .trim_end_matches(".md")
-            .trim_end_matches(".markdown")
-            .to_lowercase();
-        if term.chars().count() >= 2 {
-            terms.insert(term);
-        }
-        rest = &rest[end + 2..];
-    }
-}
-
-fn merge_hot_terms(current: &[String], next: &[String]) -> Vec<String> {
-    let mut merged = current
-        .iter()
-        .chain(next.iter())
-        .cloned()
-        .collect::<HashSet<_>>();
-    let mut terms = merged.drain().collect::<Vec<_>>();
-    terms.sort();
-    terms.truncate(24);
-    terms
-}
-
 fn expand_context_items(
     data_dir: &Path,
+    skill_resource_root: Option<&Path>,
     items: &[DialogueContextItem],
 ) -> Result<Vec<DialogueContextItem>, String> {
     items
         .iter()
-        .map(|item| expand_context_item(data_dir, item))
+        .map(|item| expand_context_item(data_dir, skill_resource_root, item))
         .collect()
 }
 
 fn expand_context_item(
     data_dir: &Path,
+    skill_resource_root: Option<&Path>,
     item: &DialogueContextItem,
 ) -> Result<DialogueContextItem, String> {
     let Some(raw_path) = referenced_context_path(item) else {
         return Ok(item.clone());
     };
-    let (path, relative_path) = resolve_allowed_context_file(data_dir, &raw_path)?;
+    let (path, relative_path) =
+        resolve_allowed_context_file(data_dir, skill_resource_root, item, &raw_path)?;
     let content =
         fs::read_to_string(&path).map_err(|error| format!("上下文文件读取失败：{error}"))?;
     let mut expanded = item.clone();
@@ -744,6 +684,8 @@ fn referenced_context_path(item: &DialogueContextItem) -> Option<PathBuf> {
 
 fn resolve_allowed_context_file(
     data_dir: &Path,
+    skill_resource_root: Option<&Path>,
+    item: &DialogueContextItem,
     raw_path: &Path,
 ) -> Result<(PathBuf, String), String> {
     let canonical = raw_path
@@ -760,6 +702,21 @@ fn resolve_allowed_context_file(
                 .to_string_lossy()
                 .replace('\\', "/");
             return Ok((canonical, relative));
+        }
+    }
+    if item.kind.trim() == "tool" {
+        if let Some(root) = skill_resource_root {
+            let canonical_root = root
+                .canonicalize()
+                .map_err(|error| format!("内置技能目录解析失败：{error}"))?;
+            if canonical.starts_with(&canonical_root) {
+                let relative = canonical
+                    .strip_prefix(&canonical_root)
+                    .unwrap_or(&canonical)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                return Ok((canonical, format!("skills/{relative}")));
+            }
         }
     }
     Err("上下文文件不在已选择的作品库或知识库中。".to_string())
@@ -792,52 +749,284 @@ fn build_cocreation_prompt(
     memories: &[String],
     active_context: &str,
     active_project_context: &str,
-    hot_knowledge: &str,
 ) -> String {
-    let memories_block = render_memory_context(memories);
-    let active_context_block = if active_context.is_empty() {
-        "暂无当前现场。".to_string()
-    } else {
-        compact_text(active_context, BUDGET_ACTIVE_CONTEXT_CHARS)
-    };
-    let active_project_block = if active_project_context.trim().is_empty() {
-        "未启用 Project Mode。".to_string()
-    } else {
-        compact_text(active_project_context, BUDGET_PROJECT_CONTEXT_CHARS)
-    };
+    let current_draft_slot = build_current_draft_slot(input);
+    let project_mode_slot = build_text_slot(
+        "project-mode",
+        "Project Mode",
+        active_project_context,
+        BUDGET_PROJECT_CONTEXT_CHARS,
+        "未启用 Project Mode。",
+    );
+    let active_context_slot = build_text_slot(
+        "active-context",
+        "当前现场",
+        active_context,
+        BUDGET_ACTIVE_CONTEXT_CHARS,
+        "暂无当前现场。",
+    );
+    let memory_slot = build_memory_slot(memories);
+    let knowledge_slot = build_context_items_slot(
+        "explicit-knowledge-cards",
+        "显式知识卡",
+        &filter_context_items(input, ContextItemSlot::Knowledge),
+        BUDGET_EXPLICIT_ITEM_CHARS,
+        BUDGET_EXPLICIT_TOTAL_CHARS,
+    );
+    let relevant_slot = build_context_items_slot(
+        "relevant-notes",
+        "Relevant Notes",
+        &filter_context_items(input, ContextItemSlot::Relevant),
+        BUDGET_EXPLICIT_ITEM_CHARS,
+        BUDGET_EXPLICIT_TOTAL_CHARS,
+    );
+    let tool_slot = build_context_items_slot(
+        "skill-protocol",
+        "skill 协议",
+        &filter_context_items(input, ContextItemSlot::Tool),
+        BUDGET_TOOL_ITEM_CHARS,
+        BUDGET_TOOL_TOTAL_CHARS,
+    );
     let draft_kind = match input.draft_kind.as_deref() {
         Some("screenplay") => "短剧/剧本稿件",
         _ => "小说/散文稿件",
     };
-    let explicit_context_block = render_context_items_by_slot(&input.context_items, false);
-    let tool_context_block = render_context_items_by_slot(&input.context_items, true);
-    let hot_knowledge_block = if hot_knowledge.trim().is_empty() {
-        "无。".to_string()
-    } else {
-        hot_knowledge.trim().to_string()
-    };
 
     let source_label = prompt_source_label(&input.source_path, &input.title);
     format!(
-        "稿件类型：{}\n当前文件：{}\n来源路径：{}\n\n上下文编译顺序：当前稿件/选区 → Project Mode → 当前现场 → 记忆树 → hot cache 知识召回 → 显式知识卡/相关稿件 → 技能协议 → 用户请求。\n\n[1 当前稿件与选区]\n用户选中的片段：\n{}\n\n稿件内容：\n{}\n\n[2 Project Mode]\n{}\n\n[3 当前现场]\n{}\n\n[4 记忆树上下文]\n{}\n\n[5 Hot Cache 知识召回]\n{}\n\n[6 显式上下文]\n{}\n\n[7 技能协议]\n{}\n\n用户这次想要：\n{}",
+        "稿件类型：{}\n当前文件：{}\n来源路径：{}\n\n上下文编译顺序：当前稿件/选区 → Project Mode → 当前现场 → compressed memory → 显式知识卡 → Relevant Notes → skill 协议 → 用户请求。每个槽位独立预算，超预算时按此优先级裁剪，不把作品记忆、知识卡和 skill 协议混写。\n\n输出格式：必须返回 json object，字段为 reply、edits、memories。\n\n[1 当前稿件与选区]\n{}\n\n[2 Project Mode]\n{}\n\n[3 当前现场]\n{}\n\n[4 compressed memory]\n{}\n\n[5 显式知识卡]\n{}\n\n[6 Relevant Notes]\n{}\n\n[7 skill 协议]\n{}\n\n[8 用户请求]\n{}",
         draft_kind,
         input.title,
         source_label,
-        input
-            .selected_text
-            .as_deref()
-            .map(|text| compact_text(text, BUDGET_SELECTION_CHARS))
-            .filter(|text| !text.is_empty())
-            .unwrap_or_else(|| "未选择片段。".to_string()),
-        compact_text(&input.content, BUDGET_CURRENT_DRAFT_CHARS),
-        active_project_block,
-        active_context_block,
-        memories_block,
-        hot_knowledge_block,
-        explicit_context_block,
-        tool_context_block,
+        current_draft_slot.block,
+        project_mode_slot.block,
+        active_context_slot.block,
+        memory_slot.block,
+        knowledge_slot.block,
+        relevant_slot.block,
+        tool_slot.block,
         input.user_input.trim()
     )
+}
+
+fn build_context_load_status(
+    input: &CoCreateInput,
+    memories: &[String],
+    active_context: &str,
+    active_project_context: &str,
+) -> Vec<ContextLoadStatus> {
+    vec![
+        build_current_draft_slot(input).status,
+        build_text_slot(
+            "project-mode",
+            "Project Mode",
+            active_project_context,
+            BUDGET_PROJECT_CONTEXT_CHARS,
+            "未启用 Project Mode。",
+        )
+        .status,
+        build_text_slot(
+            "active-context",
+            "当前现场",
+            active_context,
+            BUDGET_ACTIVE_CONTEXT_CHARS,
+            "暂无当前现场。",
+        )
+        .status,
+        build_memory_slot(memories).status,
+        build_context_items_slot(
+            "explicit-knowledge-cards",
+            "显式知识卡",
+            &filter_context_items(input, ContextItemSlot::Knowledge),
+            BUDGET_EXPLICIT_ITEM_CHARS,
+            BUDGET_EXPLICIT_TOTAL_CHARS,
+        )
+        .status,
+        build_context_items_slot(
+            "relevant-notes",
+            "Relevant Notes",
+            &filter_context_items(input, ContextItemSlot::Relevant),
+            BUDGET_EXPLICIT_ITEM_CHARS,
+            BUDGET_EXPLICIT_TOTAL_CHARS,
+        )
+        .status,
+        build_context_items_slot(
+            "skill-protocol",
+            "skill 协议",
+            &filter_context_items(input, ContextItemSlot::Tool),
+            BUDGET_TOOL_ITEM_CHARS,
+            BUDGET_TOOL_TOTAL_CHARS,
+        )
+        .status,
+        build_text_slot(
+            "user-request",
+            "用户请求",
+            input.user_input.trim(),
+            input.user_input.chars().count(),
+            "无。",
+        )
+        .status,
+    ]
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ContextItemSlot {
+    Knowledge,
+    Relevant,
+    Tool,
+}
+
+#[derive(Debug)]
+struct ContextSlotBuild {
+    block: String,
+    status: ContextLoadStatus,
+}
+
+fn build_current_draft_slot(input: &CoCreateInput) -> ContextSlotBuild {
+    let selected_text = input
+        .selected_text
+        .as_deref()
+        .map(|text| compact_text_with_status(text, BUDGET_SELECTION_CHARS))
+        .filter(|text| !text.output.is_empty());
+    let draft_text = compact_text_with_status(&input.content, BUDGET_CURRENT_DRAFT_CHARS);
+    let selection_block = selected_text
+        .as_ref()
+        .map(|text| text.output.clone())
+        .unwrap_or_else(|| "未选择片段。".to_string());
+    let draft_block = if draft_text.output.is_empty() {
+        "当前稿件为空。".to_string()
+    } else {
+        draft_text.output.clone()
+    };
+    let included_chars = selected_text
+        .as_ref()
+        .map(|text| text.included_chars)
+        .unwrap_or(0)
+        + draft_text.included_chars;
+    let truncated =
+        selected_text.as_ref().is_some_and(|text| text.truncated) || draft_text.truncated;
+    ContextSlotBuild {
+        block: format!(
+            "用户选中的片段：\n{}\n\n稿件内容：\n{}",
+            selection_block, draft_block
+        ),
+        status: ContextLoadStatus {
+            key: "current-draft-selection".to_string(),
+            label: "当前稿件/选区".to_string(),
+            loaded: !input.content.trim().is_empty()
+                || input
+                    .selected_text
+                    .as_deref()
+                    .is_some_and(|text| !text.trim().is_empty()),
+            item_count: usize::from(!input.content.trim().is_empty())
+                + usize::from(
+                    input
+                        .selected_text
+                        .as_deref()
+                        .is_some_and(|text| !text.trim().is_empty()),
+                ),
+            included_chars,
+            budget_chars: BUDGET_CURRENT_DRAFT_CHARS + BUDGET_SELECTION_CHARS,
+            truncated,
+            note: truncated.then(|| "当前稿件或选区已按预算裁剪。".to_string()),
+        },
+    }
+}
+
+fn build_text_slot(
+    key: &str,
+    label: &str,
+    text: &str,
+    budget_chars: usize,
+    empty_block: &str,
+) -> ContextSlotBuild {
+    let compact = compact_text_with_status(text, budget_chars);
+    let loaded = !compact.output.trim().is_empty();
+    ContextSlotBuild {
+        block: if loaded {
+            compact.output
+        } else {
+            empty_block.to_string()
+        },
+        status: ContextLoadStatus {
+            key: key.to_string(),
+            label: label.to_string(),
+            loaded,
+            item_count: usize::from(loaded),
+            included_chars: compact.included_chars,
+            budget_chars,
+            truncated: compact.truncated,
+            note: compact.truncated.then(|| format!("{label} 已按预算裁剪。")),
+        },
+    }
+}
+
+fn build_memory_slot(memories: &[String]) -> ContextSlotBuild {
+    if memories.is_empty() {
+        return ContextSlotBuild {
+            block: "暂无 compressed memory。".to_string(),
+            status: ContextLoadStatus {
+                key: "compressed-memory".to_string(),
+                label: "compressed memory".to_string(),
+                loaded: false,
+                item_count: 0,
+                included_chars: 0,
+                budget_chars: BUDGET_MEMORY_TOTAL_CHARS,
+                truncated: false,
+                note: None,
+            },
+        };
+    }
+
+    let mut rendered = String::new();
+    let mut included_chars = 0;
+    let mut item_count = 0;
+    let mut truncated = false;
+    for memory in memories {
+        let compact = compact_text_with_status(memory, 420);
+        let item = format!("- {}\n", compact.output);
+        if rendered.chars().count() + item.chars().count() > BUDGET_MEMORY_TOTAL_CHARS {
+            rendered.push_str("- 其余 compressed memory 因预算限制未展开。\n");
+            truncated = true;
+            break;
+        }
+        included_chars += compact.included_chars;
+        item_count += 1;
+        truncated = truncated || compact.truncated;
+        rendered.push_str(&item);
+    }
+
+    ContextSlotBuild {
+        block: rendered.trim().to_string(),
+        status: ContextLoadStatus {
+            key: "compressed-memory".to_string(),
+            label: "compressed memory".to_string(),
+            loaded: item_count > 0,
+            item_count,
+            included_chars,
+            budget_chars: BUDGET_MEMORY_TOTAL_CHARS,
+            truncated,
+            note: truncated.then(|| "compressed memory 已按预算裁剪。".to_string()),
+        },
+    }
+}
+
+fn filter_context_items<'a>(
+    input: &'a CoCreateInput,
+    slot: ContextItemSlot,
+) -> Vec<&'a DialogueContextItem> {
+    input
+        .context_items
+        .iter()
+        .filter(|item| match slot {
+            ContextItemSlot::Tool => item.kind.trim() == "tool",
+            ContextItemSlot::Knowledge => item.kind.trim() == "memory",
+            ContextItemSlot::Relevant => {
+                let kind = item.kind.trim();
+                kind != "tool" && kind != "memory"
+            }
+        })
+        .collect()
 }
 
 fn prompt_source_label(source_path: &str, title: &str) -> String {
@@ -849,54 +1038,35 @@ fn prompt_source_label(source_path: &str, title: &str) -> String {
         .unwrap_or_else(|| "当前稿件".to_string())
 }
 
-fn render_memory_context(memories: &[String]) -> String {
-    if memories.is_empty() {
-        return "暂无记忆树上下文。".to_string();
-    }
-    let mut rendered = String::new();
-    for memory in memories {
-        let item = format!("- {}\n", compact_text(memory, 420));
-        if rendered.chars().count() + item.chars().count() > BUDGET_MEMORY_TOTAL_CHARS {
-            rendered.push_str("- 其余记忆因预算限制未展开。\n");
-            break;
-        }
-        rendered.push_str(&item);
-    }
-    rendered.trim().to_string()
-}
-
-fn render_context_items_by_slot(items: &[DialogueContextItem], tool_slot: bool) -> String {
-    let filtered = items
-        .iter()
-        .filter(|item| (item.kind.trim() == "tool") == tool_slot)
-        .collect::<Vec<_>>();
-    render_context_items(
-        &filtered,
-        if tool_slot {
-            BUDGET_TOOL_ITEM_CHARS
-        } else {
-            BUDGET_EXPLICIT_ITEM_CHARS
-        },
-        if tool_slot {
-            BUDGET_TOOL_TOTAL_CHARS
-        } else {
-            BUDGET_EXPLICIT_TOTAL_CHARS
-        },
-    )
-}
-
-fn render_context_items(
+fn build_context_items_slot(
+    key: &str,
+    label: &str,
     items: &[&DialogueContextItem],
     per_item_budget: usize,
     total_budget: usize,
-) -> String {
+) -> ContextSlotBuild {
     if items.is_empty() {
-        return "无。".to_string();
+        return ContextSlotBuild {
+            block: "无。".to_string(),
+            status: ContextLoadStatus {
+                key: key.to_string(),
+                label: label.to_string(),
+                loaded: false,
+                item_count: 0,
+                included_chars: 0,
+                budget_chars: total_budget,
+                truncated: false,
+                note: None,
+            },
+        };
     }
     let mut rendered = String::new();
+    let mut included_chars = 0;
+    let mut item_count = 0;
+    let mut truncated = false;
     for item in items {
-        let value = compact_text(&item.value, per_item_budget);
-        if value.trim().is_empty() {
+        let value = compact_text_with_status(&item.value, per_item_budget);
+        if value.output.trim().is_empty() {
             continue;
         }
         let source = item
@@ -915,17 +1085,34 @@ fn render_context_items(
                 source
             )
         };
-        let block = format!("{header}\n{value}\n");
+        let block = format!("{header}\n{}\n", value.output);
         if rendered.chars().count() + block.chars().count() > total_budget {
             rendered.push_str("【预算】其余上下文因预算限制未展开。\n");
+            truncated = true;
             break;
         }
+        included_chars += value.included_chars;
+        item_count += 1;
+        truncated = truncated || value.truncated;
         rendered.push_str(&block);
     }
-    if rendered.trim().is_empty() {
+    let block = if rendered.trim().is_empty() {
         "无。".to_string()
     } else {
         rendered.trim().to_string()
+    };
+    ContextSlotBuild {
+        block,
+        status: ContextLoadStatus {
+            key: key.to_string(),
+            label: label.to_string(),
+            loaded: item_count > 0,
+            item_count,
+            included_chars,
+            budget_chars: total_budget,
+            truncated,
+            note: truncated.then(|| format!("{label} 已按预算裁剪。")),
+        },
     }
 }
 
@@ -1002,8 +1189,25 @@ fn read_responses_output_text(output: &[serde_json::Value]) -> Option<String> {
 }
 
 fn compact_text(text: &str, max_chars: usize) -> String {
+    compact_text_with_status(text, max_chars).output
+}
+
+#[derive(Debug, Clone)]
+struct CompactText {
+    output: String,
+    included_chars: usize,
+    truncated: bool,
+}
+
+fn compact_text_with_status(text: &str, max_chars: usize) -> CompactText {
     let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    compact.chars().take(max_chars).collect()
+    let total_chars = compact.chars().count();
+    let output = compact.chars().take(max_chars).collect::<String>();
+    CompactText {
+        included_chars: output.chars().count(),
+        output,
+        truncated: total_chars > max_chars,
+    }
 }
 
 fn parse_cocreation_model_output(output: &str) -> Result<ParsedCoCreateResponse, String> {
@@ -1067,7 +1271,7 @@ fn cocreation_system_prompt() -> &'static str {
 当稿件类型是短剧/剧本时，优先关注场次、对白可表演性、结尾钩子、分集节奏和低成本拍摄约束。
 不要写成通用聊天回复；不要自动声称已经修改正文。
 你需要判断本轮是否产生值得长期保留的创作记忆。如果没有，memories 输出空数组；如果有，只提取稳定、可复用、对后续写作有约束或参考价值的事实，不记录一次性闲聊。
-必须输出 JSON 对象：
+必须输出 JSON 对象（json object）：
 {"reply":"给用户看的正常回复","edits":[{"target":"需要被替换的原文片段，必须从稿件内容或用户选中片段中逐字复制","replacement":"替换后的新文本","rationale":"简短理由"}],"memories":[{"branch":"novel|drama|knowledge|skill|user|relationship|journey|awareness|sense","title":"短标题","summary":"要沉淀的长期记忆正文","reason":"为什么值得沉淀","sourcePath":"当前来源路径或空"}]}
 如果只是聊天、讨论、解释，edits 输出空数组。
 如果用户要求修改、润色、批量替换角色名、调整对白或重写片段，必须尽量给 edits。
@@ -1092,6 +1296,7 @@ mod tests {
     #[test]
     fn build_prompt_keeps_draft_memories_and_user_request_separate() {
         let input = CoCreateInput {
+            request_id: None,
             source_path: "demo://03.md".to_string(),
             title: "03.md".to_string(),
             content: "她推开门，没有立刻喊人。".to_string(),
@@ -1106,17 +1311,18 @@ mod tests {
             &["【剧情线】雨夜场景不能提前暴露凶手。".to_string()],
             "{\"currentChapter\":\"第三章\"}",
             "Project Mode：短剧项目",
-            "",
         );
 
         assert!(prompt.contains("稿件内容"));
-        assert!(prompt.contains("记忆树上下文"));
+        assert!(prompt.contains("compressed memory"));
         assert!(prompt.contains("强化她进门前的动机"));
+        assert!(prompt.contains("json object"));
     }
 
     #[test]
     fn build_prompt_separates_selection_from_explicit_context_items() {
         let input = CoCreateInput {
+            request_id: None,
             source_path: "demo://03.md".to_string(),
             title: "03.md".to_string(),
             content: "她推开门，没有立刻喊人。".to_string(),
@@ -1133,16 +1339,17 @@ mod tests {
             }],
         };
 
-        let prompt = build_cocreation_prompt(&input, &[], "", "", "");
+        let prompt = build_cocreation_prompt(&input, &[], "", "");
 
         assert!(prompt.contains("用户选中的片段：\n她推开门"));
-        assert!(prompt.contains("[6 显式上下文]"));
+        assert!(prompt.contains("[5 显式知识卡]"));
         assert!(prompt.contains("【memory｜人物卡｜人物卡.md】\n她怕黑，但不承认。"));
     }
 
     #[test]
     fn build_prompt_separates_tool_protocol_from_explicit_context_items() {
         let input = CoCreateInput {
+            request_id: None,
             source_path: "demo://03.md".to_string(),
             title: "03.md".to_string(),
             content: "她推开门，没有立刻喊人。".to_string(),
@@ -1168,16 +1375,81 @@ mod tests {
             ],
         };
 
-        let prompt = build_cocreation_prompt(&input, &[], "", "", "");
+        let prompt = build_cocreation_prompt(&input, &[], "", "");
 
         assert!(prompt
-            .contains("[6 显式上下文]\n【memory｜知识卡｜03故事模型/知识卡.md】\n一条显式知识卡"));
-        assert!(prompt.contains("[7 技能协议]\n【tool｜知识库运维】\nWridian 技能协议：知识库运维"));
+            .contains("[5 显式知识卡]\n【memory｜知识卡｜03故事模型/知识卡.md】\n一条显式知识卡"));
+        assert!(
+            prompt.contains("[7 skill 协议]\n【tool｜知识库运维】\nWridian 技能协议：知识库运维")
+        );
+    }
+
+    #[test]
+    fn context_load_status_reports_loaded_slots_and_budget_truncation() {
+        let input = CoCreateInput {
+            request_id: None,
+            source_path: "demo://03.md".to_string(),
+            title: "03.md".to_string(),
+            content: "她推开门。".repeat(3000),
+            draft_kind: Some("prose".to_string()),
+            user_input: "结合人物卡改写".to_string(),
+            selected_text: Some("她推开门".to_string()),
+            selected_model_id: None,
+            context_items: vec![
+                DialogueContextItem {
+                    kind: "memory".to_string(),
+                    label: "人物卡".to_string(),
+                    value: "她怕黑。".to_string(),
+                    source_path: None,
+                    relative_path: Some("人物卡.md".to_string()),
+                },
+                DialogueContextItem {
+                    kind: "tool".to_string(),
+                    label: "作品拆解".to_string(),
+                    value: "按作品拆解技能执行。".to_string(),
+                    source_path: None,
+                    relative_path: None,
+                },
+            ],
+        };
+
+        let status = build_context_load_status(
+            &input,
+            &["长期记忆：雨夜不能提前暴露凶手。".to_string()],
+            "",
+            "Project Mode：短剧项目",
+        );
+
+        let current = status
+            .iter()
+            .find(|item| item.key == "current-draft-selection")
+            .expect("current draft slot");
+        assert!(current.loaded);
+        assert!(current.truncated);
+        assert_eq!(
+            current.budget_chars,
+            BUDGET_CURRENT_DRAFT_CHARS + BUDGET_SELECTION_CHARS
+        );
+
+        let knowledge = status
+            .iter()
+            .find(|item| item.key == "explicit-knowledge-cards")
+            .expect("knowledge slot");
+        assert!(knowledge.loaded);
+        assert_eq!(knowledge.item_count, 1);
+
+        let tool = status
+            .iter()
+            .find(|item| item.key == "skill-protocol")
+            .expect("tool slot");
+        assert!(tool.loaded);
+        assert_eq!(tool.item_count, 1);
     }
 
     #[test]
     fn build_prompt_does_not_send_absolute_source_path() {
         let input = CoCreateInput {
+            request_id: None,
             source_path: "D:/private/vault/works/第一章.md".to_string(),
             title: "第一章.md".to_string(),
             content: "她推开门。".to_string(),
@@ -1188,7 +1460,7 @@ mod tests {
             context_items: Vec::new(),
         };
 
-        let prompt = build_cocreation_prompt(&input, &[], "", "", "");
+        let prompt = build_cocreation_prompt(&input, &[], "", "");
 
         assert!(prompt.contains("来源路径：第一章.md"));
         assert!(!prompt.contains("D:/private"));
@@ -1223,6 +1495,7 @@ mod tests {
 
         let expanded = expand_context_items(
             &data_dir,
+            None,
             &[DialogueContextItem {
                 kind: "memory".to_string(),
                 label: "人物".to_string(),
@@ -1247,6 +1520,7 @@ mod tests {
 
         let expanded = expand_context_items(
             &data_dir,
+            None,
             &[DialogueContextItem {
                 kind: "memory".to_string(),
                 label: "默认人物".to_string(),
@@ -1265,62 +1539,32 @@ mod tests {
     }
 
     #[test]
-    fn hot_cache_recalls_recent_related_knowledge_without_explicit_duplicate() {
-        let data_dir = temp_data_dir("hot-cache");
+    fn expands_builtin_skill_resource_for_tool_context() {
+        let data_dir = temp_data_dir("builtin-skill-context");
         crate::runtime::ensure_workspace(&data_dir).expect("ensure workspace");
-        let knowledge_root = crate::runtime::default_knowledge_root(&data_dir);
-        let card_path = knowledge_root.join("03故事模型").join("反转钩子.md");
-        fs::write(&card_path, "反转钩子需要先埋误导，再在场尾回收。").expect("write card");
-        record_hot_cache_from_context(
+        let skill_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("skills");
+        let skill_path = skill_root.join("zhishiku-skill").join("SKILL.md");
+
+        let expanded = expand_context_items(
             &data_dir,
+            Some(&skill_root),
             &[DialogueContextItem {
-                kind: "memory".to_string(),
-                label: "反转钩子".to_string(),
-                value: "path".to_string(),
-                source_path: Some(card_path.to_string_lossy().into_owned()),
-                relative_path: Some("03故事模型/反转钩子.md".to_string()),
+                kind: "tool".to_string(),
+                label: "知识库运维".to_string(),
+                value: format!("path:{}", skill_path.to_string_lossy()),
+                source_path: None,
+                relative_path: None,
             }],
         )
-        .expect("record hot cache");
+        .expect("builtin skill context should be accepted");
 
-        let recalled = read_hot_knowledge_snippets(
-            &data_dir,
-            &CoCreateInput {
-                source_path: "demo://01.md".to_string(),
-                title: "01.md".to_string(),
-                content: "这一场需要一个反转钩子。".to_string(),
-                draft_kind: Some("screenplay".to_string()),
-                user_input: "加强场尾反转".to_string(),
-                selected_text: None,
-                selected_model_id: None,
-                context_items: Vec::new(),
-            },
+        assert!(expanded[0].value.contains("# 知识库总控流程"));
+        assert_eq!(
+            expanded[0].relative_path.as_deref(),
+            Some("skills/zhishiku-skill/SKILL.md")
         );
-
-        assert!(recalled.contains("【hot｜反转钩子｜03故事模型/反转钩子.md】"));
-        assert!(recalled.contains("先埋误导"));
-
-        let duplicate_suppressed = read_hot_knowledge_snippets(
-            &data_dir,
-            &CoCreateInput {
-                source_path: "demo://01.md".to_string(),
-                title: "01.md".to_string(),
-                content: "这一场需要一个反转钩子。".to_string(),
-                draft_kind: Some("screenplay".to_string()),
-                user_input: "加强场尾反转".to_string(),
-                selected_text: None,
-                selected_model_id: None,
-                context_items: vec![DialogueContextItem {
-                    kind: "memory".to_string(),
-                    label: "反转钩子".to_string(),
-                    value: "反转钩子需要先埋误导，再在场尾回收。".to_string(),
-                    source_path: Some(card_path.to_string_lossy().into_owned()),
-                    relative_path: Some("03故事模型/反转钩子.md".to_string()),
-                }],
-            },
-        );
-
-        assert!(duplicate_suppressed.is_empty());
     }
 
     #[test]
@@ -1408,5 +1652,95 @@ mod tests {
         assert_eq!(parsed.memories.len(), 1);
         assert_eq!(parsed.memories[0].branch, "novel");
         assert_eq!(parsed.memories[0].title, "人物禁区");
+    }
+
+    #[test]
+    fn openai_compatible_body_can_omit_response_format_for_legacy_gateways() {
+        let strict = openai_compatible_cocreation_body("model-a", "prompt", true);
+        assert_eq!(
+            strict
+                .get("response_format")
+                .and_then(|value| value.get("type"))
+                .and_then(serde_json::Value::as_str),
+            Some("json_object")
+        );
+
+        let fallback = openai_compatible_cocreation_body("model-a", "prompt", false);
+        assert!(fallback.get("response_format").is_none());
+    }
+
+    #[test]
+    fn deepseek_openai_compatible_body_disables_thinking_for_v4_models() {
+        let settings = ActiveModelSettings {
+            provider_id: "deepseek-openai-compatible".to_string(),
+            provider_name: "DeepSeek".to_string(),
+            protocol: "openai-compatible".to_string(),
+            auth_style: "api_key".to_string(),
+            base_url: "https://api.deepseek.com/v1".to_string(),
+            api_key: "sk-test".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            model_id: "deepseek-openai-compatible::deepseek-v4-pro".to_string(),
+            extra_env: std::collections::BTreeMap::new(),
+        };
+        let mut body = openai_compatible_cocreation_body("deepseek-v4-pro", "prompt", true);
+
+        apply_openai_compatible_provider_extras(&settings, "deepseek-v4-pro", &mut body);
+
+        assert_eq!(
+            body.get("thinking")
+                .and_then(|value| value.get("type"))
+                .and_then(serde_json::Value::as_str),
+            Some("disabled")
+        );
+    }
+
+    #[test]
+    fn moonshot_openai_compatible_body_omits_temperature_and_enables_thinking() {
+        let settings = ActiveModelSettings {
+            provider_id: "moonshot-openai".to_string(),
+            provider_name: "Moonshot".to_string(),
+            protocol: "openai-compatible".to_string(),
+            auth_style: "api_key".to_string(),
+            base_url: "https://api.moonshot.cn/v1".to_string(),
+            api_key: "sk-test".to_string(),
+            model: "kimi-k2-turbo-preview".to_string(),
+            model_id: "moonshot-openai::kimi-k2-turbo-preview".to_string(),
+            extra_env: std::collections::BTreeMap::new(),
+        };
+        let mut body = openai_compatible_cocreation_body("kimi-k2-turbo-preview", "prompt", true);
+
+        apply_openai_compatible_provider_extras(&settings, "kimi-k2-turbo-preview", &mut body);
+
+        assert!(body.get("temperature").is_none());
+        assert_eq!(
+            body.get("max_tokens").and_then(serde_json::Value::as_u64),
+            Some(32_768)
+        );
+        assert_eq!(
+            body.get("thinking")
+                .and_then(|value| value.get("type"))
+                .and_then(serde_json::Value::as_str),
+            Some("enabled")
+        );
+    }
+
+    #[test]
+    fn response_format_retry_gate_only_fires_for_relevant_errors() {
+        assert!(should_retry_without_response_format(
+            400,
+            "unsupported response_format"
+        ));
+        assert!(body_mentions_response_format(
+            "json_object is not supported"
+        ));
+        assert!(!should_retry_without_response_format(
+            401,
+            "response_format unsupported"
+        ));
+    }
+
+    #[test]
+    fn gemini_default_output_limit_is_high_enough_for_json_reply() {
+        assert_eq!(GEMINI_DEFAULT_MAX_OUTPUT_TOKENS, 65535);
     }
 }

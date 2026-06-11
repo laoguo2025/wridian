@@ -1,4 +1,4 @@
-use crate::file_lock::with_file_write_lock;
+use crate::path_safety::safe_child_path;
 use crate::runtime::{ensure_workspace, memory_folder_path, wridian_data_dir};
 use crate::workspace::{read_active_work_root, resolved_knowledge_root};
 use serde::{Deserialize, Serialize};
@@ -161,38 +161,39 @@ pub(crate) fn read_relevant_memory_snippets(
     Ok(snippets)
 }
 
-pub(crate) fn read_project_compressed_memory(
+pub(crate) fn read_project_continuity_memory(
     data_dir: &Path,
     project_id: &str,
+    extra_leaf_limit: usize,
 ) -> Result<String, String> {
     ensure_memory_tree_files(data_dir)?;
     let project_path = PathBuf::from(project_id.trim());
     if !project_path.is_dir() {
         return Ok(String::new());
     }
-    let name = project_path
-        .file_name()
-        .map(|value| value.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "作品项目".to_string());
-    let branch = project_branch_for_path(&project_path);
-    let path = memory_tree_files_root(data_dir)
-        .join("leaves")
-        .join(branch)
-        .join(format!(
-            "{}-{}",
-            sanitize_markdown_file_name(&name),
-            stable_scope_id(&project_path.to_string_lossy())
-        ))
-        .join("compressed.md");
-    fs::read_to_string(path)
-        .map(|content| compact_markdown(&content, 1400))
-        .or_else(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                Ok(String::new())
-            } else {
-                Err(format!("作品压缩记忆读取失败：{error}"))
-            }
-        })
+    let folder = project_memory_folder(&memory_tree_files_root(data_dir), &project_path);
+    let mut files = vec![folder.join("project.md"), folder.join("compressed.md")];
+    let mut extra = Vec::new();
+    collect_project_memory_leaf_files(&folder, &mut extra)?;
+    extra.sort();
+    extra.truncate(extra_leaf_limit);
+    files.extend(extra);
+
+    let mut blocks = Vec::new();
+    for file in files {
+        let content = match fs::read_to_string(&file) {
+            Ok(content) => content,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(format!("作品续接记忆读取失败：{error}")),
+        };
+        let trimmed = content.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let label = project_memory_context_label(&file);
+        blocks.push(format!("【{}】{}", label, compact_markdown(trimmed, 900)));
+    }
+    Ok(compact_markdown(&blocks.join("\n"), 2600))
 }
 
 fn read_memory_state_for_source(
@@ -332,9 +333,7 @@ fn save_memory_tree_file(data_dir: &Path, path: &str, content: &str) -> Result<(
             return Err("只能编辑记忆树或知识库里的 Markdown 文件。".to_string());
         }
     }
-    with_file_write_lock(data_dir, &target, || {
-        fs::write(&target, content).map_err(|error| format!("记忆树文件写入失败：{error}"))
-    })
+    fs::write(target, content).map_err(|error| format!("记忆树文件写入失败：{error}"))
 }
 
 fn delete_memory_tree_file(data_dir: &Path, path: &str) -> Result<(), String> {
@@ -385,7 +384,7 @@ fn resolve_deletable_memory_tree_file(data_dir: &Path, path: &str) -> Result<Pat
 fn ensure_memory_tree_files(data_dir: &Path) -> Result<(), String> {
     let root = memory_tree_files_root(data_dir);
     for (relative, content) in default_memory_tree_files() {
-        write_memory_tree_file_if_missing(data_dir, &root.join(relative), content)?;
+        write_memory_tree_file_if_missing(&root.join(relative), content)?;
     }
     migrate_legacy_memory_files(data_dir, &root)?;
     for (branch, _, _) in MEMORY_BRANCHES {
@@ -408,7 +407,7 @@ fn ensure_memory_tree_files(data_dir: &Path) -> Result<(), String> {
             if name.starts_with('.') {
                 continue;
             }
-            ensure_project_memory_files(data_dir, &root, &path, &name)?;
+            ensure_project_memory_files(&root, &path, &name)?;
         }
     }
     Ok(())
@@ -432,43 +431,43 @@ fn default_memory_tree_files() -> Vec<(&'static str, &'static str)> {
 }
 
 fn ensure_project_memory_files(
-    data_dir: &Path,
     root: &Path,
     project_path: &Path,
     project_name: &str,
 ) -> Result<(), String> {
     let branch = project_branch_for_path(project_path);
-    let folder = root.join("leaves").join(branch).join(format!(
-        "{}-{}",
-        sanitize_markdown_file_name(project_name),
-        stable_scope_id(&project_path.to_string_lossy())
-    ));
+    let folder = project_memory_folder(root, project_path);
     write_memory_tree_file_if_missing(
-        data_dir,
         &folder.join("project.md"),
         &format!("# {}\n\nbranch: {}\nsource: {}\nstatus: alive\n\n## 作品记忆\n\n这里记录只属于这个作品的长期记忆、规则、禁区、人物边界和续接线索。\n", project_name, branch, project_path.to_string_lossy()),
     )?;
     write_memory_tree_file_if_missing(
-        data_dir,
         &folder.join("compressed.md"),
         &format!("# {} 压缩记忆\n\nbranch: {}\nsource: {}\nstatus: active\n\n## 压缩记忆\n\n这里写当前作品项目最应该被 Project Mode 常驻读取的压缩记忆：核心设定、人物边界、禁区、当前进度和下一步。\n", project_name, branch, project_path.to_string_lossy()),
     )
 }
 
-fn write_memory_tree_file_if_missing(
-    data_dir: &Path,
-    path: &Path,
-    content: &str,
-) -> Result<(), String> {
+fn project_memory_folder(root: &Path, project_path: &Path) -> PathBuf {
+    let project_name = project_path
+        .file_name()
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "作品项目".to_string());
+    let branch = project_branch_for_path(project_path);
+    root.join("leaves").join(branch).join(format!(
+        "{}-{}",
+        sanitize_markdown_file_name(&project_name),
+        stable_scope_id(&project_path.to_string_lossy())
+    ))
+}
+
+fn write_memory_tree_file_if_missing(path: &Path, content: &str) -> Result<(), String> {
     if path.exists() {
         return Ok(());
     }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| format!("记忆树目录创建失败：{error}"))?;
     }
-    with_file_write_lock(data_dir, path, || {
-        fs::write(path, content).map_err(|error| format!("记忆树文件创建失败：{error}"))
-    })
+    fs::write(path, content).map_err(|error| format!("记忆树文件创建失败：{error}"))
 }
 
 fn memory_tree_files_root(data_dir: &Path) -> PathBuf {
@@ -538,16 +537,37 @@ fn folder_node(path: &Path, label: String, description: String) -> Result<Memory
         {
             let entry = entry.map_err(|error| format!("记忆树目录读取失败：{error}"))?;
             let child = entry.path();
-            if child.extension().and_then(|extension| extension.to_str()) == Some("md") {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            let Some(safe_child) = safe_child_path(path, &child, "记忆树")? else {
+                continue;
+            };
+            if safe_child.is_dir() {
+                children.push(folder_node(
+                    &safe_child,
+                    name,
+                    "作品项目记忆分组。".to_string(),
+                )?);
+            } else if safe_child
+                .extension()
+                .and_then(|extension| extension.to_str())
+                == Some("md")
+            {
                 children.push(arbitrary_file_node(
-                    &child,
-                    entry.file_name().to_string_lossy().into_owned(),
+                    &safe_child,
+                    name,
                     "Markdown 记忆文件".to_string(),
                 )?);
             }
         }
     }
-    children.sort_by(|left, right| left.label.cmp(&right.label));
+    children.sort_by(|left, right| {
+        left.kind
+            .cmp(&right.kind)
+            .then_with(|| left.label.cmp(&right.label))
+    });
     Ok(MemoryTreeNode {
         id: path.to_string_lossy().into_owned(),
         kind: "folder".to_string(),
@@ -597,11 +617,21 @@ fn collect_knowledge_card_nodes(
         if name.starts_with('.') {
             continue;
         }
-        if path.is_dir() {
-            collect_knowledge_card_nodes(&path, nodes)?;
-        } else if path.extension().and_then(|extension| extension.to_str()) == Some("md") {
-            let mut node =
-                arbitrary_file_node(&path, name, "当前知识库中的 Markdown 知识卡。".to_string())?;
+        let Some(safe_path) = safe_child_path(root, &path, "知识卡")? else {
+            continue;
+        };
+        if safe_path.is_dir() {
+            collect_knowledge_card_nodes(&safe_path, nodes)?;
+        } else if safe_path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            == Some("md")
+        {
+            let mut node = arbitrary_file_node(
+                &safe_path,
+                name,
+                "当前知识库中的 Markdown 知识卡。".to_string(),
+            )?;
             node.kind = "knowledge-card".to_string();
             nodes.push(node);
         }
@@ -812,6 +842,65 @@ mod tests {
         assert!(core_file.exists());
     }
 
+    #[test]
+    fn memory_tree_includes_project_core_files() {
+        let data_dir = temp_data_dir("project-core-visible");
+        let work_root = data_dir.join("works");
+        let project = work_root.join("作品A");
+        fs::create_dir_all(&project).expect("create project");
+        fs::create_dir_all(crate::runtime::runtime_root(&data_dir)).expect("create runtime");
+        fs::write(
+            crate::runtime::workspace_config_path(&data_dir),
+            serde_json::json!({
+                "schemaVersion": 1,
+                "activeWorkRoot": work_root.to_string_lossy(),
+                "knowledgeRoot": data_dir.join("knowledge").to_string_lossy()
+            })
+            .to_string(),
+        )
+        .expect("write workspace config");
+
+        let tree = read_memory_tree_files(&data_dir).expect("read tree");
+
+        assert!(find_node_by_label(&tree.roots, "project.md").is_some());
+        assert!(find_node_by_label(&tree.roots, "compressed.md").is_some());
+    }
+
+    #[test]
+    fn project_continuity_memory_reads_only_project_memory_tree_files() {
+        let data_dir = temp_data_dir("project-continuity");
+        let work_root = data_dir.join("works");
+        let knowledge_root = data_dir.join("knowledge");
+        let project = work_root.join("作品A");
+        fs::create_dir_all(&project).expect("create project");
+        fs::create_dir_all(&knowledge_root).expect("create knowledge");
+        fs::write(knowledge_root.join("通用知识.md"), "不应进入作品续接").expect("write knowledge");
+        fs::create_dir_all(crate::runtime::runtime_root(&data_dir)).expect("create runtime");
+        fs::write(
+            crate::runtime::workspace_config_path(&data_dir),
+            serde_json::json!({
+                "schemaVersion": 1,
+                "activeWorkRoot": work_root.to_string_lossy(),
+                "knowledgeRoot": knowledge_root.to_string_lossy()
+            })
+            .to_string(),
+        )
+        .expect("write workspace config");
+        ensure_memory_tree_files(&data_dir).expect("ensure tree");
+        let folder = project_memory_folder(&memory_tree_files_root(&data_dir), &project);
+        fs::write(folder.join("project.md"), "项目长期规则").expect("write project");
+        fs::write(folder.join("compressed.md"), "项目压缩进度").expect("write compressed");
+        fs::write(folder.join("必要叶子.md"), "续接线索").expect("write leaf");
+
+        let context = read_project_continuity_memory(&data_dir, &project.to_string_lossy(), 6)
+            .expect("read continuity");
+
+        assert!(context.contains("项目长期规则"));
+        assert!(context.contains("项目压缩进度"));
+        assert!(context.contains("续接线索"));
+        assert!(!context.contains("不应进入作品续接"));
+    }
+
     fn find_node_by_label<'a>(
         nodes: &'a [MemoryTreeNode],
         label: &str,
@@ -825,6 +914,51 @@ mod tests {
             }
         }
         None
+    }
+}
+
+fn collect_project_memory_leaf_files(
+    folder: &Path,
+    files: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    if !folder.is_dir() {
+        return Ok(());
+    }
+    for entry in
+        fs::read_dir(folder).map_err(|error| format!("作品记忆叶子目录读取失败：{error}"))?
+    {
+        let entry = entry.map_err(|error| format!("作品记忆叶子目录读取失败：{error}"))?;
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_lowercase();
+        if name.starts_with('.') {
+            continue;
+        }
+        let Some(safe_path) = safe_child_path(folder, &path, "作品记忆叶子")? else {
+            continue;
+        };
+        if safe_path.is_dir() {
+            collect_project_memory_leaf_files(&safe_path, files)?;
+        } else if safe_path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            == Some("md")
+            && !matches!(name.as_str(), "project.md" | "compressed.md")
+        {
+            files.push(safe_path);
+        }
+    }
+    Ok(())
+}
+
+fn project_memory_context_label(path: &Path) -> String {
+    match path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+    {
+        "project.md" => "项目长期记忆".to_string(),
+        "compressed.md" => "项目压缩记忆".to_string(),
+        other => format!("项目叶子：{other}"),
     }
 }
 
@@ -948,9 +1082,7 @@ fn write_memory_leaf(data_dir: &Path, leaf: &MemoryLeafDraft) -> Result<PathBuf,
         crate::runtime::iso_timestamp(),
         if reason.trim().is_empty() { "模型从本轮对话中提取出可复用长期记忆。" } else { reason.trim() }
     );
-    with_file_write_lock(data_dir, &path, || {
-        fs::write(&path, content).map_err(|error| format!("叶子写入失败：{error}"))
-    })?;
+    fs::write(&path, content).map_err(|error| format!("叶子写入失败：{error}"))?;
     Ok(path)
 }
 

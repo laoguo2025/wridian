@@ -1,5 +1,4 @@
 use crate::cocreation::read_model_response_text;
-use crate::file_lock::with_file_write_lock;
 use crate::runtime::{ensure_workspace, model_accounts_path, wridian_data_dir};
 use base64::Engine;
 use keyring_core::{set_default_store, Entry, Error as KeyringError};
@@ -45,27 +44,11 @@ const GOOGLE_OAUTH_SCOPES: &str =
 const GOOGLE_OAUTH_REDIRECT_HOST: &str = "127.0.0.1";
 const GOOGLE_OAUTH_CALLBACK_PATH: &str = "/oauth2callback";
 const GOOGLE_OAUTH_REFRESH_SKEW_SECONDS: u64 = 300;
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct CustomApiSettingsInput {
-    base_url: String,
-    api_key: String,
-    model: String,
-}
+pub(crate) const GEMINI_DEFAULT_MAX_OUTPUT_TOKENS: u32 = 65535;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct CustomApiSettingsStatus {
-    configured: bool,
-    base_url: Option<String>,
-    model: Option<String>,
-    masked_key: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct TestCustomApiResponse {
+pub(crate) struct TestModelProviderResponse {
     ok: bool,
     message: String,
 }
@@ -177,6 +160,8 @@ pub(crate) struct TestModelProviderConfigInput {
     base_url: String,
     api_key: String,
     models: Vec<String>,
+    #[serde(default)]
+    extra_env: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -196,14 +181,7 @@ pub(crate) struct ActiveModelSettings {
     pub(crate) api_key: String,
     pub(crate) model: String,
     pub(crate) model_id: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct StoredCustomApiSettings {
-    pub(crate) base_url: String,
-    pub(crate) api_key: String,
-    pub(crate) model: String,
+    pub(crate) extra_env: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -380,7 +358,7 @@ pub(crate) fn wridian_delete_model_provider(
 #[tauri::command]
 pub(crate) async fn wridian_test_model_provider(
     input: TestModelProviderInput,
-) -> Result<TestCustomApiResponse, String> {
+) -> Result<TestModelProviderResponse, String> {
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
     let file = read_model_accounts_file(&data_dir)?;
@@ -404,8 +382,9 @@ pub(crate) async fn wridian_test_model_provider(
         auth_style: provider.auth_style.clone(),
         base_url: provider.base_url.clone(),
         api_key,
-        model: model.clone(),
+        model: resolve_provider_model(provider, model),
         model_id: model_config_id(&provider.id, model),
+        extra_env: provider.extra_env.clone(),
     };
     test_model_chat(&settings).await
 }
@@ -413,7 +392,7 @@ pub(crate) async fn wridian_test_model_provider(
 #[tauri::command]
 pub(crate) async fn wridian_test_model_provider_config(
     input: TestModelProviderConfigInput,
-) -> Result<TestCustomApiResponse, String> {
+) -> Result<TestModelProviderResponse, String> {
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
     let file = read_model_accounts_file(&data_dir)?;
@@ -441,6 +420,20 @@ pub(crate) async fn wridian_test_model_provider_config(
         return Err("请先填写或保存该服务的 API Key / Token。".to_string());
     }
     let provider_name = input.provider_name.trim();
+    let provider_for_model_resolution = StoredModelProviderFile {
+        id: provider_id.clone(),
+        preset_key: None,
+        provider_name: provider_name.to_string(),
+        provider_type: None,
+        protocol: protocol.clone(),
+        auth_style: auth_style.clone(),
+        base_url: base_url.clone(),
+        models: vec![model.clone()],
+        extra_env: input.extra_env.clone(),
+        key_stored: false,
+        api_key: None,
+    };
+    let resolved_model = resolve_provider_model(&provider_for_model_resolution, &model);
     test_model_chat(&ActiveModelSettings {
         provider_id,
         provider_name: if provider_name.is_empty() {
@@ -452,8 +445,9 @@ pub(crate) async fn wridian_test_model_provider_config(
         auth_style,
         base_url,
         api_key,
-        model: model.clone(),
+        model: resolved_model,
         model_id: model,
+        extra_env: input.extra_env,
     })
     .await
 }
@@ -724,64 +718,6 @@ pub(crate) async fn wridian_google_gemini_oauth_login() -> Result<GoogleGeminiOa
     })
 }
 
-#[tauri::command]
-pub(crate) fn wridian_get_custom_api_settings() -> Result<CustomApiSettingsStatus, String> {
-    let data_dir = wridian_data_dir()?;
-    ensure_workspace(&data_dir)?;
-    Ok(read_custom_api_settings(&data_dir)?
-        .map(|settings| CustomApiSettingsStatus {
-            configured: true,
-            base_url: Some(settings.base_url),
-            model: Some(settings.model),
-            masked_key: Some(mask_api_key(&settings.api_key)),
-        })
-        .unwrap_or(CustomApiSettingsStatus {
-            configured: false,
-            base_url: None,
-            model: None,
-            masked_key: None,
-        }))
-}
-
-#[tauri::command]
-pub(crate) fn wridian_save_custom_api_settings(
-    input: CustomApiSettingsInput,
-) -> Result<CustomApiSettingsStatus, String> {
-    let data_dir = wridian_data_dir()?;
-    ensure_workspace(&data_dir)?;
-    let status = wridian_save_model_provider(SaveModelProviderInput {
-        preset_key: DEFAULT_CUSTOM_PROVIDER_ID.to_string(),
-        provider_id: DEFAULT_CUSTOM_PROVIDER_ID.to_string(),
-        provider_name: "自定义 OpenAI 兼容".to_string(),
-        provider_type: DEFAULT_CUSTOM_PROVIDER_ID.to_string(),
-        protocol: "openai-compatible".to_string(),
-        auth_style: "api_key".to_string(),
-        base_url: input.base_url,
-        api_key: input.api_key,
-        models: vec![input.model],
-        extra_env: std::collections::BTreeMap::new(),
-    })?;
-    let active = status
-        .providers
-        .iter()
-        .find(|provider| provider.id == DEFAULT_CUSTOM_PROVIDER_ID);
-    Ok(CustomApiSettingsStatus {
-        configured: active.map(|provider| provider.configured).unwrap_or(false),
-        base_url: active.and_then(|provider| provider.base_url.clone()),
-        model: active.and_then(|provider| provider.models.first().cloned()),
-        masked_key: active.and_then(|provider| provider.masked_key.clone()),
-    })
-}
-
-#[tauri::command]
-pub(crate) async fn wridian_test_custom_api() -> Result<TestCustomApiResponse, String> {
-    let data_dir = wridian_data_dir()?;
-    ensure_workspace(&data_dir)?;
-    let settings = read_active_model_settings(&data_dir, None)?
-        .ok_or_else(|| "请先保存模型配置。".to_string())?;
-    test_model_chat(&settings).await
-}
-
 pub(crate) fn read_active_model_settings(
     data_dir: &Path,
     requested_model_id: Option<&str>,
@@ -817,21 +753,9 @@ pub(crate) fn read_active_model_settings(
         auth_style: provider.auth_style.clone(),
         base_url: provider.base_url.clone(),
         api_key,
-        model: selected.model.clone(),
+        model: resolve_provider_model(provider, &selected.model),
         model_id: selected.id.clone(),
-    }))
-}
-
-pub(crate) fn read_custom_api_settings(
-    data_dir: &Path,
-) -> Result<Option<StoredCustomApiSettings>, String> {
-    let Some(settings) = read_active_model_settings(data_dir, None)? else {
-        return Ok(None);
-    };
-    Ok(Some(StoredCustomApiSettings {
-        base_url: settings.base_url,
-        api_key: settings.api_key,
-        model: settings.model,
+        extra_env: provider.extra_env.clone(),
     }))
 }
 
@@ -930,7 +854,11 @@ fn provider_status(provider: &StoredModelProviderFile) -> Result<ModelProviderSt
 fn configured_models(file: &StoredModelAccountsFile) -> Vec<ConfiguredModelStatus> {
     file.providers
         .iter()
-        .filter(|provider| provider.key_stored && !provider.models.is_empty())
+        .filter(|provider| {
+            provider.key_stored
+                && !provider.models.is_empty()
+                && ensure_supported_protocol(&provider.protocol).is_ok()
+        })
         .flat_map(|provider| {
             provider.models.iter().map(|model| ConfiguredModelStatus {
                 id: model_config_id(&provider.id, model),
@@ -1028,10 +956,8 @@ fn write_model_accounts_file(
     file: &StoredModelAccountsFile,
 ) -> Result<(), String> {
     let content = serde_json::to_string_pretty(file).map_err(|error| error.to_string())?;
-    let path = model_accounts_path(data_dir);
-    with_file_write_lock(data_dir, &path, || {
-        fs::write(&path, content).map_err(|error| format!("模型账户配置写入失败：{error}"))
-    })
+    fs::write(model_accounts_path(data_dir), content)
+        .map_err(|error| format!("模型账户配置写入失败：{error}"))
 }
 
 fn empty_accounts_file() -> StoredModelAccountsFile {
@@ -1785,10 +1711,19 @@ fn unix_timestamp() -> u64 {
 
 fn normalize_protocol(protocol: &str) -> Result<String, String> {
     match protocol.trim().to_ascii_lowercase().as_str() {
-        "openai" | "openai-compatible" => Ok("openai-compatible".to_string()),
-        "anthropic" | "anthropic-compatible" => Ok("anthropic".to_string()),
-        "gemini" | "google" => Ok("google".to_string()),
+        "openai-compatible" => Ok("openai-compatible".to_string()),
+        "anthropic" => Ok("anthropic".to_string()),
+        "google" => Ok("google".to_string()),
         _ => Err("协议必须是 openai-compatible、anthropic 或 google。".to_string()),
+    }
+}
+
+pub(crate) fn ensure_supported_protocol(protocol: &str) -> Result<(), String> {
+    match protocol {
+        "openai-compatible" | "anthropic" | "google" => Ok(()),
+        _ => Err(format!(
+            "不支持的模型协议：{protocol}。请重新保存模型服务。"
+        )),
     }
 }
 
@@ -1837,7 +1772,52 @@ fn model_config_id(provider_id: &str, model: &str) -> String {
     format!("{provider_id}::{}", model.trim())
 }
 
+fn resolve_provider_model(provider: &StoredModelProviderFile, model: &str) -> String {
+    let model = model.trim();
+    if model.eq_ignore_ascii_case("haiku") {
+        if is_first_party_anthropic_provider(provider) {
+            return "claude-haiku-4-5-20251001".to_string();
+        }
+        if let Some(mapped) = provider.extra_env.get("ANTHROPIC_DEFAULT_HAIKU_MODEL") {
+            return mapped.trim().to_string();
+        }
+    }
+    if model.eq_ignore_ascii_case("sonnet") {
+        if is_first_party_anthropic_provider(provider) {
+            return "claude-sonnet-4-6".to_string();
+        }
+        if let Some(mapped) = provider.extra_env.get("ANTHROPIC_DEFAULT_SONNET_MODEL") {
+            return mapped.trim().to_string();
+        }
+    }
+    if model.eq_ignore_ascii_case("opus") {
+        if is_first_party_anthropic_provider(provider) {
+            return "claude-opus-4-7".to_string();
+        }
+        if let Some(mapped) = provider.extra_env.get("ANTHROPIC_DEFAULT_OPUS_MODEL") {
+            return mapped.trim().to_string();
+        }
+    }
+    model.to_string()
+}
+
+fn is_first_party_anthropic_provider(provider: &StoredModelProviderFile) -> bool {
+    provider.id == ANTHROPIC_OAUTH_PROVIDER_ID
+        || provider.preset_key.as_deref() == Some(ANTHROPIC_OAUTH_PROVIDER_ID)
+        || (provider.protocol == "anthropic"
+            && provider
+                .base_url
+                .trim()
+                .trim_end_matches('/')
+                .eq_ignore_ascii_case("https://api.anthropic.com"))
+}
+
 fn validate_base_url(base_url: &str) -> Result<(), String> {
+    if base_url.contains('?') || base_url.contains('#') {
+        return Err(
+            "Base URL 不能包含查询参数或片段，请只填写服务根地址或完整 endpoint 路径。".to_string(),
+        );
+    }
     if base_url.starts_with("https://") {
         return Ok(());
     }
@@ -1910,20 +1890,63 @@ fn mask_api_key(api_key: &str) -> String {
     format!("{prefix}...{suffix}")
 }
 
-async fn test_model_chat(settings: &ActiveModelSettings) -> Result<TestCustomApiResponse, String> {
+pub(crate) fn apply_openai_compatible_provider_extras(
+    settings: &ActiveModelSettings,
+    model: &str,
+    body: &mut serde_json::Value,
+) {
+    let provider = settings.provider_id.to_ascii_lowercase();
+    let base_url = settings.base_url.to_ascii_lowercase();
+    let model = model.trim();
+    if provider.contains("deepseek") && deepseek_model_supports_thinking(model) {
+        body["thinking"] = serde_json::json!({ "type": "disabled" });
+    }
+    if is_moonshot_openai_compatible(&provider, &base_url, model) {
+        if let Some(object) = body.as_object_mut() {
+            object.remove("temperature");
+        }
+        if body
+            .get("max_tokens")
+            .and_then(serde_json::Value::as_u64)
+            .is_none_or(|value| value < 16_000)
+        {
+            body["max_tokens"] = serde_json::json!(32_768);
+        }
+        body["thinking"] = serde_json::json!({ "type": "enabled" });
+    }
+}
+
+fn is_moonshot_openai_compatible(provider: &str, base_url: &str, model: &str) -> bool {
+    provider.contains("moonshot")
+        || provider.contains("kimi-openai")
+        || base_url.contains("api.moonshot.")
+        || model.trim().to_ascii_lowercase().starts_with("kimi-")
+}
+
+fn deepseek_model_supports_thinking(model: &str) -> bool {
+    let model = model.trim().to_ascii_lowercase();
+    (model.starts_with("deepseek-v") && !model.starts_with("deepseek-v3"))
+        || model == "deepseek-reasoner"
+}
+
+async fn test_model_chat(
+    settings: &ActiveModelSettings,
+) -> Result<TestModelProviderResponse, String> {
+    ensure_supported_protocol(&settings.protocol)?;
     if is_openai_oauth_settings(settings) {
         return test_openai_oauth_chat(settings).await;
     }
     match settings.protocol.as_str() {
         "anthropic" => test_anthropic_chat(settings).await,
         "google" => test_gemini_chat(settings).await,
-        _ => test_openai_compatible_chat(settings).await,
+        "openai-compatible" => test_openai_compatible_chat(settings).await,
+        _ => unreachable!("protocol checked before dispatch"),
     }
 }
 
 async fn test_openai_oauth_chat(
     settings: &ActiveModelSettings,
-) -> Result<TestCustomApiResponse, String> {
+) -> Result<TestModelProviderResponse, String> {
     let url = format!("{}/responses", settings.base_url.trim_end_matches('/'));
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
@@ -1948,23 +1971,25 @@ async fn test_openai_oauth_chat(
 
 async fn test_openai_compatible_chat(
     settings: &ActiveModelSettings,
-) -> Result<TestCustomApiResponse, String> {
+) -> Result<TestModelProviderResponse, String> {
     let url = openai_chat_completions_url(&settings.base_url);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
         .build()
         .map_err(|error| format!("模型客户端创建失败：{error}"))?;
+    let mut body = json!({
+        "model": settings.model,
+        "messages": [
+            { "role": "user", "content": "Reply with OK." }
+        ],
+        "max_tokens": 8,
+        "temperature": 0
+    });
+    apply_openai_compatible_provider_extras(settings, &settings.model, &mut body);
     let response = client
         .post(url)
         .bearer_auth(&settings.api_key)
-        .json(&json!({
-            "model": settings.model,
-            "messages": [
-                { "role": "user", "content": "Reply with OK." }
-            ],
-            "max_tokens": 8,
-            "temperature": 0
-        }))
+        .json(&body)
         .send()
         .await
         .map_err(|error| format!("模型连接失败：{error}"))?;
@@ -1973,7 +1998,7 @@ async fn test_openai_compatible_chat(
 
 async fn test_anthropic_chat(
     settings: &ActiveModelSettings,
-) -> Result<TestCustomApiResponse, String> {
+) -> Result<TestModelProviderResponse, String> {
     let url = anthropic_messages_url(&settings.base_url);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
@@ -2006,22 +2031,19 @@ async fn test_anthropic_chat(
     read_anthropic_test_response(response).await
 }
 
-async fn test_gemini_chat(settings: &ActiveModelSettings) -> Result<TestCustomApiResponse, String> {
-    let url = format!(
-        "{}/models/{}:generateContent",
-        settings.base_url, settings.model
-    );
+async fn test_gemini_chat(
+    settings: &ActiveModelSettings,
+) -> Result<TestModelProviderResponse, String> {
+    let url = gemini_generate_content_url(&settings.base_url, &settings.model);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
         .build()
         .map_err(|error| format!("Gemini 客户端创建失败：{error}"))?;
-    let mut request = client.post(if settings.auth_style == "oauth_external" {
-        url
-    } else {
-        format!("{}?key={}", url, settings.api_key)
-    });
+    let mut request = client.post(url);
     if settings.auth_style == "oauth_external" {
         request = request.bearer_auth(&settings.api_key);
+    } else {
+        request = request.header("x-goog-api-key", &settings.api_key);
     }
     let response = request
         .json(&json!({
@@ -2039,10 +2061,18 @@ async fn test_gemini_chat(settings: &ActiveModelSettings) -> Result<TestCustomAp
     read_gemini_test_response(response).await
 }
 
+pub(crate) fn gemini_generate_content_url(base_url: &str, model: &str) -> String {
+    format!(
+        "{}/models/{}:generateContent",
+        base_url.trim().trim_end_matches('/'),
+        model.trim()
+    )
+}
+
 async fn read_text_test_response(
     response: reqwest::Response,
     label: &str,
-) -> Result<TestCustomApiResponse, String> {
+) -> Result<TestModelProviderResponse, String> {
     let status = response.status();
     let body = response
         .text()
@@ -2053,7 +2083,7 @@ async fn read_text_test_response(
         if content.trim().is_empty() {
             return Err(format!("{label} 返回了空文本，无法用于 Wridian 对话。"));
         }
-        Ok(TestCustomApiResponse {
+        Ok(TestModelProviderResponse {
             ok: true,
             message: "连接成功，且响应格式可用于 Wridian 对话。".to_string(),
         })
@@ -2068,7 +2098,7 @@ async fn read_text_test_response(
 
 async fn read_anthropic_test_response(
     response: reqwest::Response,
-) -> Result<TestCustomApiResponse, String> {
+) -> Result<TestModelProviderResponse, String> {
     let status = response.status();
     let body = response
         .text()
@@ -2078,7 +2108,7 @@ async fn read_anthropic_test_response(
         if read_anthropic_response_text(&body)?.trim().is_empty() {
             return Err("Anthropic 返回了空文本，无法用于 Wridian 对话。".to_string());
         }
-        Ok(TestCustomApiResponse {
+        Ok(TestModelProviderResponse {
             ok: true,
             message: "连接成功，且 Anthropic 响应格式可用于 Wridian 对话。".to_string(),
         })
@@ -2093,7 +2123,7 @@ async fn read_anthropic_test_response(
 
 async fn read_gemini_test_response(
     response: reqwest::Response,
-) -> Result<TestCustomApiResponse, String> {
+) -> Result<TestModelProviderResponse, String> {
     let status = response.status();
     let body = response
         .text()
@@ -2103,7 +2133,7 @@ async fn read_gemini_test_response(
         if read_gemini_response_text(&body)?.trim().is_empty() {
             return Err("Gemini 返回了空文本，无法用于 Wridian 对话。".to_string());
         }
-        Ok(TestCustomApiResponse {
+        Ok(TestModelProviderResponse {
             ok: true,
             message: "连接成功，且 Gemini 响应格式可用于 Wridian 对话。".to_string(),
         })
@@ -2171,6 +2201,33 @@ mod tests {
         assert!(validate_base_url("http://127.0.0.1:8080/v1").is_ok());
         assert!(validate_base_url("http://[::1]:8080/v1").is_ok());
         assert!(validate_base_url("http://api.example.com/v1").is_err());
+        assert!(validate_base_url("https://api.example.com/v1?key=secret").is_err());
+        assert!(validate_base_url("https://api.example.com/v1#token").is_err());
+    }
+
+    #[test]
+    fn protocol_normalization_rejects_legacy_aliases_and_unknown_values() {
+        assert_eq!(
+            normalize_protocol("openai-compatible").expect("openai-compatible"),
+            "openai-compatible"
+        );
+        assert_eq!(
+            normalize_protocol("anthropic").expect("anthropic"),
+            "anthropic"
+        );
+        assert_eq!(normalize_protocol("google").expect("google"), "google");
+        assert!(normalize_protocol("openai").is_err());
+        assert!(normalize_protocol("gemini").is_err());
+        assert!(normalize_protocol("unknown").is_err());
+    }
+
+    #[test]
+    fn supported_protocol_check_rejects_runtime_fallback() {
+        assert!(ensure_supported_protocol("openai-compatible").is_ok());
+        assert!(ensure_supported_protocol("anthropic").is_ok());
+        assert!(ensure_supported_protocol("google").is_ok());
+        assert!(ensure_supported_protocol("openai").is_err());
+        assert!(ensure_supported_protocol("custom").is_err());
     }
 
     #[test]
@@ -2210,6 +2267,25 @@ mod tests {
     }
 
     #[test]
+    fn gemini_generate_content_url_does_not_embed_api_key() {
+        let url = gemini_generate_content_url(
+            "https://generativelanguage.googleapis.com/v1beta/",
+            "gemini-2.5-pro",
+        );
+
+        assert_eq!(
+            url,
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"
+        );
+        assert!(!url.contains("?key="));
+    }
+
+    #[test]
+    fn gemini_default_output_limit_matches_native_api_ceiling() {
+        assert_eq!(GEMINI_DEFAULT_MAX_OUTPUT_TOKENS, 65535);
+    }
+
+    #[test]
     fn response_body_summary_strips_simple_html_error() {
         let body = "<html><head><title>404 Not Found</title></head><body><center><h1>404 Not Found</h1></center></body></html>";
         assert_eq!(response_body_summary(body), "404 Not Found 404 Not Found");
@@ -2238,6 +2314,58 @@ mod tests {
 
         assert!(content.contains("\"keyStored\": true"));
         assert!(!content.contains("secret-key"));
+    }
+
+    #[test]
+    fn provider_model_resolution_maps_first_party_anthropic_aliases() {
+        let provider = StoredModelProviderFile {
+            id: ANTHROPIC_OAUTH_PROVIDER_ID.to_string(),
+            preset_key: Some(ANTHROPIC_OAUTH_PROVIDER_ID.to_string()),
+            provider_name: "Anthropic".to_string(),
+            provider_type: Some(ANTHROPIC_OAUTH_PROVIDER_ID.to_string()),
+            protocol: "anthropic".to_string(),
+            auth_style: "oauth_external".to_string(),
+            base_url: "https://api.anthropic.com".to_string(),
+            models: vec!["sonnet".to_string()],
+            extra_env: std::collections::BTreeMap::new(),
+            key_stored: true,
+            api_key: None,
+        };
+
+        assert_eq!(
+            resolve_provider_model(&provider, "sonnet"),
+            "claude-sonnet-4-6"
+        );
+        assert_eq!(resolve_provider_model(&provider, "opus"), "claude-opus-4-7");
+        assert_eq!(
+            resolve_provider_model(&provider, "haiku"),
+            "claude-haiku-4-5-20251001"
+        );
+    }
+
+    #[test]
+    fn provider_model_resolution_uses_catalog_env_role_mapping() {
+        let mut extra_env = std::collections::BTreeMap::new();
+        extra_env.insert(
+            "ANTHROPIC_DEFAULT_SONNET_MODEL".to_string(),
+            "glm-5-turbo".to_string(),
+        );
+        let provider = StoredModelProviderFile {
+            id: "glm-cn".to_string(),
+            preset_key: Some("glm-cn".to_string()),
+            provider_name: "GLM".to_string(),
+            provider_type: Some("glm-cn".to_string()),
+            protocol: "anthropic".to_string(),
+            auth_style: "auth_token".to_string(),
+            base_url: "https://open.bigmodel.cn/api/anthropic".to_string(),
+            models: vec!["sonnet".to_string()],
+            extra_env,
+            key_stored: true,
+            api_key: None,
+        };
+
+        assert_eq!(resolve_provider_model(&provider, "sonnet"), "glm-5-turbo");
+        assert_eq!(resolve_provider_model(&provider, "glm-5"), "glm-5");
     }
 
     #[test]

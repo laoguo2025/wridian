@@ -1,22 +1,22 @@
 :root {
   --font-ui: "Anthropic Sans", system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-mono: "Anthropic Mono", ui-monospace, monospace;
-  --bg-window: #f8f8f6;
-  --bg-page: #fdfdfc;
-  --bg-sidebar: rgba(255, 255, 255, 0.72);
-  --bg-panel: #ffffff;
-  --bg-hover: rgba(10, 10, 10, 0.04);
-  --bg-selected: #f3f2eb;
+  --bg-window: #f1efe9;
+  --bg-page: #f8f6f0;
+  --bg-sidebar: rgba(250, 248, 241, 0.78);
+  --bg-panel: #fbfaf6;
+  --bg-hover: rgba(65, 55, 44, 0.055);
+  --bg-selected: #ece8dc;
   --text-primary: #121212;
   --text-body: #20201d;
   --text-muted: #7a7670;
   --text-faint: #a09c94;
-  --border: rgba(10, 10, 10, 0.08);
-  --divider: rgba(10, 10, 10, 0.06);
+  --border: rgba(67, 55, 43, 0.1);
+  --divider: rgba(67, 55, 43, 0.075);
   --accent: #dc7d57;
   --focus: #0073e6;
-  --shadow-card: inset 0 0 0 1px rgba(10, 10, 10, 0.05), 0 4px 24px rgba(10, 10, 10, 0.04);
-  --shadow-pop: 0 18px 80px rgba(10, 10, 10, 0.14), inset 0 0 0 1px rgba(10, 10, 10, 0.06);
+  --shadow-card: inset 0 0 0 1px rgba(67, 55, 43, 0.045), 0 12px 32px rgba(67, 55, 43, 0.045);
+  --shadow-pop: 0 18px 80px rgba(67, 55, 43, 0.18), inset 0 0 0 1px rgba(67, 55, 43, 0.07);
   color: var(--text-primary);
   background: var(--bg-window);
   font-family: var(--font-ui);
@@ -226,7 +226,7 @@ button {
     12px
     minmax(360px, 1fr)
     12px
-    var(--right-pane-width, 292px);
+    var(--right-pane-width, 332px);
   gap: 0;
   padding: 12px 14px 14px;
   overflow: hidden;
@@ -244,16 +244,19 @@ button {
 
 .workspace-resizer::before {
   content: "";
-  width: 6px;
-  height: 62px;
+  width: 2px;
+  height: 54px;
   border-radius: 999px;
-  background: var(--accent);
-  opacity: 0.95;
+  background: color-mix(in srgb, var(--text-muted), transparent 72%);
+  opacity: 0.36;
+  transition: width 140ms ease, background 140ms ease, opacity 140ms ease, box-shadow 140ms ease;
 }
 
 .workspace-resizer:hover::before,
 .workspace-resizer:focus-visible::before {
-  opacity: 1;
+  width: 4px;
+  background: color-mix(in srgb, var(--accent), transparent 12%);
+  opacity: 0.8;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent), transparent 78%);
 }
 
@@ -607,9 +610,65 @@ button {
 .empty-editor {
   align-self: center;
   justify-self: center;
-  color: var(--text-faint);
-  font-size: calc(12px * var(--ui-font-scale, 1));
-  line-height: 16px;
+  width: min(420px, calc(100% - 48px));
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.empty-brand {
+  color: var(--text-primary);
+  font-size: clamp(34px, 4.4vw, 56px);
+  font-weight: 760;
+  letter-spacing: 0;
+  line-height: 1;
+  text-shadow: 0 8px 34px color-mix(in srgb, var(--accent), transparent 82%);
+}
+
+.empty-slogan {
+  max-width: 18em;
+  color: var(--text-muted);
+  font-size: calc(15px * var(--ui-font-scale, 1));
+  line-height: 22px;
+}
+
+.empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  padding-top: 6px;
+}
+
+.empty-action {
+  min-width: 104px;
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-panel), transparent 4%);
+  color: var(--text-body);
+  padding: 0 13px;
+  font-size: calc(13px * var(--ui-font-scale, 1));
+  line-height: 18px;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white, transparent 42%);
+}
+
+.empty-action:hover {
+  border-color: color-mix(in srgb, var(--text-primary), transparent 78%);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.empty-action:active {
+  transform: translateY(1px);
+}
+
+.empty-action.primary {
+  border-color: color-mix(in srgb, var(--accent), transparent 44%);
+  background: color-mix(in srgb, var(--accent), transparent 88%);
+  color: var(--text-primary);
 }
 
 .file-preview {
@@ -861,14 +920,14 @@ button {
 
 .prompt-bar {
   width: 100%;
-  min-height: 94px;
+  min-height: 98px;
   margin: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
   border: 1px solid var(--border);
-  border-radius: 6px;
-  background: transparent;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-panel), transparent 22%);
   padding: 6px 4px 4px;
   position: relative;
 }
@@ -1028,12 +1087,12 @@ button {
 
 .prompt-model-label {
   min-width: 0;
-  max-width: 122px;
+  max-width: 150px;
   height: 24px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg-panel);
-  color: var(--text-muted);
+  border: 0;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--bg-selected), transparent 35%);
+  color: var(--text-faint);
   font-size: calc(11px * var(--ui-font-scale, 1));
   line-height: 22px;
   padding: 0 6px;
@@ -1054,25 +1113,36 @@ button {
 }
 
 .prompt-send {
-  min-width: 46px;
-  height: 26px;
+  min-width: 48px;
+  height: 28px;
   border: 0;
-  border-radius: 6px;
-  background: var(--text-primary);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--text-primary), transparent 24%);
   color: var(--bg-panel);
   font-size: calc(12px * var(--ui-font-scale, 1));
   line-height: 16px;
   padding: 0 9px;
   font-weight: 520;
+  transition: background 140ms ease, transform 120ms ease, opacity 140ms ease;
 }
 
 .prompt-send:not(:disabled):hover {
   background: color-mix(in srgb, var(--text-primary), transparent 12%);
 }
 
+.prompt-send:not(:disabled):active {
+  transform: translateY(1px);
+}
+
 .prompt-send:disabled {
   cursor: default;
-  opacity: 0.45;
+  background: color-mix(in srgb, var(--text-primary), transparent 54%);
+  opacity: 0.52;
+}
+
+.prompt-send[aria-label="停止"] {
+  background: var(--accent);
+  color: var(--bg-panel);
 }
 
 .prompt-suggestion-menu {
@@ -1321,6 +1391,73 @@ button {
   line-height: 16px;
 }
 
+.message-context-status {
+  color: var(--text-muted);
+  font-size: calc(11px * var(--ui-font-scale, 1));
+  line-height: 15px;
+}
+
+.message-context-status summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  cursor: pointer;
+  user-select: none;
+}
+
+.message-context-status summary::-webkit-details-marker {
+  display: none;
+}
+
+.message-context-status summary::before {
+  content: "▸";
+  font-size: calc(10px * var(--ui-font-scale, 1));
+}
+
+.message-context-status[open] summary::before {
+  content: "▾";
+}
+
+.message-context-status summary span {
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent), transparent 86%);
+  color: var(--accent);
+  padding: 0 4px;
+}
+
+.message-context-status ul {
+  display: grid;
+  gap: 3px;
+  margin: 5px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.message-context-status li {
+  display: grid;
+  gap: 1px;
+  border-left: 2px solid var(--border);
+  padding-left: 6px;
+}
+
+.message-context-status li.loaded {
+  border-left-color: var(--accent);
+}
+
+.message-context-status li span {
+  color: var(--text-body);
+  font-weight: 600;
+}
+
+.message-context-status li small,
+.message-context-status li em {
+  color: var(--text-muted);
+  font-size: calc(11px * var(--ui-font-scale, 1));
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+
 .chat-message-body {
   color: var(--text-body);
   font-size: calc(14px * var(--ui-font-scale, 1));
@@ -1339,6 +1476,79 @@ button {
 
 .chat-status.error {
   color: var(--accent);
+}
+
+.relevant-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  max-height: 172px;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+
+.relevant-notes-header {
+  color: var(--text-muted);
+  font-size: calc(11px * var(--ui-font-scale, 1));
+  font-weight: 650;
+  line-height: 15px;
+  padding: 0 2px;
+}
+
+.relevant-note {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-body);
+  padding: 6px;
+  text-align: left;
+}
+
+.relevant-note:hover {
+  background: var(--bg-hover);
+}
+
+.relevant-note-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  font-size: calc(12px * var(--ui-font-scale, 1));
+  font-weight: 620;
+  line-height: 16px;
+}
+
+.relevant-note-kind {
+  flex: 0 0 auto;
+  border-radius: 4px;
+  background: var(--bg-selected);
+  color: var(--text-muted);
+  font-size: calc(10px * var(--ui-font-scale, 1));
+  font-weight: 650;
+  line-height: 14px;
+  padding: 0 4px;
+}
+
+.relevant-note small,
+.relevant-note em,
+.relevant-notes-error {
+  color: var(--text-muted);
+  font-size: calc(11px * var(--ui-font-scale, 1));
+  font-style: normal;
+  line-height: 15px;
+  overflow-wrap: anywhere;
+}
+
+.relevant-notes-error {
+  color: var(--accent);
+  padding: 0 2px;
 }
 
 .message-actions {
@@ -1375,7 +1585,7 @@ button {
   flex: 1;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--bg-selected), transparent 38%);
+  background: color-mix(in srgb, var(--bg-selected), transparent 22%);
   overflow: hidden;
 }
 
@@ -1388,7 +1598,50 @@ button {
   min-height: 0;
   overflow: hidden;
   padding: 0;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-panel), var(--bg-selected) 18%), var(--bg-panel));
+  background:
+    radial-gradient(circle at 50% 54%, color-mix(in srgb, var(--accent), transparent 90%), transparent 42%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-panel), var(--bg-selected) 20%), color-mix(in srgb, var(--bg-panel), var(--bg-selected) 9%));
+}
+
+.memory-project-filter {
+  width: 132px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  padding: 0 8px;
+  font-size: calc(12px * var(--ui-font-scale, 1));
+}
+
+.memory-project-scope {
+  position: absolute;
+  left: 18px;
+  top: 18px;
+  z-index: 3;
+  display: grid;
+  gap: 2px;
+  max-width: 260px;
+  border: 1px solid color-mix(in srgb, #dc7d57, transparent 42%);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--bg-panel), transparent 4%);
+  padding: 8px 10px;
+  box-shadow: 0 6px 16px color-mix(in srgb, #dc7d57, transparent 86%);
+}
+
+.memory-project-scope strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: calc(12px * var(--ui-font-scale, 1));
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-project-scope span {
+  color: var(--text-muted);
+  font-size: calc(10px * var(--ui-font-scale, 1));
+  line-height: 13px;
 }
 
 .memory-forest::before {
@@ -1413,7 +1666,7 @@ button {
   width: 860px;
   height: 588px;
   object-fit: contain;
-  opacity: 0.9;
+  opacity: 0.86;
   transform: translateX(-50%);
   pointer-events: none;
 }
@@ -1437,14 +1690,16 @@ button {
   gap: 1px;
   width: 116px;
   min-height: 34px;
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--accent), transparent 72%);
   border-radius: 6px;
-  background: color-mix(in srgb, var(--bg-panel), transparent 6%);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-panel), transparent 2%), color-mix(in srgb, var(--bg-selected), transparent 12%));
   color: var(--text-primary);
   padding: 4px 7px;
-  box-shadow: 0 6px 14px color-mix(in srgb, var(--text-primary), transparent 95%);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--accent), transparent 88%), inset 0 1px 0 color-mix(in srgb, white, transparent 38%);
   text-align: center;
   transform: translateX(-50%);
+  opacity: 0.94;
 }
 
 .memory-trunk-card {
@@ -1455,14 +1710,16 @@ button {
   gap: 1px;
   width: 116px;
   min-height: 32px;
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--accent), transparent 74%);
   border-radius: 6px;
-  background: color-mix(in srgb, var(--bg-panel), transparent 8%);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-panel), transparent 4%), color-mix(in srgb, var(--bg-selected), transparent 10%));
   color: var(--text-primary);
   padding: 4px 7px;
-  box-shadow: 0 6px 14px color-mix(in srgb, var(--text-primary), transparent 95%);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--accent), transparent 90%), inset 0 1px 0 color-mix(in srgb, white, transparent 40%);
   text-align: center;
   transform: translateX(-50%);
+  opacity: 0.94;
 }
 
 .memory-trunk-card.totem {
@@ -1517,8 +1774,10 @@ button {
 .memory-trunk-card.active,
 .memory-sense-card:hover,
 .memory-sense-card.active {
-  border-color: color-mix(in srgb, var(--accent), transparent 20%);
-  background: color-mix(in srgb, var(--accent), transparent 88%);
+  border-color: color-mix(in srgb, var(--accent), transparent 22%);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent), transparent 82%), color-mix(in srgb, var(--bg-panel), transparent 8%));
+  opacity: 1;
 }
 
 .memory-branch-arm {
@@ -1576,13 +1835,28 @@ button {
   gap: 1px;
   width: 116px;
   min-height: 38px;
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--accent), transparent 76%);
   border-radius: 6px;
-  background: color-mix(in srgb, var(--bg-panel), transparent 6%);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-panel), transparent 5%), color-mix(in srgb, var(--bg-selected), transparent 12%));
   color: var(--text-primary);
   padding: 5px 8px;
-  box-shadow: 0 6px 14px color-mix(in srgb, var(--text-primary), transparent 95%);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--accent), transparent 90%), inset 0 1px 0 color-mix(in srgb, white, transparent 40%);
   text-align: center;
+  opacity: 0.94;
+}
+
+.memory-branch-card::before,
+.memory-trunk-card::before,
+.memory-sense-card::before {
+  content: "";
+  position: absolute;
+  left: 9px;
+  right: 9px;
+  top: 0;
+  height: 1px;
+  background: color-mix(in srgb, var(--accent), transparent 58%);
+  pointer-events: none;
 }
 
 .memory-branch-card strong {
@@ -1602,8 +1876,10 @@ button {
 .memory-branch-card:hover,
 .memory-branch-card.active,
 .memory-branch-arm.active .memory-branch-card {
-  border-color: color-mix(in srgb, var(--accent), transparent 20%);
-  background: color-mix(in srgb, var(--accent), transparent 88%);
+  border-color: color-mix(in srgb, var(--accent), transparent 22%);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent), transparent 82%), color-mix(in srgb, var(--bg-panel), transparent 8%));
+  opacity: 1;
 }
 
 .memory-leaf-dots {
@@ -1637,6 +1913,25 @@ button {
   height: 9px;
   border-color: color-mix(in srgb, #dc7d57, black 24%);
   box-shadow: 0 3px 10px color-mix(in srgb, #dc7d57, transparent 35%);
+}
+
+.memory-leaf-dot.role-compressed {
+  width: 10px;
+  height: 10px;
+  border-width: 2px;
+  background: color-mix(in srgb, #dc7d57, white 14%);
+  box-shadow: 0 3px 12px color-mix(in srgb, #dc7d57, transparent 32%);
+}
+
+.memory-leaf-dot.role-project {
+  width: 9px;
+  height: 9px;
+  border-color: color-mix(in srgb, #dc7d57, black 24%);
+  background: color-mix(in srgb, #dc7d57, white 6%);
+}
+
+.memory-leaf-dot.role-knowledge {
+  opacity: 0.55;
 }
 
 .memory-node-detail {
@@ -1739,58 +2034,12 @@ button {
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
-  background: color-mix(in srgb, var(--bg-selected), var(--bg-panel) 44%);
+  background:
+    radial-gradient(circle at 58% 42%, color-mix(in srgb, var(--accent), transparent 92%), transparent 38%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-panel), var(--bg-selected) 14%), color-mix(in srgb, var(--bg-selected), var(--bg-panel) 42%));
   cursor: grab;
   touch-action: none;
   user-select: none;
-}
-
-.knowledge-graph-viewbar {
-  display: flex;
-  gap: 4px;
-  overflow-x: auto;
-  padding: 1px 0 3px;
-}
-
-.knowledge-graph-viewbar button {
-  flex: 0 0 auto;
-  min-height: 28px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text-muted);
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 8px;
-  font-size: calc(11px * var(--ui-font-scale, 1));
-}
-
-.knowledge-graph-viewbar button.active {
-  border-color: color-mix(in srgb, var(--accent), transparent 36%);
-  background: color-mix(in srgb, var(--accent), transparent 86%);
-  color: var(--text-primary);
-}
-
-.knowledge-graph-viewbar small {
-  color: var(--text-faint);
-  font-size: calc(10px * var(--ui-font-scale, 1));
-}
-
-.knowledge-graph-health-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  color: var(--text-muted);
-  font-size: calc(11px * var(--ui-font-scale, 1));
-  line-height: 15px;
-}
-
-.knowledge-graph-health-strip span {
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--bg-selected), transparent 36%);
-  padding: 2px 8px;
 }
 
 .knowledge-graph-stage.dragging {
@@ -1802,11 +2051,69 @@ button {
   position: absolute;
   inset: 0;
   background-image:
-    linear-gradient(color-mix(in srgb, var(--text-primary), transparent 96%) 1px, transparent 1px),
-    linear-gradient(90deg, color-mix(in srgb, var(--text-primary), transparent 96%) 1px, transparent 1px);
+    linear-gradient(color-mix(in srgb, var(--text-primary), transparent 97%) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--text-primary), transparent 97%) 1px, transparent 1px);
   background-size: 44px 44px;
-  opacity: 0.34;
+  opacity: 0.28;
   pointer-events: none;
+}
+
+.knowledge-graph-legend {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  z-index: 2;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 24px);
+  border: 1px solid color-mix(in srgb, var(--border), transparent 20%);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--bg-panel), transparent 14%);
+  box-shadow: 0 10px 26px color-mix(in srgb, var(--text-primary), transparent 94%);
+  padding: 6px 8px;
+  pointer-events: none;
+}
+
+.knowledge-graph-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: calc(11px * var(--ui-font-scale, 1));
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+.knowledge-graph-legend i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+  background: var(--accent);
+}
+
+.knowledge-graph-legend i.folder {
+  width: 11px;
+  height: 11px;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent), transparent 86%);
+}
+
+.knowledge-graph-legend i.card {
+  opacity: 0.68;
+}
+
+.knowledge-graph-legend b {
+  width: 16px;
+  height: 0;
+  border-top: 2px solid color-mix(in srgb, var(--accent), transparent 18%);
+  display: inline-block;
+}
+
+.knowledge-graph-legend b.dashed {
+  border-top-style: dashed;
+  border-top-color: color-mix(in srgb, var(--text-muted), transparent 30%);
 }
 
 .knowledge-graph-empty {
@@ -1831,9 +2138,9 @@ button {
   right: 14px;
   bottom: 14px;
   z-index: 2;
-  width: min(360px, calc(100% - 28px));
-  max-height: min(420px, calc(100% - 28px));
-  overflow: auto;
+  width: min(320px, calc(100% - 28px));
+  max-height: 168px;
+  overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border), var(--text-muted) 18%);
   border-radius: 8px;
   background: color-mix(in srgb, var(--bg-panel), white 8%);
@@ -1862,30 +2169,6 @@ button {
   white-space: nowrap;
 }
 
-.knowledge-graph-preview-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  margin-top: 7px;
-}
-
-.knowledge-graph-preview-meta span,
-.knowledge-graph-preview-fields {
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--bg-selected), transparent 22%);
-  color: var(--text-muted);
-  font-size: calc(10px * var(--ui-font-scale, 1));
-  line-height: 15px;
-  padding: 1px 6px;
-}
-
-.knowledge-graph-preview-fields {
-  margin-top: 5px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .knowledge-graph-preview-body {
   display: -webkit-box;
   margin-top: 8px;
@@ -1896,69 +2179,6 @@ button {
   white-space: pre-wrap;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 4;
-}
-
-.knowledge-graph-neighborhood {
-  display: grid;
-  gap: 6px;
-  margin-top: 8px;
-  border-top: 1px solid color-mix(in srgb, var(--border), transparent 25%);
-  padding-top: 8px;
-}
-
-.knowledge-graph-neighborhood-title,
-.knowledge-graph-neighborhood-list-title {
-  color: var(--text-muted);
-  font-size: calc(10px * var(--ui-font-scale, 1));
-  font-weight: 650;
-  line-height: 14px;
-}
-
-.knowledge-graph-neighborhood-groups {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.knowledge-graph-neighborhood-groups span,
-.knowledge-graph-neighborhood-empty,
-.knowledge-graph-neighborhood-more {
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--bg-selected), transparent 24%);
-  color: var(--text-muted);
-  font-size: calc(10px * var(--ui-font-scale, 1));
-  line-height: 15px;
-  padding: 1px 6px;
-}
-
-.knowledge-graph-neighborhood-list {
-  display: grid;
-  gap: 3px;
-}
-
-.knowledge-graph-neighborhood-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 6px;
-  color: var(--text-body);
-  font-size: calc(11px * var(--ui-font-scale, 1));
-  line-height: 15px;
-}
-
-.knowledge-graph-neighborhood-row span {
-  color: var(--text-muted);
-  font-size: calc(10px * var(--ui-font-scale, 1));
-  white-space: nowrap;
-}
-
-.knowledge-graph-neighborhood-row strong {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-primary);
-  font-weight: 560;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .creative-skills-list {
@@ -2004,24 +2224,14 @@ button {
 
 .prompt-model-select {
   min-width: 0;
-  max-width: 190px;
+  max-width: 216px;
   height: 26px;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: 6px;
-  background: var(--bg-panel);
+  background: color-mix(in srgb, var(--bg-selected), transparent 32%);
   color: var(--text-muted);
   font-size: calc(11px * var(--ui-font-scale, 1));
-  padding: 0 6px;
-}
-
-.creative-skill-source {
-  color: var(--text-soft);
-  font-size: calc(11px * var(--ui-font-scale, 1));
-  line-height: 16px;
-  max-width: 520px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  padding: 0 7px;
 }
 
 .skill-toggle {

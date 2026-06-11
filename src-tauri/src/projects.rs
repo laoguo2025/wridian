@@ -1,20 +1,19 @@
-use crate::file_lock::with_file_write_lock;
-use crate::memory::read_project_compressed_memory;
+use crate::memory::read_project_continuity_memory;
+use crate::path_safety::safe_child_path;
 use crate::runtime::{ensure_workspace, runtime_root, wridian_data_dir};
 use crate::workspace::{
-    allowed_work_roots, is_supported_writing_file, read_active_work_root, works_root,
+    allowed_work_roots, is_supported_writing_file, read_active_work_root, resolved_knowledge_root,
+    works_root,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 const MAX_RELEVANT_SCAN_FILES: usize = 800;
 const MAX_RELEVANT_SCAN_DEPTH: usize = 8;
 const MAX_RELEVANT_FILE_BYTES: u64 = 512 * 1024;
-const MAX_RELEVANT_CHUNKS_PER_FILE: usize = 48;
-const MAX_RELEVANT_CHUNK_CHARS: usize = 900;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -68,12 +67,27 @@ pub(crate) struct RelevantNotesInput {
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RelevantNote {
+    kind: String,
     path: String,
+    relative_path: Option<String>,
     title: String,
     snippet: String,
     score: f64,
     has_outgoing_links: bool,
     has_backlinks: bool,
+    reasons: Vec<String>,
+}
+
+struct RelevantCandidate {
+    kind: &'static str,
+    path: PathBuf,
+    root: PathBuf,
+}
+
+#[derive(Default)]
+struct GraphSignals {
+    concepts: HashSet<String>,
+    sources: HashSet<String>,
 }
 
 #[tauri::command]
@@ -169,21 +183,21 @@ pub(crate) fn read_active_project_context(data_dir: &Path) -> Result<String, Str
     else {
         return Ok(String::new());
     };
-    let compressed_memory = read_project_compressed_memory(data_dir, &project.id)?;
-    let compressed_block = if compressed_memory.trim().is_empty() {
-        "暂无压缩记忆。".to_string()
+    let continuity_memory = read_project_continuity_memory(data_dir, &project.id, 6)?;
+    let continuity_block = if continuity_memory.trim().is_empty() {
+        "暂无续接记忆。".to_string()
     } else {
-        compressed_memory
+        continuity_memory
     };
     Ok(format!(
-        "Project Mode：{}\n说明：{}\n项目系统提示：{}\n常驻来源：{}\n排除：{}\nURLs：{}\n作品压缩记忆：\n{}",
+        "Project Mode：{}\n说明：{}\n项目系统提示：{}\n常驻来源：{}\n排除：{}\nURLs：{}\n作品续接记忆：\n{}",
         project.name,
         project.description,
         project.system_prompt,
         project.inclusions.join(", "),
         project.exclusions.join(", "),
         project.web_urls.join(", "),
-        compressed_block
+        continuity_block
     ))
 }
 
@@ -217,9 +231,7 @@ fn write_project_state(data_dir: &Path, state: &ProjectState) -> Result<(), Stri
         fs::create_dir_all(parent).map_err(|error| format!("项目目录创建失败：{error}"))?;
     }
     let content = serde_json::to_string_pretty(&json!(state)).map_err(|error| error.to_string())?;
-    with_file_write_lock(data_dir, &path, || {
-        fs::write(&path, content).map_err(|error| format!("项目配置写入失败：{error}"))
-    })
+    fs::write(path, content).map_err(|error| format!("项目配置写入失败：{error}"))
 }
 
 fn project_state_path(data_dir: &Path) -> PathBuf {
@@ -305,31 +317,40 @@ fn find_relevant_notes(
     input: &RelevantNotesInput,
     active_project: Option<&ProjectConfig>,
 ) -> Result<Vec<RelevantNote>, String> {
-    let roots = allowed_work_roots(data_dir)?;
     let source_path = PathBuf::from(input.source_path.trim());
-    let source_text = input.query.as_deref().unwrap_or(&input.content);
-    let source_terms = tokenize_mixed(source_text);
+    let source_text = format!(
+        "{}\n{}",
+        input.content,
+        input.query.as_deref().unwrap_or_default()
+    );
+    let source_terms = tokenize_mixed(&source_text);
     if source_terms.is_empty() {
         return Ok(Vec::new());
     }
+    let source_signals = extract_graph_signals(&format!(
+        "{}\n{}",
+        input.content,
+        input.query.as_deref().unwrap_or_default()
+    ));
     let source_links = extract_wikilinks(&input.content);
-    let candidates = collect_writing_files(&roots)?;
-    let mut candidate_docs = Vec::new();
-    let mut document_frequency: HashMap<String, usize> = HashMap::new();
-    let mut chunk_count = 0usize;
-    let mut total_chunk_terms = 0usize;
-
-    for path in candidates {
+    let candidates = collect_relevant_candidates(data_dir)?;
+    let mut scored = Vec::new();
+    for candidate in candidates {
+        let path = candidate.path;
         if path == source_path {
             continue;
         }
-        if !project_allows_path(active_project, &path) {
+        if candidate.kind == "draft" && !project_allows_path(active_project, &path) {
             continue;
         }
         let content = fs::read_to_string(&path)
             .map_err(|error| format!("相关稿件读取失败（{}）：{error}", path.to_string_lossy()))?;
         let path_text = path.to_string_lossy().to_string();
+        let candidate_terms = tokenize_mixed(&format!("{path_text}\n{content}"));
+        let lexical_score = overlap_score(&source_terms, &candidate_terms);
+        let common_terms = top_common_terms(&source_terms, &candidate_terms, 4);
         let candidate_links = extract_wikilinks(&content);
+        let candidate_signals = extract_graph_signals(&content);
         let title = path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
@@ -341,6 +362,10 @@ fn find_relevant_notes(
         let has_outgoing_links =
             !source_links.is_disjoint(&candidate_links) || source_links.contains(&title_key);
         let has_backlinks = candidate_links.contains(&source_title_key(&source_path));
+        let common_concepts =
+            top_common_terms(&source_signals.concepts, &candidate_signals.concepts, 4);
+        let common_sources =
+            top_common_terms(&source_signals.sources, &candidate_signals.sources, 3);
         let link_score = if has_outgoing_links && has_backlinks {
             0.3
         } else if has_outgoing_links || has_backlinks {
@@ -348,66 +373,32 @@ fn find_relevant_notes(
         } else {
             0.0
         };
-
-        let chunks = build_relevant_chunks(&title, &path_text, &content, &source_terms);
-        for chunk in &chunks {
-            chunk_count += 1;
-            total_chunk_terms += chunk.term_count;
-            for term in chunk.frequencies.keys() {
-                *document_frequency.entry(term.clone()).or_insert(0) += 1;
-            }
-        }
-        candidate_docs.push(RelevantCandidateDoc {
-            path_text,
-            title,
-            chunks,
-            link_score,
-            has_outgoing_links,
-            has_backlinks,
-        });
-    }
-
-    let avg_chunk_terms = if chunk_count == 0 {
-        1.0
-    } else {
-        (total_chunk_terms as f64 / chunk_count as f64).max(1.0)
-    };
-    let mut scored = Vec::new();
-    for doc in candidate_docs {
-        let best_chunk = doc
-            .chunks
-            .iter()
-            .map(|chunk| {
-                (
-                    bm25_chunk_score(
-                        chunk,
-                        &source_terms,
-                        &document_frequency,
-                        chunk_count,
-                        avg_chunk_terms,
-                    ),
-                    chunk,
-                )
-            })
-            .max_by(|left, right| {
-                left.0
-                    .partial_cmp(&right.0)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-        let (lexical_score, snippet) = best_chunk
-            .map(|(score, chunk)| (score, best_snippet(&chunk.text, &source_terms)))
-            .unwrap_or((0.0, String::new()));
-        let score = lexical_score + doc.link_score;
+        let graph_score =
+            (common_concepts.len() as f64 * 0.14) + (common_sources.len() as f64 * 0.2);
+        let score = lexical_score + link_score + graph_score;
         if score <= 0.0 {
             continue;
         }
+        let reasons = relevant_note_reasons(
+            &common_terms,
+            has_outgoing_links,
+            has_backlinks,
+            &common_concepts,
+            &common_sources,
+        );
+        if reasons.is_empty() {
+            continue;
+        }
         scored.push(RelevantNote {
-            path: doc.path_text,
-            title: doc.title,
-            snippet,
+            kind: candidate.kind.to_string(),
+            path: path_text,
+            relative_path: relative_candidate_path(&candidate.root, &path),
+            title,
+            snippet: best_snippet(&content, &source_terms),
             score,
-            has_outgoing_links: doc.has_outgoing_links,
-            has_backlinks: doc.has_backlinks,
+            has_outgoing_links,
+            has_backlinks,
+            reasons,
         });
     }
     scored.sort_by(|left, right| {
@@ -420,114 +411,41 @@ fn find_relevant_notes(
     Ok(scored)
 }
 
-#[derive(Debug)]
-struct RelevantCandidateDoc {
-    path_text: String,
-    title: String,
-    chunks: Vec<RelevantChunk>,
-    link_score: f64,
-    has_outgoing_links: bool,
-    has_backlinks: bool,
-}
-
-#[derive(Debug)]
-struct RelevantChunk {
-    text: String,
-    frequencies: HashMap<String, usize>,
-    term_count: usize,
-}
-
-fn build_relevant_chunks(
-    title: &str,
-    path_text: &str,
-    content: &str,
-    source_terms: &HashSet<String>,
-) -> Vec<RelevantChunk> {
-    let mut chunks = split_relevant_chunks(content);
-    if chunks.is_empty() {
-        chunks.push(
-            content
-                .trim()
-                .chars()
-                .take(MAX_RELEVANT_CHUNK_CHARS)
-                .collect(),
-        );
-    }
-    chunks
-        .into_iter()
-        .take(MAX_RELEVANT_CHUNKS_PER_FILE)
-        .map(|chunk| {
-            let scoring_text = format!("{title}\n{path_text}\n{chunk}");
-            let mut frequencies = HashMap::new();
-            let tokens = tokenize_mixed_vec(&scoring_text);
-            for token in tokens {
-                if source_terms.contains(&token) {
-                    *frequencies.entry(token).or_insert(0) += 1;
-                }
+fn collect_relevant_candidates(data_dir: &Path) -> Result<Vec<RelevantCandidate>, String> {
+    let mut candidates = Vec::new();
+    let mut seen = HashSet::new();
+    let knowledge_root = resolved_knowledge_root(data_dir)?;
+    if knowledge_root.is_dir() {
+        let root = knowledge_root
+            .canonicalize()
+            .map_err(|error| format!("知识库目录解析失败：{error}"))?;
+        for path in collect_writing_files(std::slice::from_ref(&root))? {
+            let key = normalize_path_text(&path);
+            if seen.insert(key) {
+                candidates.push(RelevantCandidate {
+                    kind: "knowledge",
+                    path,
+                    root: root.clone(),
+                });
             }
-            let term_count = tokenize_mixed_vec(&chunk).len().max(1);
-            RelevantChunk {
-                text: chunk,
-                frequencies,
-                term_count,
+        }
+    }
+    for root in allowed_work_roots(data_dir)? {
+        let root = root
+            .canonicalize()
+            .map_err(|error| format!("作品库目录解析失败：{error}"))?;
+        for path in collect_writing_files(std::slice::from_ref(&root))? {
+            let key = normalize_path_text(&path);
+            if seen.insert(key) {
+                candidates.push(RelevantCandidate {
+                    kind: "draft",
+                    path,
+                    root: root.clone(),
+                });
             }
-        })
-        .collect()
-}
-
-fn split_relevant_chunks(content: &str) -> Vec<String> {
-    let mut chunks = Vec::new();
-    let mut current = String::new();
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            push_relevant_chunk(&mut chunks, &mut current);
-            continue;
         }
-        let next_len = current.chars().count() + trimmed.chars().count() + 1;
-        if next_len > MAX_RELEVANT_CHUNK_CHARS {
-            push_relevant_chunk(&mut chunks, &mut current);
-        }
-        if !current.is_empty() {
-            current.push('\n');
-        }
-        current.push_str(trimmed);
     }
-    push_relevant_chunk(&mut chunks, &mut current);
-    chunks
-}
-
-fn push_relevant_chunk(chunks: &mut Vec<String>, current: &mut String) {
-    let trimmed = current.trim();
-    if !trimmed.is_empty() {
-        chunks.push(trimmed.chars().take(MAX_RELEVANT_CHUNK_CHARS).collect());
-    }
-    current.clear();
-}
-
-fn bm25_chunk_score(
-    chunk: &RelevantChunk,
-    source_terms: &HashSet<String>,
-    document_frequency: &HashMap<String, usize>,
-    chunk_count: usize,
-    avg_chunk_terms: f64,
-) -> f64 {
-    if chunk.frequencies.is_empty() || chunk_count == 0 {
-        return 0.0;
-    }
-    let k1 = 1.2;
-    let b = 0.75;
-    let chunk_len = chunk.term_count as f64;
-    source_terms
-        .iter()
-        .filter_map(|term| {
-            let tf = *chunk.frequencies.get(term)? as f64;
-            let df = *document_frequency.get(term).unwrap_or(&0) as f64;
-            let idf = (((chunk_count as f64 - df + 0.5) / (df + 0.5)) + 1.0).ln();
-            let denominator = tf + k1 * (1.0 - b + b * chunk_len / avg_chunk_terms);
-            Some(idf * (tf * (k1 + 1.0)) / denominator.max(0.0001))
-        })
-        .sum()
+    Ok(candidates)
 }
 
 fn collect_writing_files(roots: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
@@ -539,6 +457,12 @@ fn collect_writing_files(roots: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
         }
     }
     Ok(files)
+}
+
+fn relative_candidate_path(root: &Path, path: &Path) -> Option<String> {
+    path.strip_prefix(root)
+        .ok()
+        .map(|relative| relative.to_string_lossy().replace('\\', "/"))
 }
 
 fn collect_writing_files_recursive(
@@ -568,19 +492,22 @@ fn collect_writing_files_recursive(
         {
             continue;
         }
-        if path.is_dir() {
-            collect_writing_files_recursive(&path, depth + 1, files)?;
-        } else if is_supported_writing_file(&path) {
-            let metadata = fs::symlink_metadata(&path).map_err(|error| {
+        let Some(safe_path) = safe_child_path(root, &path, "相关稿件")? else {
+            continue;
+        };
+        if safe_path.is_dir() {
+            collect_writing_files_recursive(&safe_path, depth + 1, files)?;
+        } else if is_supported_writing_file(&safe_path) {
+            let metadata = fs::symlink_metadata(&safe_path).map_err(|error| {
                 format!(
                     "相关稿件文件信息读取失败（{}）：{error}",
-                    path.to_string_lossy()
+                    safe_path.to_string_lossy()
                 )
             })?;
             if metadata.file_type().is_symlink() || metadata.len() > MAX_RELEVANT_FILE_BYTES {
                 continue;
             }
-            files.push(path);
+            files.push(safe_path);
         }
     }
     Ok(())
@@ -606,15 +533,11 @@ fn project_allows_path(project: Option<&ProjectConfig>, path: &Path) -> bool {
 }
 
 fn tokenize_mixed(text: &str) -> HashSet<String> {
-    tokenize_mixed_vec(text).into_iter().collect()
-}
-
-fn tokenize_mixed_vec(text: &str) -> Vec<String> {
     let lower = text.to_lowercase();
-    let mut tokens = Vec::new();
+    let mut tokens = HashSet::new();
     for token in lower.split(|ch: char| !ch.is_alphanumeric() && ch != '_') {
         if token.chars().count() > 1 {
-            tokens.push(token.to_string());
+            tokens.insert(token.to_string());
         }
     }
     let cjk: Vec<char> = text
@@ -622,9 +545,125 @@ fn tokenize_mixed_vec(text: &str) -> Vec<String> {
         .filter(|ch| ('\u{4e00}'..='\u{9fff}').contains(ch))
         .collect();
     for window in cjk.windows(2) {
-        tokens.push(window.iter().collect());
+        tokens.insert(window.iter().collect());
     }
     tokens
+}
+
+fn overlap_score(left: &HashSet<String>, right: &HashSet<String>) -> f64 {
+    if left.is_empty() || right.is_empty() {
+        return 0.0;
+    }
+    let overlap = left.intersection(right).count() as f64;
+    overlap / (left.len() as f64).sqrt().max(1.0)
+}
+
+fn top_common_terms(left: &HashSet<String>, right: &HashSet<String>, limit: usize) -> Vec<String> {
+    let mut terms = left
+        .intersection(right)
+        .filter(|term| term.chars().count() > 1)
+        .cloned()
+        .collect::<Vec<_>>();
+    terms.sort_by(|left, right| {
+        right
+            .chars()
+            .count()
+            .cmp(&left.chars().count())
+            .then_with(|| left.cmp(right))
+    });
+    terms.truncate(limit);
+    terms
+}
+
+fn relevant_note_reasons(
+    common_terms: &[String],
+    has_outgoing_links: bool,
+    has_backlinks: bool,
+    common_concepts: &[String],
+    common_sources: &[String],
+) -> Vec<String> {
+    let mut reasons = Vec::new();
+    if !common_terms.is_empty() {
+        reasons.push(format!("同词：{}", common_terms.join("、")));
+    }
+    if has_backlinks {
+        reasons.push("反链：链接当前稿件".to_string());
+    }
+    if has_outgoing_links {
+        reasons.push("共同链接：当前稿件提及相关标题或链接".to_string());
+    }
+    if !common_concepts.is_empty() {
+        reasons.push(format!("共同概念：{}", common_concepts.join("、")));
+    }
+    if !common_sources.is_empty() {
+        reasons.push(format!("共同来源：{}", common_sources.join("、")));
+    }
+    reasons
+}
+
+fn extract_graph_signals(text: &str) -> GraphSignals {
+    let mut signals = GraphSignals::default();
+    signals.concepts.extend(extract_wikilinks(text));
+    if let Some(frontmatter) = extract_frontmatter_block(text) {
+        collect_frontmatter_terms(
+            frontmatter,
+            &["concept", "concepts", "entity", "entities", "tag", "tags"],
+            &mut signals.concepts,
+        );
+        collect_frontmatter_terms(
+            frontmatter,
+            &["source", "sources", "origin", "origins"],
+            &mut signals.sources,
+        );
+    }
+    signals
+}
+
+fn extract_frontmatter_block(text: &str) -> Option<&str> {
+    let trimmed = text.strip_prefix("---")?;
+    let end = trimmed.find("\n---")?;
+    Some(&trimmed[..end])
+}
+
+fn collect_frontmatter_terms(frontmatter: &str, keys: &[&str], output: &mut HashSet<String>) {
+    let mut active = false;
+    for line in frontmatter.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some((key, value)) = trimmed.split_once(':') {
+            let key = key.trim().to_lowercase();
+            active = keys.iter().any(|candidate| *candidate == key);
+            if active {
+                insert_graph_terms(value, output);
+            }
+            continue;
+        }
+        if active && trimmed.starts_with('-') {
+            insert_graph_terms(trimmed.trim_start_matches('-'), output);
+        } else if !trimmed.starts_with('-') {
+            active = false;
+        }
+    }
+}
+
+fn insert_graph_terms(value: &str, output: &mut HashSet<String>) {
+    for link in extract_wikilinks(value) {
+        output.insert(link);
+    }
+    let cleaned = value
+        .trim()
+        .trim_matches(|ch| matches!(ch, '[' | ']' | '"' | '\'' | ' '));
+    for term in cleaned.split(',') {
+        let term = term
+            .trim()
+            .trim_matches(|ch| matches!(ch, '[' | ']' | '"' | '\'' | ' '))
+            .to_lowercase();
+        if term.chars().count() > 1 && !term.contains("[[") {
+            output.insert(term);
+        }
+    }
 }
 
 fn extract_wikilinks(text: &str) -> HashSet<String> {
@@ -784,66 +823,50 @@ mod tests {
     }
 
     #[test]
-    fn relevant_notes_returns_best_matching_chunk() {
-        let data_dir = temp_data_dir("chunk-snippet");
+    fn relevant_notes_returns_knowledge_cards_with_graph_reasons() {
+        let data_dir = temp_data_dir("knowledge-reasons");
         crate::runtime::ensure_workspace(&data_dir).expect("ensure workspace");
         let vault = crate::runtime::vault_root(&data_dir);
         let source = vault.join("source.md");
-        let candidate = vault.join("candidate.md");
-        fs::write(&source, "霜镜契约在第三幕回收").expect("write source");
+        let knowledge_root = crate::runtime::default_knowledge_root(&data_dir);
+        let card_dir = knowledge_root.join("03故事模型");
+        fs::create_dir_all(&card_dir).expect("create card dir");
+        let card = card_dir.join("流亡结构.md");
         fs::write(
-            &candidate,
-            "普通段落只谈节奏。\n\n霜镜契约应该先作为误导物出现，再在第三幕回收。",
+            &source,
+            "---\nconcepts:\n  - [[流亡]]\nsources:\n  - [[史料A]]\n---\n荒原线索",
         )
-        .expect("write candidate");
+        .expect("write source");
+        fs::write(
+            &card,
+            "---\nconcepts:\n  - [[流亡]]\nsources:\n  - [[史料A]]\n---\n荒原里的角色会隐瞒身份。",
+        )
+        .expect("write card");
 
         let notes = find_relevant_notes(
             &data_dir,
             &RelevantNotesInput {
                 source_path: source.to_string_lossy().into_owned(),
-                content: "霜镜契约在第三幕回收".to_string(),
-                query: None,
+                content: fs::read_to_string(&source).expect("read source"),
+                query: Some("角色为什么隐瞒身份".to_string()),
                 limit: Some(8),
             },
             None,
         )
         .expect("find notes");
 
-        let note = notes
+        let card_note = notes
             .iter()
-            .find(|note| note.path.ends_with("candidate.md"))
-            .expect("candidate note");
-        assert!(note.snippet.contains("霜镜契约"));
-        assert!(note.snippet.contains("第三幕回收"));
-    }
-
-    #[test]
-    fn relevant_notes_keeps_backlink_boost_without_text_overlap() {
-        let data_dir = temp_data_dir("backlink");
-        crate::runtime::ensure_workspace(&data_dir).expect("ensure workspace");
-        let vault = crate::runtime::vault_root(&data_dir);
-        let source = vault.join("source.md");
-        let candidate = vault.join("candidate.md");
-        fs::write(&source, "霜镜契约").expect("write source");
-        fs::write(&candidate, "[[source]]\n\n另一张卡只通过反链关联。").expect("write candidate");
-
-        let notes = find_relevant_notes(
-            &data_dir,
-            &RelevantNotesInput {
-                source_path: source.to_string_lossy().into_owned(),
-                content: "霜镜契约".to_string(),
-                query: None,
-                limit: Some(8),
-            },
-            None,
-        )
-        .expect("find notes");
-
-        let note = notes
+            .find(|note| note.path.ends_with("流亡结构.md"))
+            .expect("knowledge card note");
+        assert_eq!(card_note.kind, "knowledge");
+        assert!(card_note
+            .reasons
             .iter()
-            .find(|note| note.path.ends_with("candidate.md"))
-            .expect("candidate note");
-        assert!(note.has_backlinks);
-        assert!(note.score > 0.0);
+            .any(|reason| reason.contains("共同概念") && reason.contains("流亡")));
+        assert!(card_note
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("共同来源") && reason.contains("史料a")));
     }
 }

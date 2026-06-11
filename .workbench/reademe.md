@@ -30,12 +30,15 @@
   - `.workbench/governance/2026-06-10-normalize-knowledge-ops-skill.md`
   - `.workbench/governance/2026-06-10-common-file-tree-preview.md`
   - `.workbench/governance/2026-06-10-knowledge-graph-default-scale.md`
-  - `.workbench/governance/2026-06-11-tolaria-file-relationship-governance.md`
-  - `.workbench/governance/2026-06-11-knowledge-graph-zhishiku-governance-labels.md`
-  - `.workbench/governance/2026-06-11-knowledge-graph-node-breathing-halo.md`
-  - `.workbench/governance/2026-06-11-knowledge-graph-infra-hot-cache.md`
-  - `.workbench/governance/2026-06-11-knowledge-graph-writing-language.md`
-  - `.workbench/governance/2026-06-11-zhishiku-health-conflict-protocol.md`
-  - `.workbench/governance/2026-06-11-hybrid-retrieval-chat-card-write-lock.md`
-  - `.workbench/governance/2026-06-11-knowledge-graph-neighborhood-mode.md`
-  - `.workbench/governance/2026-06-11-package-0.0.4.md`
+  - `.workbench/governance/2026-06-11-chat-abort-context-relevant-notes.md`
+  - `.workbench/governance/2026-06-11-vip-auto-code-chat-json-compat.md`
+  - `.workbench/governance/2026-06-11-openhuman-creative-memory-tree-continuity.md`
+  - `.workbench/governance/2026-06-11-holaos-context-continuity-slots.md`
+  - `.workbench/governance/2026-06-11-chat-continuity-session-fork.md`
+  - `.workbench/governance/2026-06-11-high-risk-audit-fixes.md`
+  - `.workbench/governance/2026-06-11-medium-risk-audit-fixes.md`
+  - `.workbench/governance/2026-06-11-low-risk-audit-fixes.md`
+  - `.workbench/governance/2026-06-11-empty-editor-brand-state.md`
+  - `.workbench/governance/2026-06-11-workbench-visual-polish.md`
+  - `.workbench/governance/2026-06-11-creative-skills-builtin-source.md`
+  - `.workbench/governance/2026-06-11-model-provider-source-fixes.md`

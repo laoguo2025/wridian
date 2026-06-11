@@ -1,6 +1,6 @@
 [package]
 name = "wridian"
-version = "0.0.4"
+version = "0.0.5"
 description = "A local-first writing memory desktop app"
 authors = ["Wridian"]
 edition = "2021"
@@ -26,6 +26,7 @@ serde_json = "1"
 dirs = "6"
 keyring-core = "1.0.0"
 reqwest = { version = "0.12", features = ["blocking", "json", "rustls-tls"], default-features = false }
+tokio = { version = "1", features = ["macros", "time"] }
 windows-native-keyring-store = { version = "1.1.0", default-features = false }
 base64 = "0.22"
 rand = "0.9"

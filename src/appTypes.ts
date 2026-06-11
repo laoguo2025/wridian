@@ -9,7 +9,6 @@ export type WorkspaceInfo = {
   activeKnowledgeRoot?: string | null;
   knowledgeRootConfigured: boolean;
   knowledgeFiles: WorkFileNode[];
-  lastLinkRepair?: WikilinkRepairReport | null;
 };
 
 export type WorkFileNode = {
@@ -19,14 +18,6 @@ export type WorkFileNode = {
   library: "works" | "knowledge";
   folder: boolean;
   children: WorkFileNode[];
-};
-
-export type WikilinkRepairReport = {
-  renamedFrom: string;
-  renamedTo: string;
-  changedFileCount: number;
-  changedLinkCount: number;
-  rollbackPath?: string | null;
 };
 
 export type OpenFileResponse = {
@@ -42,21 +33,19 @@ export type SaveFileResponse = {
 
 export type CreativeSkillSource = {
   available: boolean;
+  source: "builtin" | string;
+  label: string;
   path?: string | null;
 };
 
 export type CreativeSkillSources = {
   knowledgeOps: CreativeSkillSource;
+  workDecompose: CreativeSkillSource;
+  knowledgeCard: CreativeSkillSource;
+  authorDistill: CreativeSkillSource;
 };
 
-export type CustomApiSettingsStatus = {
-  configured: boolean;
-  baseUrl?: string | null;
-  model?: string | null;
-  maskedKey?: string | null;
-};
-
-export type TestCustomApiResponse = {
+export type TestModelProviderResponse = {
   ok: boolean;
   message: string;
 };
@@ -112,24 +101,6 @@ export type KnowledgeGraphNode = {
   path?: string | null;
   group: string;
   size: number;
-  titleKey: string;
-  updatedAt?: string | null;
-  typeIcon?: string | null;
-  typeColor?: string | null;
-  typeSort?: string | null;
-  defaultFields: string[];
-  hasSource: boolean;
-  adoptedButNotDistilled: boolean;
-  inboundCount: number;
-  outboundCount: number;
-  referencedBy: string[];
-  usedByWorks: string[];
-  duplicateTitle: boolean;
-  duplicateConcept: boolean;
-  staleHighReference: boolean;
-  reviewStatus?: string | null;
-  hasConflict: boolean;
-  hasUncertainty: boolean;
 };
 
 export type KnowledgeGraphEdge = {
@@ -138,17 +109,8 @@ export type KnowledgeGraphEdge = {
   kind: string;
 };
 
-export type KnowledgeGraphRelation = {
-  fieldName: string;
-  sourceFile: string;
-  targetFile: string;
-  relationType: string;
-  bidirectional: boolean;
-};
-
 export type KnowledgeGraphState = {
   nodes: KnowledgeGraphNode[];
   edges: KnowledgeGraphEdge[];
-  relationships: KnowledgeGraphRelation[];
   warnings: string[];
 };

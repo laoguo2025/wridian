@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { ModelAccountsStatus, ModelProviderStatus, TestCustomApiResponse } from "../appTypes";
+import type { ModelAccountsStatus, ModelProviderStatus, TestModelProviderResponse } from "../appTypes";
 import {
   accessTypeLabel,
   defaultModelIds,
@@ -48,7 +48,17 @@ const ADD_SERVICE_SECTIONS = [
   },
   {
     title: "第三方API",
-    keys: ["anthropic-thirdparty", "openai-compatible"],
+    keys: [
+      "anthropic-thirdparty",
+      "openai-compatible",
+      "deepseek-openai",
+      "moonshot-openai",
+      "zai-openai",
+      "xiaomi-mimo-openai",
+      "alibaba-coding-intl",
+      "minimax-api-cn",
+      "minimax-api-global",
+    ],
   },
 ];
 
@@ -358,7 +368,7 @@ function PresetConnectDialog({
     if (!data) return;
     setTesting(true);
     try {
-      const response = await invoke<TestCustomApiResponse>("wridian_test_model_provider_config", {
+      const response = await invoke<TestModelProviderResponse>("wridian_test_model_provider_config", {
         input: {
           providerId: data.providerId,
           providerName: data.providerName,
@@ -367,6 +377,7 @@ function PresetConnectDialog({
           baseUrl: data.baseUrl,
           apiKey: data.apiKey,
           models: data.models,
+          extraEnv: data.extraEnv,
         },
       });
       setTestMessage(response.message || "测试通过。");
