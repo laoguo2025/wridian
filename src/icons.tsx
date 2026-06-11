@@ -122,3 +122,63 @@ export function SettingsIcon() {
     </svg>
   );
 }
+
+export function ContextIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 48 48">
+      <path d="M7 42L7 6" />
+      <path d="M18 13.9907L23.9954 8L30 14" />
+      <path d="M30 34.0093L24.0046 40L18 34" />
+      <path d="M24 8V40" />
+      <path d="M41 42L41 6" />
+    </svg>
+  );
+}
+
+export function MessageEditIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 48 48">
+      <path d="M42 26V40C42 41.1046 41.1046 42 40 42H8C6.89543 42 6 41.1046 6 40V8C6 6.89543 6.89543 6 8 6L22 6" />
+      <path d="M14 26.7199V34H21.3172L42 13.3081L34.6951 6L14 26.7199Z" />
+    </svg>
+  );
+}
+
+export function MessageEditCancelIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 48 48">
+      <path d="M12 12L36 36" />
+      <path d="M36 12L12 36" />
+    </svg>
+  );
+}
+
+export function MessageEditSubmitIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 48 48">
+      <circle cx="24" cy="24" r="20" />
+      <path d="M24 34V14" />
+      <path d="M15 23L24 14L33 23" />
+    </svg>
+  );
+}
+
+export function CopyIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 48 48">
+      <rect x="16" y="14" width="22" height="26" rx="3" />
+      <path d="M10 30V10C10 8.89543 10.8954 8 12 8H28" />
+    </svg>
+  );
+}
+
+export function RetryIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 48 48">
+      <path d="M38 18C35.9347 12.1446 30.3545 8 24 8C15.7157 8 9 14.7157 9 23" />
+      <path d="M33 18H39V12" />
+      <path d="M10 30C12.0653 35.8554 17.6455 40 24 40C32.2843 40 39 33.2843 39 25" />
+      <path d="M15 30H9V36" />
+    </svg>
+  );
+}

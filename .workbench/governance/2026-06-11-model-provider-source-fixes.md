@@ -20,9 +20,9 @@
 - 连接测试透传 `extraEnv`，让保存前测试和保存后对话使用同一套模型解析。
 - OpenAI-compatible 对话请求在 `response_format: json_object` 被兼容端点拒绝时，仅对参数类错误自动重试为 prompt-only JSON。
 - DeepSeek OpenAI-compatible V4 / Reasoner 请求体补顶层 `thinking.type=disabled`，避免默认 thinking 引发后续 reasoning_content 回传错误。
-- Moonshot/Kimi OpenAI-compatible 直连请求移除 `temperature`，补顶层 `thinking.type=enabled`，并把过低 `max_tokens` 抬到 32768；连接测试和真实对话共用同一套 provider extras。
+- 用户后续要求删除具体厂商直连第三方 API 卡片，因此 Moonshot/Kimi OpenAI-compatible 直连专属请求体改动已移除；如需使用 Moonshot/Kimi 等普通 OpenAI 兼容服务，应走通用 `OpenAI-Compatible API` 手动配置。
 - Gemini API Key 直连路径补 `maxOutputTokens=65535`，对齐 Hermes native adapter，降低 Gemini 原生 API 截断 Wridian JSON 回复的概率。
-- 新增 DeepSeek API、Moonshot API、Z.AI API、Xiaomi MiMo API、Alibaba Coding API 等 OpenAI-compatible 直连预设，以及 MiniMax API CN/Global Anthropic 兼容直连预设；保留现有同厂商 Claude Code/Coding Plan/Token Plan 预设，不做协议覆盖。
+- 用户后续要求删除具体厂商直连第三方 API 卡片，因此 DeepSeek API、Moonshot API、Z.AI API、Xiaomi MiMo API、Alibaba Coding API、MiniMax API CN/Global 等独立直连预设已移除；第三方 API 区只保留通用 Anthropic / OpenAI-compatible 入口。
 
 ## 验证
 

@@ -49,25 +49,60 @@ export function useChatManager({ onDraftEdits }: { onDraftEdits: (edits: ChatDra
   const activeRequestIdRef = useRef("");
   const pendingRef = useRef(false);
   const messagesRef = useRef<ChatMessage[]>([]);
+  const projectIdRef = useRef("");
+  const loadSeqRef = useRef(0);
+
+  const resetChatSession = useCallback(() => {
+    sessionIdRef.current = createChatSessionId();
+    parentSessionIdRef.current = undefined;
+    forkedFromMessageIdRef.current = undefined;
+    messagesRef.current = [];
+    setMessages([]);
+  }, []);
+
+  const stopActivePrompt = useCallback(() => {
+    const requestId = activeRequestIdRef.current;
+    if (!requestId) return;
+    activeRequestIdRef.current = "";
+    pendingRef.current = false;
+    setPending(false);
+    void abortCocreation(requestId).catch((requestError) => {
+      setError(requestError instanceof Error ? requestError.message : String(requestError));
+    });
+  }, []);
+
+  const switchProjectChat = useCallback(async (projectId?: string) => {
+    const nextProjectId = projectId?.trim() ?? "";
+    const loadSeq = loadSeqRef.current + 1;
+    loadSeqRef.current = loadSeq;
+    projectIdRef.current = nextProjectId;
+    stopActivePrompt();
+    setError("");
+    resetChatSession();
+
+    try {
+      const continuity = await loadChatContinuity(nextProjectId);
+      if (loadSeqRef.current !== loadSeq) return;
+      if (!continuity.sessionId || !continuity.messages.length) {
+        resetChatSession();
+        return;
+      }
+      sessionIdRef.current = continuity.sessionId;
+      parentSessionIdRef.current = continuity.parentSessionId ?? undefined;
+      forkedFromMessageIdRef.current = continuity.forkedFromMessageId ?? undefined;
+      messagesRef.current = continuity.messages;
+      setMessages(continuity.messages);
+    } catch {
+      if (loadSeqRef.current === loadSeq) {
+        resetChatSession();
+        setError("");
+      }
+    }
+  }, [resetChatSession, stopActivePrompt]);
 
   useEffect(() => {
-    let cancelled = false;
-    void loadChatContinuity()
-      .then((continuity) => {
-        if (cancelled || !continuity.sessionId || !continuity.messages.length) return;
-        sessionIdRef.current = continuity.sessionId;
-        parentSessionIdRef.current = continuity.parentSessionId ?? undefined;
-        forkedFromMessageIdRef.current = continuity.forkedFromMessageId ?? undefined;
-        messagesRef.current = continuity.messages;
-        setMessages(continuity.messages);
-      })
-      .catch(() => {
-        if (!cancelled) setError("");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    void switchProjectChat("");
+  }, [switchProjectChat]);
 
   const sendPrompt = useCallback(async (input: SendChatPromptInput) => {
     const userInput = input.text.trim();
@@ -90,6 +125,7 @@ export function useChatManager({ onDraftEdits }: { onDraftEdits: (edits: ChatDra
     void persistChat(
       messagesWithUser,
       input,
+      projectIdRef.current,
       sessionIdRef.current,
       parentSessionIdRef.current,
       forkedFromMessageIdRef.current,
@@ -126,6 +162,7 @@ export function useChatManager({ onDraftEdits }: { onDraftEdits: (edits: ChatDra
       void persistChat(
         messagesWithAssistant,
         input,
+        projectIdRef.current,
         sessionIdRef.current,
         parentSessionIdRef.current,
         forkedFromMessageIdRef.current,
@@ -154,62 +191,57 @@ export function useChatManager({ onDraftEdits }: { onDraftEdits: (edits: ChatDra
     }
   }, [onDraftEdits]);
 
-  const forkFromMessage = useCallback((messageId: string, snapshot: ChatContinuitySnapshot) => {
-    const index = messages.findIndex((message) => message.id === messageId);
-    if (index < 0) return false;
-    const forkMessages = messages.slice(0, index + 1);
-    const parentSessionId = sessionIdRef.current;
-    const nextSessionId = createChatSessionId();
-    sessionIdRef.current = nextSessionId;
-    parentSessionIdRef.current = parentSessionId;
-    forkedFromMessageIdRef.current = messageId;
-    messagesRef.current = forkMessages;
-    setMessages(forkMessages);
+  const updateMessageText = useCallback((messageId: string, text: string, snapshot: ChatContinuitySnapshot) => {
+    const nextText = text.trim();
+    if (!nextText) return false;
+    const targetMessage = messagesRef.current.find((message) => message.id === messageId);
+    if (!targetMessage) return false;
+    const nextMessages = messagesRef.current.map((message) =>
+      message.id === messageId ? { ...message, text: nextText } : message,
+    );
+    messagesRef.current = nextMessages;
+    setMessages(nextMessages);
     void saveChatTranscript({
-      activeContext: buildForkActiveContext({
-        forkedFromMessage: forkMessages[index],
-        messages: forkMessages,
-        sessionId: nextSessionId,
+      activeContext: buildMessageEditActiveContext({
+        editedMessage: { ...targetMessage, text: nextText },
+        messages: nextMessages,
+        sessionId: sessionIdRef.current,
         snapshot,
       }),
-      forkedFromMessageId: messageId,
-      messages: forkMessages,
-      parentSessionId,
-      sessionId: nextSessionId,
+      forkedFromMessageId: forkedFromMessageIdRef.current,
+      messages: nextMessages,
+      parentSessionId: parentSessionIdRef.current,
+      projectId: projectIdRef.current,
+      sessionId: sessionIdRef.current,
       sourcePath: snapshot.sourcePath,
       title: snapshot.title,
     }).catch((persistError) => {
       setError(persistError instanceof Error ? persistError.message : String(persistError));
     });
     return true;
-  }, [messages]);
+  }, []);
 
   const stopPrompt = useCallback(() => {
-    const requestId = activeRequestIdRef.current;
-    if (!requestId) return;
-    activeRequestIdRef.current = "";
-    pendingRef.current = false;
-    setPending(false);
+    stopActivePrompt();
     setError("");
-    void abortCocreation(requestId).catch((requestError) => {
-      setError(requestError instanceof Error ? requestError.message : String(requestError));
-    });
-  }, []);
+  }, [stopActivePrompt]);
 
   return {
     error,
     messages,
     pending,
-    forkFromMessage,
     sendPrompt,
     setError,
     stopPrompt,
+    switchProjectChat,
+    updateMessageText,
   };
 }
 
 async function persistChat(
   messages: ChatMessage[],
   input: SendChatPromptInput,
+  projectId: string,
   sessionId: string,
   parentSessionId: string | undefined,
   forkedFromMessageId: string | undefined,
@@ -222,6 +254,7 @@ async function persistChat(
       forkedFromMessageId,
       messages,
       parentSessionId,
+      projectId,
       sessionId,
       sourcePath: input.sourcePath,
       title: input.title,
@@ -269,21 +302,23 @@ function buildActiveContext({
   };
 }
 
-function buildForkActiveContext({
-  forkedFromMessage,
+function buildMessageEditActiveContext({
+  editedMessage,
   messages,
   sessionId,
   snapshot,
 }: {
-  forkedFromMessage: ChatMessage;
+  editedMessage: ChatMessage;
   messages: ChatMessage[];
   sessionId: string;
   snapshot: ChatContinuitySnapshot;
 }): ActiveChatContext {
   const currentFragment = compactPlainText(snapshot.selectedText || snapshot.content, 900);
-  const lastUserIntent = "从一条回复分叉，尝试另一个修改方向。";
-  const lastJudgment = compactPlainText(forkedFromMessage.text, 420);
-  const nextSuggestions = ["沿新方向继续改写", "回到分叉点比较两个版本", "把更稳定的判断沉淀到作品记忆"];
+  const lastUserIntent = editedMessage.role === "user" ? compactPlainText(editedMessage.text, 320) : "修订了一条 Wridian 回复。";
+  const lastJudgment = editedMessage.role === "assistant" ? compactPlainText(editedMessage.text, 420) : "用户消息已在对话气泡中修订。";
+  const nextSuggestions = editedMessage.role === "user"
+    ? ["按修订后的提问继续", "检查上下文是否仍匹配", "必要时重新发送本轮请求"]
+    : ["基于修订后的回复继续", "对照正文确认修改方向", "把稳定判断沉淀到作品记忆"];
   return {
     schemaVersion: 1,
     sessionId,
@@ -313,12 +348,12 @@ function deriveNextSuggestions(userInput: string, assistantReply: string) {
     return ["继续当前段落", "检查上一轮方向是否仍成立", "把必要约束写入作品记忆"];
   }
   if (userInput.includes("改") || userInput.includes("润色") || userInput.includes("重写")) {
-    return ["确认或拒绝正文改动", "从本轮回复分叉另一个改法", "继续细化角色口吻和节奏"];
+    return ["确认或拒绝正文改动", "换一个改法继续尝试", "继续细化角色口吻和节奏"];
   }
   if (assistantReply.includes("建议") || assistantReply.includes("可以")) {
     return ["选择一个建议继续展开", "回到当前片段做局部改写", "要求 Wridian 给出可确认 edits"];
   }
-  return ["继续当前写作方向", "回到当前片段", "换一个方向分叉尝试"];
+  return ["继续当前写作方向", "回到当前片段", "换一个方向尝试"];
 }
 
 function renderCompactSummary(input: {

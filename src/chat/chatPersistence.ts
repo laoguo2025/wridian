@@ -21,6 +21,7 @@ export type SaveChatTranscriptRequest = {
   forkedFromMessageId?: string;
   messages: ChatMessage[];
   parentSessionId?: string;
+  projectId?: string;
   sessionId: string;
   sourcePath: string;
   title: string;
@@ -50,6 +51,10 @@ export async function saveChatTranscript(request: SaveChatTranscriptRequest) {
   });
 }
 
-export async function loadChatContinuity() {
-  return invoke<LoadChatContinuityResponse>("wridian_load_chat_continuity");
+export async function loadChatContinuity(projectId?: string) {
+  return invoke<LoadChatContinuityResponse>("wridian_load_chat_continuity", {
+    input: {
+      projectId: projectId?.trim() || null,
+    },
+  });
 }

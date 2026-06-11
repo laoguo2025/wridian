@@ -190,7 +190,7 @@ pub(crate) fn read_active_project_context(data_dir: &Path) -> Result<String, Str
         continuity_memory
     };
     Ok(format!(
-        "Project Mode：{}\n说明：{}\n项目系统提示：{}\n常驻来源：{}\n排除：{}\nURLs：{}\n作品续接记忆：\n{}",
+        "项目记忆：{}\n说明：{}\n项目系统提示：{}\n常驻来源：{}\n排除：{}\nURLs：{}\n作品续接记忆：\n{}",
         project.name,
         project.description,
         project.system_prompt,

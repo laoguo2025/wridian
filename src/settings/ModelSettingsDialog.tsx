@@ -48,17 +48,7 @@ const ADD_SERVICE_SECTIONS = [
   },
   {
     title: "第三方API",
-    keys: [
-      "anthropic-thirdparty",
-      "openai-compatible",
-      "deepseek-openai",
-      "moonshot-openai",
-      "zai-openai",
-      "xiaomi-mimo-openai",
-      "alibaba-coding-intl",
-      "minimax-api-cn",
-      "minimax-api-global",
-    ],
+    keys: ["anthropic-thirdparty", "openai-compatible"],
   },
 ];
 

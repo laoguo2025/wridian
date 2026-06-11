@@ -452,6 +452,38 @@ pub(crate) async fn wridian_test_model_provider_config(
     .await
 }
 
+pub(crate) fn is_anthropic_compatible_parse_error(error: &str) -> bool {
+    error == "Anthropic 响应中没有可用文本。"
+        || error.starts_with("Anthropic 响应 JSON 解析失败：")
+}
+
+pub(crate) fn apply_anthropic_auth_headers(
+    request: reqwest::RequestBuilder,
+    settings: &ActiveModelSettings,
+) -> reqwest::RequestBuilder {
+    if settings.auth_style == "oauth_external" {
+        request
+            .bearer_auth(&settings.api_key)
+            .header("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
+            .header("user-agent", "claude-cli/2.1.74 (external, cli)")
+            .header("x-app", "cli")
+    } else if uses_anthropic_api_key_header(settings) {
+        request.header("api-key", &settings.api_key)
+    } else if settings.auth_style == "auth_token" {
+        request.bearer_auth(&settings.api_key)
+    } else {
+        request.header("x-api-key", &settings.api_key)
+    }
+}
+
+fn uses_anthropic_api_key_header(settings: &ActiveModelSettings) -> bool {
+    settings.provider_id.contains("xiaomi-mimo")
+        || settings
+            .base_url
+            .to_ascii_lowercase()
+            .contains("xiaomimimo.com")
+}
+
 #[tauri::command]
 pub(crate) fn wridian_anthropic_oauth_start() -> Result<AnthropicOauthStartResponse, String> {
     let verifier = random_urlsafe(32);
@@ -1890,45 +1922,6 @@ fn mask_api_key(api_key: &str) -> String {
     format!("{prefix}...{suffix}")
 }
 
-pub(crate) fn apply_openai_compatible_provider_extras(
-    settings: &ActiveModelSettings,
-    model: &str,
-    body: &mut serde_json::Value,
-) {
-    let provider = settings.provider_id.to_ascii_lowercase();
-    let base_url = settings.base_url.to_ascii_lowercase();
-    let model = model.trim();
-    if provider.contains("deepseek") && deepseek_model_supports_thinking(model) {
-        body["thinking"] = serde_json::json!({ "type": "disabled" });
-    }
-    if is_moonshot_openai_compatible(&provider, &base_url, model) {
-        if let Some(object) = body.as_object_mut() {
-            object.remove("temperature");
-        }
-        if body
-            .get("max_tokens")
-            .and_then(serde_json::Value::as_u64)
-            .is_none_or(|value| value < 16_000)
-        {
-            body["max_tokens"] = serde_json::json!(32_768);
-        }
-        body["thinking"] = serde_json::json!({ "type": "enabled" });
-    }
-}
-
-fn is_moonshot_openai_compatible(provider: &str, base_url: &str, model: &str) -> bool {
-    provider.contains("moonshot")
-        || provider.contains("kimi-openai")
-        || base_url.contains("api.moonshot.")
-        || model.trim().to_ascii_lowercase().starts_with("kimi-")
-}
-
-fn deepseek_model_supports_thinking(model: &str) -> bool {
-    let model = model.trim().to_ascii_lowercase();
-    (model.starts_with("deepseek-v") && !model.starts_with("deepseek-v3"))
-        || model == "deepseek-reasoner"
-}
-
 async fn test_model_chat(
     settings: &ActiveModelSettings,
 ) -> Result<TestModelProviderResponse, String> {
@@ -1977,19 +1970,17 @@ async fn test_openai_compatible_chat(
         .timeout(Duration::from_secs(20))
         .build()
         .map_err(|error| format!("模型客户端创建失败：{error}"))?;
-    let mut body = json!({
+    let response = client
+        .post(url)
+        .bearer_auth(&settings.api_key)
+        .json(&json!({
         "model": settings.model,
         "messages": [
             { "role": "user", "content": "Reply with OK." }
         ],
         "max_tokens": 8,
         "temperature": 0
-    });
-    apply_openai_compatible_provider_extras(settings, &settings.model, &mut body);
-    let response = client
-        .post(url)
-        .bearer_auth(&settings.api_key)
-        .json(&body)
+    }))
         .send()
         .await
         .map_err(|error| format!("模型连接失败：{error}"))?;
@@ -1999,36 +1990,43 @@ async fn test_openai_compatible_chat(
 async fn test_anthropic_chat(
     settings: &ActiveModelSettings,
 ) -> Result<TestModelProviderResponse, String> {
+    let response = send_anthropic_test_request(settings, false).await?;
+    match read_anthropic_test_response(response).await {
+        Err(error) if is_anthropic_compatible_parse_error(&error) => {
+            let response = send_anthropic_test_request(settings, true).await?;
+            read_anthropic_test_response(response).await
+        }
+        result => result,
+    }
+}
+
+async fn send_anthropic_test_request(
+    settings: &ActiveModelSettings,
+    stream: bool,
+) -> Result<reqwest::Response, String> {
     let url = anthropic_messages_url(&settings.base_url);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
         .build()
         .map_err(|error| format!("Anthropic 客户端创建失败：{error}"))?;
-    let mut request = client.post(url).header("anthropic-version", "2023-06-01");
-    request = if settings.auth_style == "oauth_external" {
-        request
-            .bearer_auth(&settings.api_key)
-            .header("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
-            .header("user-agent", "claude-cli/2.1.74 (external, cli)")
-            .header("x-app", "cli")
-    } else if settings.auth_style == "auth_token" {
-        request.bearer_auth(&settings.api_key)
-    } else {
-        request.header("x-api-key", &settings.api_key)
-    };
+    let request = apply_anthropic_auth_headers(
+        client.post(url).header("anthropic-version", "2023-06-01"),
+        settings,
+    );
     let response = request
         .json(&json!({
             "model": settings.model,
             "messages": [
-                { "role": "user", "content": "Reply with OK." }
+                { "role": "user", "content": [{ "type": "text", "text": "Reply with OK." }] }
             ],
             "max_tokens": 8,
-            "temperature": 0
+            "temperature": 0,
+            "stream": stream
         }))
         .send()
         .await
         .map_err(|error| format!("Anthropic 连接失败：{error}"))?;
-    read_anthropic_test_response(response).await
+    Ok(response)
 }
 
 async fn test_gemini_chat(
@@ -2147,21 +2145,139 @@ async fn read_gemini_test_response(
 }
 
 pub(crate) fn read_anthropic_response_text(body: &str) -> Result<String, String> {
+    if let Some(text) = read_sse_response_text(body) {
+        return Ok(text);
+    }
+    if let Some(text) = read_plain_text_response(body) {
+        return Ok(text);
+    }
     let value: Value = serde_json::from_str(body)
         .map_err(|error| format!("Anthropic 响应 JSON 解析失败：{error}"))?;
-    let text = value
-        .get("content")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|part| part.get("text").and_then(Value::as_str))
-        .collect::<Vec<_>>()
-        .join("\n");
-    if text.trim().is_empty() {
-        Err("Anthropic 响应中没有可用文本。".to_string())
-    } else {
+    if let Some(text) = read_anthropic_value_text(&value) {
         Ok(text)
+    } else {
+        read_model_response_text(body)
+            .map_err(|_| "Anthropic 响应中没有可用文本。".to_string())
     }
+}
+
+fn read_plain_text_response(body: &str) -> Option<String> {
+    let text = body.trim();
+    if text.is_empty() || text.starts_with('{') || text.starts_with('[') {
+        return None;
+    }
+    Some(text.to_string())
+}
+
+fn read_anthropic_value_text(value: &Value) -> Option<String> {
+    let mut parts = Vec::new();
+    collect_anthropic_text(value, &mut parts);
+    let text = parts.join("\n");
+    (!text.trim().is_empty()).then_some(text)
+}
+
+fn collect_anthropic_text(value: &Value, parts: &mut Vec<String>) {
+    match value {
+        Value::String(text) => {
+            if !text.trim().is_empty() {
+                parts.push(text.to_string());
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_anthropic_text(item, parts);
+            }
+        }
+        Value::Object(map) => {
+            for key in [
+                "text",
+                "content",
+                "message",
+                "output_text",
+                "completion",
+                "response",
+            ] {
+                if let Some(text) = map.get(key).and_then(Value::as_str) {
+                    if !text.trim().is_empty() {
+                        parts.push(text.to_string());
+                    }
+                }
+            }
+            for key in [
+                "content",
+                "delta",
+                "content_block",
+                "message",
+                "data",
+                "output",
+            ] {
+                if let Some(nested) = map.get(key).filter(|value| !value.is_string()) {
+                    collect_anthropic_text(nested, parts);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn read_sse_response_text(body: &str) -> Option<String> {
+    if !body.lines().any(|line| line.trim_start().starts_with("data:")) {
+        return None;
+    }
+    let mut parts = Vec::new();
+    for line in body.lines() {
+        let line = line.trim();
+        let Some(data) = line.strip_prefix("data:") else {
+            continue;
+        };
+        let data = data.trim();
+        if data.is_empty() || data == "[DONE]" {
+            continue;
+        }
+        if let Ok(value) = serde_json::from_str::<Value>(data) {
+            if let Some(text) = read_sse_event_text(&value) {
+                parts.push(text);
+            }
+        }
+    }
+    let text = parts.join("");
+    (!text.trim().is_empty()).then_some(text)
+}
+
+fn read_sse_event_text(value: &Value) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(text) = value
+        .get("delta")
+        .and_then(|delta| {
+            delta
+                .get("text")
+                .or_else(|| delta.get("content"))
+                .or_else(|| delta.get("output_text"))
+        })
+        .and_then(Value::as_str)
+    {
+        parts.push(text.to_string());
+    }
+    if let Some(text) = value
+        .get("content_block")
+        .and_then(|block| block.get("text").or_else(|| block.get("content")))
+        .and_then(Value::as_str)
+    {
+        parts.push(text.to_string());
+    }
+    if let Some(choices) = value.get("choices").and_then(Value::as_array) {
+        for choice in choices {
+            if let Some(text) = choice
+                .get("delta")
+                .and_then(|delta| delta.get("content").or_else(|| delta.get("text")))
+                .and_then(Value::as_str)
+            {
+                parts.push(text.to_string());
+            }
+        }
+    }
+    let text = parts.join("");
+    (!text.trim().is_empty()).then_some(text)
 }
 
 pub(crate) fn read_gemini_response_text(body: &str) -> Result<String, String> {
@@ -2286,6 +2402,23 @@ mod tests {
     }
 
     #[test]
+    fn xiaomi_mimo_anthropic_uses_api_key_header_even_for_saved_auth_token() {
+        let settings = ActiveModelSettings {
+            provider_id: "xiaomi-mimo-token-plan".to_string(),
+            provider_name: "Xiaomi MiMo Token Plan".to_string(),
+            protocol: "anthropic".to_string(),
+            auth_style: "auth_token".to_string(),
+            base_url: "https://token-plan-cn.xiaomimimo.com/anthropic".to_string(),
+            api_key: "secret".to_string(),
+            model: "mimo-v2.5-pro".to_string(),
+            model_id: "mimo-v2.5-pro".to_string(),
+            extra_env: std::collections::BTreeMap::new(),
+        };
+
+        assert!(uses_anthropic_api_key_header(&settings));
+    }
+
+    #[test]
     fn response_body_summary_strips_simple_html_error() {
         let body = "<html><head><title>404 Not Found</title></head><body><center><h1>404 Not Found</h1></center></body></html>";
         assert_eq!(response_body_summary(body), "404 Not Found 404 Not Found");
@@ -2372,6 +2505,54 @@ mod tests {
     fn anthropic_response_text_reads_content_parts() {
         let body = r#"{"content":[{"type":"text","text":"OK"}]}"#;
         assert_eq!(read_anthropic_response_text(body).expect("text"), "OK");
+    }
+
+    #[test]
+    fn anthropic_response_text_reads_content_string() {
+        let body = r#"{"content":"OK"}"#;
+        assert_eq!(read_anthropic_response_text(body).expect("text"), "OK");
+    }
+
+    #[test]
+    fn anthropic_response_text_falls_back_to_openai_compatible_shape() {
+        let body = r#"{"choices":[{"message":{"content":"OK"}}]}"#;
+        assert_eq!(read_anthropic_response_text(body).expect("text"), "OK");
+    }
+
+    #[test]
+    fn anthropic_response_text_reads_nested_data_message() {
+        let body = r#"{"data":{"message":"OK"}}"#;
+        assert_eq!(read_anthropic_response_text(body).expect("text"), "OK");
+    }
+
+    #[test]
+    fn anthropic_response_text_reads_anthropic_sse_delta() {
+        let body = "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"O\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"K\"}}\n\n";
+        assert_eq!(read_anthropic_response_text(body).expect("text"), "OK");
+    }
+
+    #[test]
+    fn anthropic_response_text_reads_openai_style_sse_delta() {
+        let body = "data: {\"choices\":[{\"delta\":{\"content\":\"O\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"K\"}}]}\n\ndata: [DONE]\n\n";
+        assert_eq!(read_anthropic_response_text(body).expect("text"), "OK");
+    }
+
+    #[test]
+    fn anthropic_response_text_reads_plain_text_body() {
+        assert_eq!(read_anthropic_response_text("OK").expect("text"), "OK");
+    }
+
+    #[test]
+    fn anthropic_compatible_parse_error_allows_json_parse_retry() {
+        assert!(is_anthropic_compatible_parse_error(
+            "Anthropic 响应 JSON 解析失败：expected value at line 1 column 1"
+        ));
+        assert!(is_anthropic_compatible_parse_error(
+            "Anthropic 响应中没有可用文本。"
+        ));
+        assert!(!is_anthropic_compatible_parse_error(
+            "Anthropic 测试失败：HTTP 401 unauthorized"
+        ));
     }
 
     #[test]

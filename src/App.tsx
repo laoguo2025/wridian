@@ -380,9 +380,12 @@ function App() {
 
   useEffect(() => {
     void getProjectState()
-      .then(setProjectState)
+      .then((state) => {
+        setProjectState(state);
+        void chatManager.switchProjectChat(state.activeProjectId ?? "");
+      })
       .catch((error) => setProjectError(error instanceof Error ? error.message : String(error)));
-  }, [workspace?.files.length, workspace?.filesRootPath]);
+  }, [chatManager.switchProjectChat, workspace?.files.length, workspace?.filesRootPath]);
 
   useEffect(() => {
     if (!selectedPath || !editorContent.trim()) {
@@ -463,7 +466,9 @@ function App() {
 
   const switchProject = async (id: string) => {
     try {
-      setProjectState(await selectProject(id || null));
+      const nextState = await selectProject(id || null);
+      setProjectState(nextState);
+      await chatManager.switchProjectChat(nextState.activeProjectId ?? "");
       setProjectError("");
     } catch (error) {
       setProjectError(error instanceof Error ? error.message : String(error));
@@ -696,31 +701,26 @@ function App() {
     }
   };
 
-  const editUserMessage = (message: ChatMessage) => {
-    setPrompt(message.text);
-    updatePromptPills(restorePromptPillsFromMessage(message));
+  const updateChatMessageText = (message: ChatMessage, text: string) => {
+    const selection = draftSelectionRef.current;
+    const selectedText = editorContent.slice(selection.start, selection.end).trim();
+    const updated = chatManager.updateMessageText(message.id, text, {
+      content: editorContent,
+      selectedText,
+      sourcePath: selectedPath,
+      title: editorTitle,
+    });
+    if (!updated) {
+      chatManager.setError("消息内容不能为空。");
+    } else {
+      chatManager.setError("");
+    }
   };
 
   const retryLastUserMessage = (message: ChatMessage) => {
     const contextPills = restorePromptPillsFromMessage(message);
     updatePromptPills(contextPills);
     void sendPrompt({ contextPills, text: message.text, selectedText: message.selectedText });
-  };
-
-  const forkFromAssistantMessage = (message: ChatMessage) => {
-    const selection = draftSelectionRef.current;
-    const selectedText = editorContent.slice(selection.start, selection.end).trim();
-    const forked = chatManager.forkFromMessage(message.id, {
-      content: editorContent,
-      selectedText,
-      sourcePath: selectedPath,
-      title: editorTitle,
-    });
-    if (!forked) return;
-    setPrompt("按另一个方向继续。");
-    updatePromptPills([]);
-    setPendingEdits([]);
-    chatManager.setError("");
   };
 
   const acceptEdit = (id: string) => {
@@ -1138,8 +1138,7 @@ function App() {
           error={chatManager.error}
           messages={chatManager.messages}
           onCopy={copyText}
-          onEditUserMessage={editUserMessage}
-          onForkMessage={forkFromAssistantMessage}
+          onUpdateMessageText={updateChatMessageText}
           onRetry={retryLastUserMessage}
           onSelectRelevantNote={(note) => {
             void addFileToPrompt(note.title, note.path, note.relativePath ?? "");

@@ -1,10 +1,10 @@
 use crate::memory::{read_relevant_memory_snippets, write_memory_leaves, MemoryLeafDraft};
 use crate::model_accounts::{
-    anthropic_messages_url, apply_openai_compatible_provider_extras, ensure_supported_protocol,
-    gemini_generate_content_url, is_openai_oauth_settings, openai_chat_completions_url,
-    openai_oauth_account_id, read_active_model_settings, read_anthropic_response_text,
-    read_gemini_response_text, response_body_summary, ActiveModelSettings,
-    GEMINI_DEFAULT_MAX_OUTPUT_TOKENS,
+    anthropic_messages_url, apply_anthropic_auth_headers, ensure_supported_protocol,
+    gemini_generate_content_url, is_anthropic_compatible_parse_error, is_openai_oauth_settings,
+    openai_chat_completions_url, openai_oauth_account_id, read_active_model_settings,
+    read_anthropic_response_text, read_gemini_response_text, response_body_summary,
+    ActiveModelSettings, GEMINI_DEFAULT_MAX_OUTPUT_TOKENS,
 };
 use crate::projects::{active_project_model, read_active_project_context};
 use crate::runtime::{ensure_workspace, runtime_root, wridian_data_dir};
@@ -404,12 +404,10 @@ async fn cocreate_with_openai_compatible(
         .map_err(|error| format!("对话客户端创建失败：{error}"))?;
     let model = project_model.unwrap_or(&settings.model);
     let prompt = build_cocreation_prompt(input, memories, active_context, active_project_context);
-    let mut body = openai_compatible_cocreation_body(model, &prompt, true);
-    apply_openai_compatible_provider_extras(settings, model, &mut body);
     let response = client
         .post(url.clone())
         .bearer_auth(&settings.api_key)
-        .json(&body)
+        .json(&openai_compatible_cocreation_body(model, &prompt, true))
         .send()
         .await
         .map_err(|error| format!("对话请求失败：{error}"))?;
@@ -422,12 +420,10 @@ async fn cocreate_with_openai_compatible(
         && should_retry_without_response_format(status.as_u16(), &body)
         && body_mentions_response_format(&body)
     {
-        let mut retry_body = openai_compatible_cocreation_body(model, &prompt, false);
-        apply_openai_compatible_provider_extras(settings, model, &mut retry_body);
         let retry = client
             .post(url)
             .bearer_auth(&settings.api_key)
-            .json(&retry_body)
+            .json(&openai_compatible_cocreation_body(model, &prompt, false))
             .send()
             .await
             .map_err(|error| format!("对话请求重试失败：{error}"))?;
@@ -503,23 +499,58 @@ async fn cocreate_with_anthropic(
     active_context: &str,
     active_project_context: &str,
 ) -> Result<ParsedCoCreateResponse, String> {
+    let body = send_anthropic_cocreation_request(
+        settings,
+        project_model,
+        input,
+        memories,
+        active_context,
+        active_project_context,
+        false,
+    )
+    .await?;
+    let content = match read_anthropic_response_text(&body) {
+        Err(error) if is_anthropic_compatible_parse_error(&error) => {
+            let body = send_anthropic_cocreation_request(
+                settings,
+                project_model,
+                input,
+                memories,
+                active_context,
+                active_project_context,
+                true,
+            )
+            .await?;
+            read_anthropic_response_text(&body)?
+        }
+        result => result?,
+    };
+    let parsed = parse_cocreation_model_output(&content)?;
+    if parsed.reply.trim().is_empty() {
+        Err("模型返回了空回复。".to_string())
+    } else {
+        Ok(parsed)
+    }
+}
+
+async fn send_anthropic_cocreation_request(
+    settings: &ActiveModelSettings,
+    project_model: Option<&str>,
+    input: &CoCreateInput,
+    memories: &[String],
+    active_context: &str,
+    active_project_context: &str,
+    stream: bool,
+) -> Result<String, String> {
     let url = anthropic_messages_url(&settings.base_url);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(90))
         .build()
         .map_err(|error| format!("对话客户端创建失败：{error}"))?;
-    let mut request = client.post(url).header("anthropic-version", "2023-06-01");
-    request = if settings.auth_style == "oauth_external" {
-        request
-            .bearer_auth(&settings.api_key)
-            .header("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
-            .header("user-agent", "claude-cli/2.1.74 (external, cli)")
-            .header("x-app", "cli")
-    } else if settings.auth_style == "auth_token" {
-        request.bearer_auth(&settings.api_key)
-    } else {
-        request.header("x-api-key", &settings.api_key)
-    };
+    let request = apply_anthropic_auth_headers(
+        client.post(url).header("anthropic-version", "2023-06-01"),
+        settings,
+    );
     let response = request
         .json(&json!({
             "model": project_model.unwrap_or(&settings.model),
@@ -527,11 +558,17 @@ async fn cocreate_with_anthropic(
             "messages": [
                 {
                     "role": "user",
-                    "content": build_cocreation_prompt(input, memories, active_context, active_project_context)
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": build_cocreation_prompt(input, memories, active_context, active_project_context)
+                        }
+                    ]
                 }
             ],
             "max_tokens": 2048,
-            "temperature": 0.7
+            "temperature": 0.7,
+            "stream": stream
         }))
         .send()
         .await
@@ -548,13 +585,7 @@ async fn cocreate_with_anthropic(
             response_body_summary(&body)
         ));
     }
-    let content = read_anthropic_response_text(&body)?;
-    let parsed = parse_cocreation_model_output(&content)?;
-    if parsed.reply.trim().is_empty() {
-        Err("模型返回了空回复。".to_string())
-    } else {
-        Ok(parsed)
-    }
+    Ok(body)
 }
 
 async fn cocreate_with_gemini(
@@ -753,10 +784,10 @@ fn build_cocreation_prompt(
     let current_draft_slot = build_current_draft_slot(input);
     let project_mode_slot = build_text_slot(
         "project-mode",
-        "Project Mode",
+        "项目记忆",
         active_project_context,
         BUDGET_PROJECT_CONTEXT_CHARS,
-        "未启用 Project Mode。",
+        "未启用项目记忆。",
     );
     let active_context_slot = build_text_slot(
         "active-context",
@@ -768,21 +799,21 @@ fn build_cocreation_prompt(
     let memory_slot = build_memory_slot(memories);
     let knowledge_slot = build_context_items_slot(
         "explicit-knowledge-cards",
-        "显式知识卡",
+        "已选知识卡",
         &filter_context_items(input, ContextItemSlot::Knowledge),
         BUDGET_EXPLICIT_ITEM_CHARS,
         BUDGET_EXPLICIT_TOTAL_CHARS,
     );
     let relevant_slot = build_context_items_slot(
         "relevant-notes",
-        "Relevant Notes",
+        "相关稿件",
         &filter_context_items(input, ContextItemSlot::Relevant),
         BUDGET_EXPLICIT_ITEM_CHARS,
         BUDGET_EXPLICIT_TOTAL_CHARS,
     );
     let tool_slot = build_context_items_slot(
         "skill-protocol",
-        "skill 协议",
+        "技能规则",
         &filter_context_items(input, ContextItemSlot::Tool),
         BUDGET_TOOL_ITEM_CHARS,
         BUDGET_TOOL_TOTAL_CHARS,
@@ -794,7 +825,7 @@ fn build_cocreation_prompt(
 
     let source_label = prompt_source_label(&input.source_path, &input.title);
     format!(
-        "稿件类型：{}\n当前文件：{}\n来源路径：{}\n\n上下文编译顺序：当前稿件/选区 → Project Mode → 当前现场 → compressed memory → 显式知识卡 → Relevant Notes → skill 协议 → 用户请求。每个槽位独立预算，超预算时按此优先级裁剪，不把作品记忆、知识卡和 skill 协议混写。\n\n输出格式：必须返回 json object，字段为 reply、edits、memories。\n\n[1 当前稿件与选区]\n{}\n\n[2 Project Mode]\n{}\n\n[3 当前现场]\n{}\n\n[4 compressed memory]\n{}\n\n[5 显式知识卡]\n{}\n\n[6 Relevant Notes]\n{}\n\n[7 skill 协议]\n{}\n\n[8 用户请求]\n{}",
+        "稿件类型：{}\n当前文件：{}\n来源路径：{}\n\n上下文编译顺序：当前稿件/选区 → 项目记忆 → 最近对话现场 → 压缩记忆 → 已选知识卡 → 相关稿件 → 技能规则 → 用户请求。每个槽位独立预算，超预算时按此优先级裁剪，不把作品记忆、知识卡和技能规则混写。\n\n输出格式：必须返回 json object，字段为 reply、edits、memories。\n\n[1 当前稿件与选区]\n{}\n\n[2 项目记忆]\n{}\n\n[3 最近对话现场]\n{}\n\n[4 压缩记忆]\n{}\n\n[5 已选知识卡]\n{}\n\n[6 相关稿件]\n{}\n\n[7 技能规则]\n{}\n\n[8 用户请求]\n{}",
         draft_kind,
         input.title,
         source_label,
@@ -819,10 +850,10 @@ fn build_context_load_status(
         build_current_draft_slot(input).status,
         build_text_slot(
             "project-mode",
-            "Project Mode",
+            "项目记忆",
             active_project_context,
             BUDGET_PROJECT_CONTEXT_CHARS,
-            "未启用 Project Mode。",
+            "未启用项目记忆。",
         )
         .status,
         build_text_slot(
@@ -836,7 +867,7 @@ fn build_context_load_status(
         build_memory_slot(memories).status,
         build_context_items_slot(
             "explicit-knowledge-cards",
-            "显式知识卡",
+            "已选知识卡",
             &filter_context_items(input, ContextItemSlot::Knowledge),
             BUDGET_EXPLICIT_ITEM_CHARS,
             BUDGET_EXPLICIT_TOTAL_CHARS,
@@ -844,7 +875,7 @@ fn build_context_load_status(
         .status,
         build_context_items_slot(
             "relevant-notes",
-            "Relevant Notes",
+            "相关稿件",
             &filter_context_items(input, ContextItemSlot::Relevant),
             BUDGET_EXPLICIT_ITEM_CHARS,
             BUDGET_EXPLICIT_TOTAL_CHARS,
@@ -852,7 +883,7 @@ fn build_context_load_status(
         .status,
         build_context_items_slot(
             "skill-protocol",
-            "skill 协议",
+            "技能规则",
             &filter_context_items(input, ContextItemSlot::Tool),
             BUDGET_TOOL_ITEM_CHARS,
             BUDGET_TOOL_TOTAL_CHARS,
@@ -867,6 +898,9 @@ fn build_context_load_status(
         )
         .status,
     ]
+    .into_iter()
+    .filter(|status| status.loaded && status.key != "user-request")
+    .collect()
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -905,6 +939,11 @@ fn build_current_draft_slot(input: &CoCreateInput) -> ContextSlotBuild {
         + draft_text.included_chars;
     let truncated =
         selected_text.as_ref().is_some_and(|text| text.truncated) || draft_text.truncated;
+    let has_selected_text = input
+        .selected_text
+        .as_deref()
+        .is_some_and(|text| !text.trim().is_empty());
+    let has_draft_text = !input.content.trim().is_empty() && !input.source_path.trim().is_empty();
     ContextSlotBuild {
         block: format!(
             "用户选中的片段：\n{}\n\n稿件内容：\n{}",
@@ -913,18 +952,8 @@ fn build_current_draft_slot(input: &CoCreateInput) -> ContextSlotBuild {
         status: ContextLoadStatus {
             key: "current-draft-selection".to_string(),
             label: "当前稿件/选区".to_string(),
-            loaded: !input.content.trim().is_empty()
-                || input
-                    .selected_text
-                    .as_deref()
-                    .is_some_and(|text| !text.trim().is_empty()),
-            item_count: usize::from(!input.content.trim().is_empty())
-                + usize::from(
-                    input
-                        .selected_text
-                        .as_deref()
-                        .is_some_and(|text| !text.trim().is_empty()),
-                ),
+            loaded: has_draft_text || has_selected_text,
+            item_count: usize::from(has_draft_text) + usize::from(has_selected_text),
             included_chars,
             budget_chars: BUDGET_CURRENT_DRAFT_CHARS + BUDGET_SELECTION_CHARS,
             truncated,
@@ -964,10 +993,10 @@ fn build_text_slot(
 fn build_memory_slot(memories: &[String]) -> ContextSlotBuild {
     if memories.is_empty() {
         return ContextSlotBuild {
-            block: "暂无 compressed memory。".to_string(),
+            block: "暂无压缩记忆。".to_string(),
             status: ContextLoadStatus {
                 key: "compressed-memory".to_string(),
-                label: "compressed memory".to_string(),
+                label: "压缩记忆".to_string(),
                 loaded: false,
                 item_count: 0,
                 included_chars: 0,
@@ -986,7 +1015,7 @@ fn build_memory_slot(memories: &[String]) -> ContextSlotBuild {
         let compact = compact_text_with_status(memory, 420);
         let item = format!("- {}\n", compact.output);
         if rendered.chars().count() + item.chars().count() > BUDGET_MEMORY_TOTAL_CHARS {
-            rendered.push_str("- 其余 compressed memory 因预算限制未展开。\n");
+            rendered.push_str("- 其余压缩记忆因篇幅限制未展开。\n");
             truncated = true;
             break;
         }
@@ -1000,13 +1029,13 @@ fn build_memory_slot(memories: &[String]) -> ContextSlotBuild {
         block: rendered.trim().to_string(),
         status: ContextLoadStatus {
             key: "compressed-memory".to_string(),
-            label: "compressed memory".to_string(),
+            label: "压缩记忆".to_string(),
             loaded: item_count > 0,
             item_count,
             included_chars,
             budget_chars: BUDGET_MEMORY_TOTAL_CHARS,
             truncated,
-            note: truncated.then(|| "compressed memory 已按预算裁剪。".to_string()),
+            note: truncated.then(|| "压缩记忆已保留关键部分。".to_string()),
         },
     }
 }
@@ -1211,8 +1240,20 @@ fn compact_text_with_status(text: &str, max_chars: usize) -> CompactText {
 }
 
 fn parse_cocreation_model_output(output: &str) -> Result<ParsedCoCreateResponse, String> {
-    let parsed: ModelCoCreateResponse = serde_json::from_str(output.trim())
-        .map_err(|error| format!("对话结果不是有效 JSON：{error}"))?;
+    let trimmed = output.trim();
+    let parsed: ModelCoCreateResponse = match serde_json::from_str(trimmed) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            if !trimmed.starts_with('{') && !trimmed.starts_with('[') && !trimmed.is_empty() {
+                return Ok(ParsedCoCreateResponse {
+                    reply: trimmed.to_string(),
+                    edits: Vec::new(),
+                    memories: Vec::new(),
+                });
+            }
+            return Err(format!("对话结果不是有效 JSON：{error}"));
+        }
+    };
     let reply = parsed.reply.unwrap_or_default().trim().to_string();
     let edits = parsed
         .edits
@@ -1310,11 +1351,11 @@ mod tests {
             &input,
             &["【剧情线】雨夜场景不能提前暴露凶手。".to_string()],
             "{\"currentChapter\":\"第三章\"}",
-            "Project Mode：短剧项目",
+            "项目记忆：短剧项目",
         );
 
         assert!(prompt.contains("稿件内容"));
-        assert!(prompt.contains("compressed memory"));
+        assert!(prompt.contains("压缩记忆"));
         assert!(prompt.contains("强化她进门前的动机"));
         assert!(prompt.contains("json object"));
     }
@@ -1342,7 +1383,7 @@ mod tests {
         let prompt = build_cocreation_prompt(&input, &[], "", "");
 
         assert!(prompt.contains("用户选中的片段：\n她推开门"));
-        assert!(prompt.contains("[5 显式知识卡]"));
+        assert!(prompt.contains("[5 已选知识卡]"));
         assert!(prompt.contains("【memory｜人物卡｜人物卡.md】\n她怕黑，但不承认。"));
     }
 
@@ -1378,9 +1419,9 @@ mod tests {
         let prompt = build_cocreation_prompt(&input, &[], "", "");
 
         assert!(prompt
-            .contains("[5 显式知识卡]\n【memory｜知识卡｜03故事模型/知识卡.md】\n一条显式知识卡"));
+            .contains("[5 已选知识卡]\n【memory｜知识卡｜03故事模型/知识卡.md】\n一条显式知识卡"));
         assert!(
-            prompt.contains("[7 skill 协议]\n【tool｜知识库运维】\nWridian 技能协议：知识库运维")
+            prompt.contains("[7 技能规则]\n【tool｜知识库运维】\nWridian 技能协议：知识库运维")
         );
     }
 
@@ -1417,7 +1458,7 @@ mod tests {
             &input,
             &["长期记忆：雨夜不能提前暴露凶手。".to_string()],
             "",
-            "Project Mode：短剧项目",
+            "项目记忆：短剧项目",
         );
 
         let current = status
@@ -1655,6 +1696,16 @@ mod tests {
     }
 
     #[test]
+    fn parse_cocreation_model_output_uses_plain_text_as_reply() {
+        let parsed = parse_cocreation_model_output("现在的年月日时间是 2026-06-11。")
+            .expect("plain text reply");
+
+        assert_eq!(parsed.reply, "现在的年月日时间是 2026-06-11。");
+        assert!(parsed.edits.is_empty());
+        assert!(parsed.memories.is_empty());
+    }
+
+    #[test]
     fn openai_compatible_body_can_omit_response_format_for_legacy_gateways() {
         let strict = openai_compatible_cocreation_body("model-a", "prompt", true);
         assert_eq!(
@@ -1667,61 +1718,6 @@ mod tests {
 
         let fallback = openai_compatible_cocreation_body("model-a", "prompt", false);
         assert!(fallback.get("response_format").is_none());
-    }
-
-    #[test]
-    fn deepseek_openai_compatible_body_disables_thinking_for_v4_models() {
-        let settings = ActiveModelSettings {
-            provider_id: "deepseek-openai-compatible".to_string(),
-            provider_name: "DeepSeek".to_string(),
-            protocol: "openai-compatible".to_string(),
-            auth_style: "api_key".to_string(),
-            base_url: "https://api.deepseek.com/v1".to_string(),
-            api_key: "sk-test".to_string(),
-            model: "deepseek-v4-pro".to_string(),
-            model_id: "deepseek-openai-compatible::deepseek-v4-pro".to_string(),
-            extra_env: std::collections::BTreeMap::new(),
-        };
-        let mut body = openai_compatible_cocreation_body("deepseek-v4-pro", "prompt", true);
-
-        apply_openai_compatible_provider_extras(&settings, "deepseek-v4-pro", &mut body);
-
-        assert_eq!(
-            body.get("thinking")
-                .and_then(|value| value.get("type"))
-                .and_then(serde_json::Value::as_str),
-            Some("disabled")
-        );
-    }
-
-    #[test]
-    fn moonshot_openai_compatible_body_omits_temperature_and_enables_thinking() {
-        let settings = ActiveModelSettings {
-            provider_id: "moonshot-openai".to_string(),
-            provider_name: "Moonshot".to_string(),
-            protocol: "openai-compatible".to_string(),
-            auth_style: "api_key".to_string(),
-            base_url: "https://api.moonshot.cn/v1".to_string(),
-            api_key: "sk-test".to_string(),
-            model: "kimi-k2-turbo-preview".to_string(),
-            model_id: "moonshot-openai::kimi-k2-turbo-preview".to_string(),
-            extra_env: std::collections::BTreeMap::new(),
-        };
-        let mut body = openai_compatible_cocreation_body("kimi-k2-turbo-preview", "prompt", true);
-
-        apply_openai_compatible_provider_extras(&settings, "kimi-k2-turbo-preview", &mut body);
-
-        assert!(body.get("temperature").is_none());
-        assert_eq!(
-            body.get("max_tokens").and_then(serde_json::Value::as_u64),
-            Some(32_768)
-        );
-        assert_eq!(
-            body.get("thinking")
-                .and_then(|value| value.get("type"))
-                .and_then(serde_json::Value::as_str),
-            Some("enabled")
-        );
     }
 
     #[test]

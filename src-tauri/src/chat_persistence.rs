@@ -1,10 +1,13 @@
 use crate::runtime::{ensure_workspace, runtime_root, wridian_data_dir};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+const DEFAULT_CHAT_SCOPE_KEY: &str = "__default__";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -12,10 +15,17 @@ pub(crate) struct SaveChatTranscriptInput {
     session_id: String,
     parent_session_id: Option<String>,
     forked_from_message_id: Option<String>,
+    project_id: Option<String>,
     title: String,
     source_path: String,
     active_context: Option<Value>,
     messages: Vec<ChatTranscriptMessage>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LoadChatContinuityInput {
+    project_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -24,6 +34,7 @@ struct ChatTranscriptMessage {
     id: String,
     role: String,
     text: String,
+    created_at: Option<u128>,
     selected_text: Option<String>,
     context_pills: Option<Vec<ChatContextPill>>,
     context_load_status: Option<Vec<ChatContextLoadStatus>>,
@@ -74,8 +85,13 @@ pub(crate) struct LoadChatContinuityResponse {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ChatSessionIndex {
+    #[serde(default = "chat_session_index_schema_version")]
     schema_version: u8,
+    #[serde(default)]
     active_session_id: String,
+    #[serde(default)]
+    active_sessions_by_project: BTreeMap<String, String>,
+    #[serde(default)]
     updated_at: u128,
 }
 
@@ -86,6 +102,8 @@ struct ChatSessionState {
     session_id: String,
     parent_session_id: Option<String>,
     forked_from_message_id: Option<String>,
+    #[serde(default)]
+    project_id: Option<String>,
     current_node_id: Option<String>,
     title: String,
     source_path: String,
@@ -113,6 +131,7 @@ struct ChatSessionHistoryEvent<'a> {
     session_id: &'a str,
     parent_session_id: Option<&'a str>,
     forked_from_message_id: Option<&'a str>,
+    project_id: Option<&'a str>,
     current_node_id: Option<&'a str>,
     title: &'a str,
     source_path: &'a str,
@@ -120,6 +139,10 @@ struct ChatSessionHistoryEvent<'a> {
     compact_summary: &'a str,
     message_count: usize,
     updated_at: u128,
+}
+
+fn chat_session_index_schema_version() -> u8 {
+    2
 }
 
 #[tauri::command]
@@ -144,19 +167,53 @@ pub(crate) fn wridian_save_chat_transcript(
 }
 
 #[tauri::command]
-pub(crate) fn wridian_load_chat_continuity() -> Result<LoadChatContinuityResponse, String> {
+pub(crate) fn wridian_load_chat_continuity(
+    input: Option<LoadChatContinuityInput>,
+) -> Result<LoadChatContinuityResponse, String> {
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
     let chat_dir = runtime_root(&data_dir).join("chat");
+    load_chat_continuity_from_chat_dir(
+        &chat_dir,
+        input
+            .as_ref()
+            .and_then(|input| clean_optional(input.project_id.as_deref()))
+            .as_deref(),
+    )
+}
+
+fn load_chat_continuity_from_chat_dir(
+    chat_dir: &Path,
+    project_id: Option<&str>,
+) -> Result<LoadChatContinuityResponse, String> {
     let index_path = chat_dir.join("session-index.json");
     let Ok(index_content) = fs::read_to_string(index_path) else {
         return Ok(empty_chat_continuity());
     };
     let index: ChatSessionIndex = serde_json::from_str(&index_content)
         .map_err(|error| format!("对话索引读取失败：{error}"))?;
+    let scope_key = chat_scope_key(project_id);
+    let session_id = index
+        .active_sessions_by_project
+        .get(&scope_key)
+        .filter(|session_id| !session_id.trim().is_empty())
+        .cloned()
+        .or_else(|| {
+            if scope_key == DEFAULT_CHAT_SCOPE_KEY
+                && index.schema_version < chat_session_index_schema_version()
+                && !index.active_session_id.trim().is_empty()
+            {
+                Some(index.active_session_id)
+            } else {
+                None
+            }
+        });
+    let Some(session_id) = session_id else {
+        return Ok(empty_chat_continuity());
+    };
     let session_path = chat_dir
         .join("sessions")
-        .join(format!("{}.json", sanitize_file_name(&index.active_session_id)));
+        .join(format!("{}.json", sanitize_file_name(&session_id)));
     let Ok(session_content) = fs::read_to_string(session_path) else {
         return Ok(empty_chat_continuity());
     };
@@ -185,7 +242,10 @@ fn empty_chat_continuity() -> LoadChatContinuityResponse {
     }
 }
 
-fn write_chat_session_state(chat_dir: &Path, input: &SaveChatTranscriptInput) -> Result<(), String> {
+fn write_chat_session_state(
+    chat_dir: &Path,
+    input: &SaveChatTranscriptInput,
+) -> Result<(), String> {
     let updated_at = timestamp_millis();
     let current_node_id = input.messages.last().map(|message| message.id.clone());
     let compact_summary = compact_summary_from_active_context(input.active_context.as_ref());
@@ -194,6 +254,7 @@ fn write_chat_session_state(chat_dir: &Path, input: &SaveChatTranscriptInput) ->
         session_id: input.session_id.clone(),
         parent_session_id: clean_optional(input.parent_session_id.as_deref()),
         forked_from_message_id: clean_optional(input.forked_from_message_id.as_deref()),
+        project_id: clean_optional(input.project_id.as_deref()),
         current_node_id,
         title: input.title.clone(),
         source_path: input.source_path.clone(),
@@ -209,18 +270,34 @@ fn write_chat_session_state(chat_dir: &Path, input: &SaveChatTranscriptInput) ->
     let session_path = sessions_dir.join(format!("{}.json", sanitize_file_name(&input.session_id)));
     fs::write(
         session_path,
-        serde_json::to_string_pretty(&state).map_err(|error| format!("对话树序列化失败：{error}"))?,
+        serde_json::to_string_pretty(&state)
+            .map_err(|error| format!("对话树序列化失败：{error}"))?,
     )
     .map_err(|error| format!("对话树写入失败：{error}"))?;
 
-    let index = ChatSessionIndex {
-        schema_version: 1,
-        active_session_id: input.session_id.clone(),
-        updated_at,
-    };
+    let index_path = chat_dir.join("session-index.json");
+    let mut index = fs::read_to_string(&index_path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<ChatSessionIndex>(&content).ok())
+        .unwrap_or_else(|| ChatSessionIndex {
+            schema_version: chat_session_index_schema_version(),
+            active_session_id: String::new(),
+            active_sessions_by_project: BTreeMap::new(),
+            updated_at: 0,
+        });
+    let scope_key = chat_scope_key(input.project_id.as_deref());
+    if scope_key == DEFAULT_CHAT_SCOPE_KEY {
+        index.active_session_id = input.session_id.clone();
+    }
+    index
+        .active_sessions_by_project
+        .insert(scope_key, input.session_id.clone());
+    index.schema_version = chat_session_index_schema_version();
+    index.updated_at = updated_at;
     fs::write(
-        chat_dir.join("session-index.json"),
-        serde_json::to_string_pretty(&index).map_err(|error| format!("对话索引序列化失败：{error}"))?,
+        index_path,
+        serde_json::to_string_pretty(&index)
+            .map_err(|error| format!("对话索引序列化失败：{error}"))?,
     )
     .map_err(|error| format!("对话索引写入失败：{error}"))?;
 
@@ -242,6 +319,7 @@ fn append_chat_history_event(
         session_id: &input.session_id,
         parent_session_id: state.parent_session_id.as_deref(),
         forked_from_message_id: state.forked_from_message_id.as_deref(),
+        project_id: state.project_id.as_deref(),
         current_node_id: state.current_node_id.as_deref(),
         title: &input.title,
         source_path: &input.source_path,
@@ -250,7 +328,8 @@ fn append_chat_history_event(
         message_count: input.messages.len(),
         updated_at: state.updated_at,
     };
-    let line = serde_json::to_string(&event).map_err(|error| format!("对话历史序列化失败：{error}"))?;
+    let line =
+        serde_json::to_string(&event).map_err(|error| format!("对话历史序列化失败：{error}"))?;
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -274,8 +353,11 @@ fn write_active_context_files(
             .map_err(|error| format!("当前现场序列化失败：{error}"))?,
     )
     .map_err(|error| format!("当前现场写入失败：{error}"))?;
-    fs::write(chat_dir.join("compact-summary.md"), compact_summary_from_active_context(Some(active_context)))
-        .map_err(|error| format!("创作交接卡写入失败：{error}"))?;
+    fs::write(
+        chat_dir.join("compact-summary.md"),
+        compact_summary_from_active_context(Some(active_context)),
+    )
+    .map_err(|error| format!("创作交接卡写入失败：{error}"))?;
     Ok(())
 }
 
@@ -324,6 +406,10 @@ fn clean_optional(value: Option<&str>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn chat_scope_key(project_id: Option<&str>) -> String {
+    clean_optional(project_id).unwrap_or_else(|| DEFAULT_CHAT_SCOPE_KEY.to_string())
+}
+
 fn timestamp_millis() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -336,6 +422,9 @@ fn render_chat_transcript(input: &SaveChatTranscriptInput) -> String {
     content.push_str("---\n");
     content.push_str("type: wridian-chat\n");
     content.push_str(&format!("session: {}\n", escape_yaml(&input.session_id)));
+    if let Some(project_id) = clean_optional(input.project_id.as_deref()) {
+        content.push_str(&format!("project: {}\n", escape_yaml(&project_id)));
+    }
     content.push_str(&format!("title: {}\n", escape_yaml(&input.title)));
     content.push_str(&format!("source: {}\n", escape_yaml(&input.source_path)));
     content.push_str("---\n\n");
@@ -355,6 +444,9 @@ fn render_chat_transcript(input: &SaveChatTranscriptInput) -> String {
             "用户"
         };
         content.push_str(&format!("## {heading}\n\n"));
+        if let Some(created_at) = message.created_at {
+            content.push_str(&format!("time: {created_at}\n\n"));
+        }
         if let Some(pills) = &message.context_pills {
             if !pills.is_empty() {
                 content.push_str("### 上下文\n\n");
@@ -444,6 +536,7 @@ mod tests {
             session_id: "session-1".to_string(),
             parent_session_id: None,
             forked_from_message_id: None,
+            project_id: None,
             title: "# hacked".to_string(),
             source_path: "source.md".to_string(),
             active_context: None,
@@ -451,6 +544,7 @@ mod tests {
                 id: "user-1".to_string(),
                 role: "user".to_string(),
                 text: "---\ntype: injected\n```".to_string(),
+                created_at: Some(1),
                 selected_text: Some("## not heading".to_string()),
                 context_pills: Some(vec![ChatContextPill {
                     id: None,
@@ -468,5 +562,136 @@ mod tests {
         assert!(transcript.contains("#### \\# pill"));
         assert!(transcript.contains("````text\n---\ntype: injected\n```\n````"));
         assert!(transcript.contains("```text\n- fake list\n```"));
+    }
+
+    #[test]
+    fn chat_continuity_keeps_project_sessions_separate() {
+        let chat_dir = test_chat_dir("scoped");
+        fs::create_dir_all(&chat_dir).expect("create chat dir");
+
+        write_chat_session_state(
+            &chat_dir,
+            &test_input("default-session", None, "default message"),
+        )
+        .expect("write default session");
+        write_chat_session_state(
+            &chat_dir,
+            &test_input("project-a-session", Some("project-a"), "project message"),
+        )
+        .expect("write project session");
+
+        let default_continuity =
+            load_chat_continuity_from_chat_dir(&chat_dir, None).expect("load default");
+        let project_continuity =
+            load_chat_continuity_from_chat_dir(&chat_dir, Some("project-a")).expect("load project");
+        let missing_continuity =
+            load_chat_continuity_from_chat_dir(&chat_dir, Some("project-b")).expect("load missing");
+
+        assert_eq!(default_continuity.session_id, "default-session");
+        assert_eq!(default_continuity.messages[0].text, "default message");
+        assert_eq!(project_continuity.session_id, "project-a-session");
+        assert_eq!(project_continuity.messages[0].text, "project message");
+        assert!(missing_continuity.session_id.is_empty());
+
+        let _ = fs::remove_dir_all(chat_dir.parent().expect("test root parent"));
+    }
+
+    #[test]
+    fn project_only_chat_does_not_become_default_chat() {
+        let chat_dir = test_chat_dir("project-only");
+        fs::create_dir_all(&chat_dir).expect("create chat dir");
+
+        write_chat_session_state(
+            &chat_dir,
+            &test_input("project-a-session", Some("project-a"), "project message"),
+        )
+        .expect("write project session");
+
+        let default_continuity =
+            load_chat_continuity_from_chat_dir(&chat_dir, None).expect("load default");
+        let project_continuity =
+            load_chat_continuity_from_chat_dir(&chat_dir, Some("project-a")).expect("load project");
+
+        assert!(default_continuity.session_id.is_empty());
+        assert_eq!(project_continuity.session_id, "project-a-session");
+
+        let _ = fs::remove_dir_all(chat_dir.parent().expect("test root parent"));
+    }
+
+    #[test]
+    fn chat_continuity_loads_legacy_global_index() {
+        let chat_dir = test_chat_dir("legacy");
+        let sessions_dir = chat_dir.join("sessions");
+        fs::create_dir_all(&sessions_dir).expect("create sessions dir");
+        let session = ChatSessionState {
+            schema_version: 1,
+            session_id: "legacy-session".to_string(),
+            parent_session_id: None,
+            forked_from_message_id: None,
+            project_id: None,
+            current_node_id: Some("message-1".to_string()),
+            title: "Legacy".to_string(),
+            source_path: "legacy.md".to_string(),
+            active_context: None,
+            compact_summary: String::new(),
+            updated_at: 1,
+            nodes: Vec::new(),
+            messages: vec![test_message("legacy message")],
+        };
+        fs::write(
+            chat_dir.join("session-index.json"),
+            r#"{"schemaVersion":1,"activeSessionId":"legacy-session","updatedAt":1}"#,
+        )
+        .expect("write legacy index");
+        fs::write(
+            sessions_dir.join("legacy-session.json"),
+            serde_json::to_string_pretty(&session).expect("serialize session"),
+        )
+        .expect("write legacy session");
+
+        let continuity = load_chat_continuity_from_chat_dir(&chat_dir, None).expect("load legacy");
+
+        assert_eq!(continuity.session_id, "legacy-session");
+        assert_eq!(continuity.messages[0].text, "legacy message");
+
+        let _ = fs::remove_dir_all(chat_dir.parent().expect("test root parent"));
+    }
+
+    fn test_chat_dir(name: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "wridian-chat-persistence-{name}-{}",
+            crate::runtime::unique_test_suffix()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        root.join("chat")
+    }
+
+    fn test_input(
+        session_id: &str,
+        project_id: Option<&str>,
+        text: &str,
+    ) -> SaveChatTranscriptInput {
+        SaveChatTranscriptInput {
+            session_id: session_id.to_string(),
+            parent_session_id: None,
+            forked_from_message_id: None,
+            project_id: project_id.map(ToOwned::to_owned),
+            title: "Test".to_string(),
+            source_path: "test.md".to_string(),
+            active_context: None,
+            messages: vec![test_message(text)],
+        }
+    }
+
+    fn test_message(text: &str) -> ChatTranscriptMessage {
+        ChatTranscriptMessage {
+            id: "message-1".to_string(),
+            role: "user".to_string(),
+            text: text.to_string(),
+            created_at: Some(1),
+            selected_text: None,
+            context_pills: None,
+            context_load_status: None,
+        }
     }
 }

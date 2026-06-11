@@ -443,7 +443,7 @@ fn ensure_project_memory_files(
     )?;
     write_memory_tree_file_if_missing(
         &folder.join("compressed.md"),
-        &format!("# {} 压缩记忆\n\nbranch: {}\nsource: {}\nstatus: active\n\n## 压缩记忆\n\n这里写当前作品项目最应该被 Project Mode 常驻读取的压缩记忆：核心设定、人物边界、禁区、当前进度和下一步。\n", project_name, branch, project_path.to_string_lossy()),
+        &format!("# {} 压缩记忆\n\nbranch: {}\nsource: {}\nstatus: active\n\n## 压缩记忆\n\n这里写当前作品项目最应该被项目记忆常驻读取的压缩记忆：核心设定、人物边界、禁区、当前进度和下一步。\n", project_name, branch, project_path.to_string_lossy()),
     )
 }
 
