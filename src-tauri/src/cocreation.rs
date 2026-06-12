@@ -1850,8 +1850,16 @@ fn parse_cocreation_model_output(output: &str) -> Result<ParsedCoCreateResponse,
             let Some(payload) = extract_json_payload(trimmed) else {
                 return Ok(plain_text_cocreation_response(trimmed));
             };
-            serde_json::from_str(&payload)
-                .map_err(|parse_error| format!("对话结果不是有效 JSON：{parse_error}"))?
+            match serde_json::from_str(&payload) {
+                Ok(parsed) => parsed,
+                Err(parse_error) => {
+                    return Ok(recover_malformed_cocreation_response(
+                        trimmed,
+                        &payload,
+                        &parse_error,
+                    ));
+                }
+            }
         }
     };
     let reply = parsed.reply.unwrap_or_default().trim().to_string();
@@ -1894,6 +1902,91 @@ fn plain_text_cocreation_response(output: &str) -> ParsedCoCreateResponse {
         file_operations: Vec::new(),
         memories: Vec::new(),
     }
+}
+
+fn recover_malformed_cocreation_response(
+    output: &str,
+    payload: &str,
+    parse_error: &serde_json::Error,
+) -> ParsedCoCreateResponse {
+    let reply = extract_json_string_field(payload, "reply")
+        .or_else(|| extract_json_string_field(output, "reply"))
+        .or_else(|| extract_first_meaningful_text(output))
+        .unwrap_or_else(|| format!("模型回复格式不完整，已作为普通回复显示。原解析错误：{parse_error}"));
+    plain_text_cocreation_response(&reply)
+}
+
+fn extract_first_meaningful_text(output: &str) -> Option<String> {
+    let cleaned = output
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            !line.is_empty()
+                && !line.starts_with("```")
+                && !line.starts_with('{')
+                && !line.starts_with('}')
+                && !line.starts_with('"')
+                && !line.starts_with('[')
+                && !line.starts_with(']')
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if cleaned.trim().is_empty() {
+        None
+    } else {
+        Some(cleaned)
+    }
+}
+
+fn extract_json_string_field(payload: &str, field: &str) -> Option<String> {
+    let key = format!("\"{field}\"");
+    let key_start = payload.find(&key)?;
+    let after_key = &payload[key_start + key.len()..];
+    let colon = after_key.find(':')?;
+    let after_colon = after_key[colon + 1..].trim_start();
+    let value_start = after_colon.find('"')?;
+    read_json_string_lossy(&after_colon[value_start..])
+}
+
+fn read_json_string_lossy(input: &str) -> Option<String> {
+    let mut chars = input.char_indices();
+    let (_, quote) = chars.next()?;
+    if quote != '"' {
+        return None;
+    }
+    let mut output = String::new();
+    let mut escaped = false;
+    for (index, char) in input[1..].char_indices() {
+        if escaped {
+            match char {
+                '"' => output.push('"'),
+                '\\' => output.push('\\'),
+                '/' => output.push('/'),
+                'b' => output.push('\u{0008}'),
+                'f' => output.push('\u{000c}'),
+                'n' => output.push('\n'),
+                'r' => output.push('\r'),
+                't' => output.push('\t'),
+                'u' => output.push_str("\\u"),
+                other => output.push(other),
+            }
+            escaped = false;
+            continue;
+        }
+        if char == '\\' {
+            escaped = true;
+            continue;
+        }
+        if char == '"' {
+            let rest = input[index + 2..].trim_start();
+            if rest.starts_with(',') || rest.starts_with('}') || rest.starts_with(']') {
+                return Some(output.trim().to_string());
+            }
+        }
+        output.push(char);
+    }
+    let text = output.trim().to_string();
+    if text.is_empty() { None } else { Some(text) }
 }
 
 fn extract_json_payload(output: &str) -> Option<String> {
@@ -2749,13 +2842,29 @@ mod tests {
     }
 
     #[test]
-    fn parse_cocreation_model_output_rejects_broken_json_payload() {
-        let error = parse_cocreation_model_output(
+    fn parse_cocreation_model_output_recovers_broken_json_payload_as_reply() {
+        let parsed = parse_cocreation_model_output(
             "```json\n{\"reply\":\"好\",\"edits\":[}\n```",
         )
-        .expect_err("broken structured output should still fail");
+        .expect("broken structured output should not break chat");
 
-        assert!(error.contains("不是有效 JSON"));
+        assert_eq!(parsed.reply, "好");
+        assert!(parsed.edits.is_empty());
+    }
+
+    #[test]
+    fn parse_cocreation_model_output_recovers_reply_with_unescaped_quotes() {
+        let parsed = parse_cocreation_model_output(
+            r#"{
+                "reply": "这段可以重写成更生活化的版本，保留"肉片厚薄不均"这个细节。",
+                "edits": []
+            }"#,
+        )
+        .expect("malformed reply should be shown as chat text");
+
+        assert!(parsed.reply.contains("这段可以重写成更生活化的版本"));
+        assert!(parsed.reply.contains("肉片厚薄不均"));
+        assert!(parsed.edits.is_empty());
     }
 
     #[test]

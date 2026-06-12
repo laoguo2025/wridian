@@ -308,6 +308,7 @@ function App() {
   const selectedPathRef = useRef("");
   const openFileRequestSeqRef = useRef(0);
   const relevantNotesRequestSeqRef = useRef(0);
+  const selectionActionFrameRef = useRef<number | null>(null);
   const updatePromptPills = useCallback((
     next: PromptContextPill[] | ((current: PromptContextPill[]) => PromptContextPill[]),
   ) => {
@@ -480,6 +481,16 @@ function App() {
     });
   }, []);
 
+  const scheduleDraftSelectionUpdate = useCallback(() => {
+    if (selectionActionFrameRef.current !== null) {
+      window.cancelAnimationFrame(selectionActionFrameRef.current);
+    }
+    selectionActionFrameRef.current = window.requestAnimationFrame(() => {
+      selectionActionFrameRef.current = null;
+      updateDraftSelection();
+    });
+  }, [updateDraftSelection]);
+
   const attachCurrentSelectionToPrompt = () => {
     const editor = draftEditorRef.current;
     if (!editor) return;
@@ -490,6 +501,30 @@ function App() {
     updatePromptPills((current) => upsertPromptContextPill(current, createSelectionPromptPill(selected, selection)));
     setSelectionActionPosition(null);
   };
+
+  useEffect(() => {
+    const refreshSelectionAction = (event?: Event) => {
+      if (
+        event?.target instanceof Element
+        && event.target.closest(".selection-chat-action")
+      ) {
+        return;
+      }
+      scheduleDraftSelectionUpdate();
+    };
+    document.addEventListener("selectionchange", refreshSelectionAction);
+    document.addEventListener("pointerup", refreshSelectionAction, true);
+    document.addEventListener("keyup", refreshSelectionAction, true);
+    return () => {
+      document.removeEventListener("selectionchange", refreshSelectionAction);
+      document.removeEventListener("pointerup", refreshSelectionAction, true);
+      document.removeEventListener("keyup", refreshSelectionAction, true);
+      if (selectionActionFrameRef.current !== null) {
+        window.cancelAnimationFrame(selectionActionFrameRef.current);
+        selectionActionFrameRef.current = null;
+      }
+    };
+  }, [scheduleDraftSelectionUpdate]);
 
   useEffect(() => {
     document.documentElement.classList.toggle("darkTheme", theme === "dark");
@@ -1470,7 +1505,7 @@ function App() {
                   onKeyDown={handleDraftKeyDown}
                   onRejectEdit={rejectEdit}
                   onSelectionActionDismiss={() => setSelectionActionPosition(null)}
-                  onSelectionChange={updateDraftSelection}
+                  onSelectionChange={scheduleDraftSelectionUpdate}
                 />
                 {selectionActionPosition ? (
                   <button
