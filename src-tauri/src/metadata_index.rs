@@ -1,6 +1,4 @@
 use crate::path_safety::safe_child_path;
-use crate::runtime::{ensure_workspace, wridian_data_dir};
-use crate::workspace::{resolved_knowledge_root, works_root};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
@@ -117,15 +115,6 @@ struct ResolveCandidate {
     library: String,
     path: String,
     relative_path: String,
-}
-
-#[tauri::command]
-pub(crate) fn wridian_get_metadata_index() -> Result<MetadataIndexResponse, String> {
-    let data_dir = wridian_data_dir()?;
-    ensure_workspace(&data_dir)?;
-    let works = works_root(&data_dir)?;
-    let knowledge = resolved_knowledge_root(&data_dir)?;
-    read_metadata_index_for_roots(vec![("works", works), ("knowledge", knowledge)])
 }
 
 pub(crate) fn read_metadata_index_for_roots(

@@ -18,42 +18,6 @@ const MEMORY_BRANCHES: [(&str, &str, &str); 9] = [
 ];
 const LEGACY_MEMORY_MIGRATION_MARKER: &str = ".legacy-migration-complete";
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct MemoryScopeInput {
-    source_path: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct MemoryStateResponse {
-    memories: Vec<MemoryItem>,
-    candidates: Vec<MemoryCandidate>,
-    memory_folder_path: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct MemoryItem {
-    id: String,
-    category: String,
-    text: String,
-    source_path: String,
-    title: String,
-    created_at: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct MemoryCandidate {
-    id: String,
-    category: String,
-    text: String,
-    source_path: String,
-    title: String,
-    created_at: String,
-}
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MemoryTreeResponse {
@@ -93,22 +57,6 @@ pub(crate) struct SaveMemoryTreeFileInput {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DeleteMemoryTreeFileInput {
     path: String,
-}
-
-#[tauri::command]
-pub(crate) fn wridian_get_memory_state() -> Result<MemoryStateResponse, String> {
-    let data_dir = wridian_data_dir()?;
-    ensure_workspace(&data_dir)?;
-    read_memory_state_for_source(&data_dir, "")
-}
-
-#[tauri::command]
-pub(crate) fn wridian_get_memory_state_for_source(
-    input: MemoryScopeInput,
-) -> Result<MemoryStateResponse, String> {
-    let data_dir = wridian_data_dir()?;
-    ensure_workspace(&data_dir)?;
-    read_memory_state_for_source(&data_dir, input.source_path.as_deref().unwrap_or_default())
 }
 
 #[tauri::command]
@@ -195,37 +143,6 @@ pub(crate) fn read_project_continuity_memory(
         blocks.push(format!("【{}】{}", label, compact_markdown(trimmed, 900)));
     }
     Ok(compact_markdown(&blocks.join("\n"), 2600))
-}
-
-fn read_memory_state_for_source(
-    data_dir: &Path,
-    source_path: &str,
-) -> Result<MemoryStateResponse, String> {
-    ensure_memory_tree_files(data_dir)?;
-    let root = memory_tree_files_root(data_dir);
-    let memories = context_files_for_source(data_dir, source_path)?
-        .into_iter()
-        .filter_map(|path| {
-            let text = fs::read_to_string(&path).ok()?.trim().to_string();
-            if text.is_empty() {
-                return None;
-            }
-            let title = path.file_name()?.to_string_lossy().into_owned();
-            Some(MemoryItem {
-                id: path.to_string_lossy().into_owned(),
-                category: "记忆树".to_string(),
-                text,
-                source_path: path.to_string_lossy().into_owned(),
-                title,
-                created_at: String::new(),
-            })
-        })
-        .collect();
-    Ok(MemoryStateResponse {
-        memories,
-        candidates: Vec::new(),
-        memory_folder_path: root.to_string_lossy().into_owned(),
-    })
 }
 
 fn read_memory_tree_files(data_dir: &Path) -> Result<MemoryTreeResponse, String> {

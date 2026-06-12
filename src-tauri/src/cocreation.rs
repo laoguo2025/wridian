@@ -191,8 +191,14 @@ async fn run_cocreation(
         &input.context_items,
     )?;
     check_cocreation_cancelled(request_id)?;
-    let settings = read_active_model_settings(&data_dir, input.selected_model_id.as_deref())?
-        .ok_or_else(|| "请先在模型设置里保存模型账户。".to_string())?;
+    let selected_model_id = input.selected_model_id.clone();
+    let settings_data_dir = data_dir.clone();
+    let settings = tokio::task::spawn_blocking(move || {
+        read_active_model_settings(&settings_data_dir, selected_model_id.as_deref())
+    })
+    .await
+    .map_err(|error| format!("模型设置读取任务失败：{error}"))??
+    .ok_or_else(|| "请先在模型设置里保存模型账户。".to_string())?;
     let memories_used =
         read_relevant_memory_snippets(&data_dir, &input.source_path, &input.title, 8)?;
     let active_context = read_active_context(&data_dir);
@@ -1636,15 +1642,11 @@ fn parse_cocreation_model_output(output: &str) -> Result<ParsedCoCreateResponse,
     let parsed: ModelCoCreateResponse = match serde_json::from_str(trimmed) {
         Ok(parsed) => parsed,
         Err(error) => {
-            if !trimmed.starts_with('{') && !trimmed.starts_with('[') && !trimmed.is_empty() {
-                return Ok(ParsedCoCreateResponse {
-                    reply: trimmed.to_string(),
-                    edits: Vec::new(),
-                    file_operations: Vec::new(),
-                    memories: Vec::new(),
-                });
-            }
-            return Err(format!("对话结果不是有效 JSON：{error}"));
+            let Some(payload) = extract_json_payload(trimmed) else {
+                return Err(format!("对话结果不是有效 JSON：{error}"));
+            };
+            serde_json::from_str(&payload)
+                .map_err(|parse_error| format!("对话结果不是有效 JSON：{parse_error}"))?
         }
     };
     let reply = parsed.reply.unwrap_or_default().trim().to_string();
@@ -1678,6 +1680,85 @@ fn parse_cocreation_model_output(output: &str) -> Result<ParsedCoCreateResponse,
         file_operations: parsed.file_operations,
         memories,
     })
+}
+
+fn extract_json_payload(output: &str) -> Option<String> {
+    let trimmed = output.trim();
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        return Some(trimmed.to_string());
+    }
+    extract_fenced_json_payload(trimmed).or_else(|| extract_balanced_json_payload(trimmed))
+}
+
+fn extract_fenced_json_payload(output: &str) -> Option<String> {
+    let mut rest = output;
+    while let Some(start) = rest.find("```") {
+        let after_start = &rest[start + 3..];
+        let Some(end) = after_start.find("```") else {
+            return None;
+        };
+        let block = strip_fence_language(&after_start[..end]);
+        let candidate = block.trim();
+        if candidate.starts_with('{') || candidate.starts_with('[') {
+            return Some(candidate.to_string());
+        }
+        rest = &after_start[end + 3..];
+    }
+    None
+}
+
+fn strip_fence_language(block: &str) -> &str {
+    let trimmed = block.trim_start();
+    let Some(newline) = trimmed.find('\n') else {
+        return trimmed;
+    };
+    let first_line = trimmed[..newline].trim();
+    let rest = &trimmed[newline + 1..];
+    if first_line.eq_ignore_ascii_case("json")
+        || first_line.chars().all(|char| char.is_ascii_alphabetic())
+    {
+        rest
+    } else {
+        trimmed
+    }
+}
+
+fn extract_balanced_json_payload(output: &str) -> Option<String> {
+    let start = output
+        .char_indices()
+        .find(|(_, char)| matches!(char, '{' | '['))?
+        .0;
+    let mut stack = Vec::new();
+    let mut in_string = false;
+    let mut escaped = false;
+    for (offset, char) in output[start..].char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if char == '\\' {
+                escaped = true;
+            } else if char == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match char {
+            '"' => in_string = true,
+            '{' => stack.push('}'),
+            '[' => stack.push(']'),
+            '}' | ']' => {
+                if stack.pop() != Some(char) {
+                    return None;
+                }
+                if stack.is_empty() {
+                    let end = start + offset + char.len_utf8();
+                    return Some(output[start..end].to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn ensure_parsed_cocreation_response(
@@ -2309,13 +2390,23 @@ mod tests {
     }
 
     #[test]
-    fn parse_cocreation_model_output_uses_plain_text_as_reply() {
-        let parsed = parse_cocreation_model_output("现在的年月日时间是 2026-06-11。")
-            .expect("plain text reply");
+    fn parse_cocreation_model_output_extracts_fenced_json() {
+        let parsed = parse_cocreation_model_output(
+            "好的。\n```json\n{\"reply\":\"现在的年月日时间是 2026-06-11。\",\"edits\":[],\"fileOperations\":[],\"memories\":[]}\n```",
+        )
+        .expect("fenced json reply");
 
         assert_eq!(parsed.reply, "现在的年月日时间是 2026-06-11。");
         assert!(parsed.edits.is_empty());
         assert!(parsed.memories.is_empty());
+    }
+
+    #[test]
+    fn parse_cocreation_model_output_rejects_plain_text_reply() {
+        let error = parse_cocreation_model_output("现在的年月日时间是 2026-06-11。")
+            .expect_err("plain text must not be accepted as structured output");
+
+        assert!(error.contains("不是有效 JSON"));
     }
 
     #[test]

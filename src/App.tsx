@@ -1218,7 +1218,7 @@ function App() {
       return;
     }
     try {
-      await invoke("wridian_open_local_path", { input: { path: `${workspace.runtimePath}\\memory-tree` } });
+      await invoke("wridian_open_memory_tree_folder");
       setMemoryError("");
     } catch (error) {
       setMemoryError(error instanceof Error ? error.message : String(error));

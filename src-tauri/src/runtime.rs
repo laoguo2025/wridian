@@ -251,9 +251,7 @@ mod tests {
 
         let filename = filename_timestamp();
         assert_eq!(filename.len(), "20260612T193001".len());
-        assert!(filename
-            .chars()
-            .all(|ch| ch.is_ascii_digit() || ch == 'T'));
+        assert!(filename.chars().all(|ch| ch.is_ascii_digit() || ch == 'T'));
 
         assert!(unix_timestamp_seconds() > 1_700_000_000);
     }

@@ -1,11 +1,12 @@
 use crate::metadata_index::{read_library_metadata_index, MetadataFile, MetadataLibraryIndex};
+use crate::path_safety::is_symlink_or_reparse;
 use crate::runtime::{ensure_workspace, iso_timestamp, wridian_data_dir};
 use crate::workspace::resolved_knowledge_root;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 const CACHE_SCHEMA_VERSION: u32 = 1;
 const CACHE_DIR: &str = ".wridian";
@@ -60,18 +61,6 @@ pub(crate) struct KnowledgeCacheFile {
     token_count: usize,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct KnowledgeCacheResponse {
-    ok: bool,
-    manifest_path: String,
-    generated_at: String,
-    file_count: usize,
-    link_count: usize,
-    unresolved_link_count: usize,
-    warnings: Vec<String>,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct KnowledgeSearchInput {
@@ -93,27 +82,6 @@ pub(crate) struct KnowledgeSearchHit {
     backlink_count: usize,
     unresolved_count: usize,
     reasons: Vec<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct KnowledgeHotCacheResponse {
-    ok: bool,
-    path: String,
-    updated_at: String,
-    file_count: usize,
-    line_count: usize,
-    warnings: Vec<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct KnowledgeFoldResponse {
-    ok: bool,
-    path: String,
-    created_at: String,
-    source_count: usize,
-    warnings: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -216,17 +184,6 @@ pub(crate) struct KnowledgeSkillCandidate {
 }
 
 #[tauri::command]
-pub(crate) fn wridian_refresh_knowledge_cache() -> Result<KnowledgeCacheResponse, String> {
-    let data_dir = wridian_data_dir()?;
-    ensure_workspace(&data_dir)?;
-    let root = resolved_knowledge_root(&data_dir)?;
-    let index = read_knowledge_index(&root)?;
-    let manifest = build_manifest(&root, &index, read_manifest(&root).ok().as_ref())?;
-    write_manifest(&root, &manifest)?;
-    Ok(cache_response(&root, manifest))
-}
-
-#[tauri::command]
 pub(crate) fn wridian_search_knowledge_bm25(
     input: KnowledgeSearchInput,
 ) -> Result<Vec<KnowledgeSearchHit>, String> {
@@ -235,62 +192,6 @@ pub(crate) fn wridian_search_knowledge_bm25(
     let root = resolved_knowledge_root(&data_dir)?;
     let index = read_knowledge_index(&root)?;
     search_knowledge_bm25(&index, &input.query, input.limit)
-}
-
-#[tauri::command]
-pub(crate) fn wridian_update_knowledge_hot_cache() -> Result<KnowledgeHotCacheResponse, String> {
-    let data_dir = wridian_data_dir()?;
-    ensure_workspace(&data_dir)?;
-    let root = resolved_knowledge_root(&data_dir)?;
-    let index = read_knowledge_index(&root)?;
-    let manifest = build_manifest(&root, &index, read_manifest(&root).ok().as_ref())?;
-    write_manifest(&root, &manifest)?;
-    let updated_at = iso_timestamp();
-    let content = render_hot_cache(&manifest, &index, &updated_at);
-    let path = root.join("hot.md");
-    fs::write(&path, &content).map_err(|error| format!("知识 hot 缓存写入失败：{error}"))?;
-    Ok(KnowledgeHotCacheResponse {
-        ok: true,
-        path: path.to_string_lossy().into_owned(),
-        updated_at,
-        file_count: manifest.files.len(),
-        line_count: content.lines().count(),
-        warnings: manifest.warnings,
-    })
-}
-
-#[tauri::command]
-pub(crate) fn wridian_fold_knowledge_cache() -> Result<KnowledgeFoldResponse, String> {
-    let data_dir = wridian_data_dir()?;
-    ensure_workspace(&data_dir)?;
-    let root = resolved_knowledge_root(&data_dir)?;
-    let index = read_knowledge_index(&root)?;
-    let manifest = build_manifest(&root, &index, read_manifest(&root).ok().as_ref())?;
-    write_manifest(&root, &manifest)?;
-    let created_at = iso_timestamp();
-    let content = render_fold(&manifest, &index, &created_at);
-    let dir = root.join("00知识库治理").join("folds");
-    fs::create_dir_all(&dir).map_err(|error| format!("知识 fold 目录创建失败：{error}"))?;
-    let filename = format!("knowledge-fold-{}.md", compact_timestamp(&created_at));
-    let path = dir.join(filename);
-    fs::write(&path, content).map_err(|error| format!("知识 fold 写入失败：{error}"))?;
-    Ok(KnowledgeFoldResponse {
-        ok: true,
-        path: path.to_string_lossy().into_owned(),
-        created_at,
-        source_count: manifest.files.len(),
-        warnings: manifest.warnings,
-    })
-}
-
-#[tauri::command]
-pub(crate) fn wridian_audit_knowledge_health() -> Result<KnowledgeHealthResponse, String> {
-    let data_dir = wridian_data_dir()?;
-    ensure_workspace(&data_dir)?;
-    let root = resolved_knowledge_root(&data_dir)?;
-    let index = read_knowledge_index(&root)?;
-    let manifest = build_manifest(&root, &index, read_manifest(&root).ok().as_ref())?;
-    Ok(audit_knowledge_health(&index, &manifest, iso_timestamp()))
 }
 
 #[tauri::command]
@@ -433,15 +334,15 @@ fn run_knowledge_health_workflow(
     let checked_at = iso_timestamp();
     let hot_content = render_hot_cache(&manifest, &index, &checked_at);
     let hot_path = root.join("hot.md");
-    fs::write(&hot_path, hot_content).map_err(|error| format!("知识 hot 缓存写入失败：{error}"))?;
+    safe_write_knowledge_file(&root, &hot_path, &hot_content, "知识 hot 缓存")?;
     let fold_content = render_fold(&manifest, &index, &checked_at);
     let fold_dir = root.join("00知识库治理").join("folds");
-    fs::create_dir_all(&fold_dir).map_err(|error| format!("知识 fold 目录创建失败：{error}"))?;
+    safe_create_knowledge_dir(&root, &fold_dir, "知识 fold 目录")?;
     let fold_path = fold_dir.join(format!(
         "knowledge-fold-{}.md",
         compact_timestamp(&checked_at)
     ));
-    fs::write(&fold_path, fold_content).map_err(|error| format!("知识 fold 写入失败：{error}"))?;
+    safe_write_knowledge_file(&root, &fold_path, &fold_content, "知识 fold")?;
     let health = audit_knowledge_health(&index, &manifest, checked_at.clone());
     let auto_fixes = collect_low_risk_knowledge_fixes(&root);
     let pending_fixes = collect_pending_knowledge_fixes(&health);
@@ -450,10 +351,6 @@ fn run_knowledge_health_workflow(
         health_report_timestamp(&checked_at)
     );
     let report_path = root.join(&report_relative_path);
-    if let Some(parent) = report_path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("知识库体检报告目录创建失败：{error}"))?;
-    }
     let report = render_health_report(
         &health,
         &root,
@@ -464,7 +361,7 @@ fn run_knowledge_health_workflow(
         &pending_fixes,
         &applied_fixes,
     );
-    fs::write(&report_path, report).map_err(|error| format!("知识库体检报告写入失败：{error}"))?;
+    safe_write_knowledge_file(&root, &report_path, &report, "知识库体检报告")?;
     Ok(KnowledgeHealthWorkflowResponse {
         ok: true,
         checked_at: health.checked_at,
@@ -531,17 +428,18 @@ fn apply_low_risk_knowledge_fixes(root: &Path) -> Result<Vec<KnowledgeHealthFixI
         match item.id.as_str() {
             id if id.starts_with("create-dir:") => {
                 if let Some(path) = &item.path {
-                    fs::create_dir_all(root.join(path))
-                        .map_err(|error| format!("知识库目录修复失败（{path}）：{error}"))?;
+                    safe_create_knowledge_dir(root, Path::new(path), "知识库目录修复")?;
                 }
             }
             "create-file:知识库使用说明.md" => write_if_missing(
-                &root.join("知识库使用说明.md"),
+                root,
+                Path::new("知识库使用说明.md"),
                 KNOWLEDGE_USAGE_GUIDE,
                 "知识库使用说明",
             )?,
             "create-file:00知识库治理/调用记录台账.md" => write_if_missing(
-                &root.join("00知识库治理").join("调用记录台账.md"),
+                root,
+                Path::new("00知识库治理").join("调用记录台账.md").as_path(),
                 CALL_LOG_TEMPLATE,
                 "调用记录台账",
             )?,
@@ -551,14 +449,148 @@ fn apply_low_risk_knowledge_fixes(root: &Path) -> Result<Vec<KnowledgeHealthFixI
     Ok(planned)
 }
 
-fn write_if_missing(path: &Path, content: &str, label: &str) -> Result<(), String> {
-    if path.exists() {
+fn write_if_missing(root: &Path, path: &Path, content: &str, label: &str) -> Result<(), String> {
+    let target = resolve_knowledge_target(root, path, label)?;
+    if target.exists() {
+        ensure_safe_knowledge_write_target(root, &target, label)?;
         return Ok(());
     }
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| format!("{label}目录创建失败：{error}"))?;
+    safe_write_knowledge_file(root, &target, content, label)
+}
+
+fn safe_write_knowledge_file(
+    root: &Path,
+    path: &Path,
+    content: &str,
+    label: &str,
+) -> Result<(), String> {
+    let target = resolve_knowledge_target(root, path, label)?;
+    ensure_safe_knowledge_parent(root, &target, label)?;
+    ensure_safe_knowledge_write_target(root, &target, label)?;
+    fs::write(target, content).map_err(|error| format!("{label}写入失败：{error}"))
+}
+
+fn safe_create_knowledge_dir(root: &Path, path: &Path, label: &str) -> Result<(), String> {
+    let root = canonical_knowledge_root(root, label)?;
+    let target = resolve_knowledge_target_from_canonical_root(&root, path, label)?;
+    let relative = target
+        .strip_prefix(&root)
+        .map_err(|_| format!("{label}路径不在知识库根目录内。"))?;
+    let mut current = root;
+    for component in relative.components() {
+        let Component::Normal(segment) = component else {
+            return Err(format!("{label}路径包含非法片段。"));
+        };
+        current.push(segment);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) => {
+                if is_symlink_or_reparse(&metadata) {
+                    return Err(format!("{label}不能指向符号链接或重解析点。"));
+                }
+                if !metadata.is_dir() {
+                    return Err(format!("{label}路径已存在但不是目录。"));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                fs::create_dir(&current).map_err(|error| format!("{label}创建失败：{error}"))?;
+            }
+            Err(error) => return Err(format!("{label}路径检查失败：{error}")),
+        }
     }
-    fs::write(path, content).map_err(|error| format!("{label}写入失败：{error}"))
+    Ok(())
+}
+
+fn ensure_safe_knowledge_parent(root: &Path, path: &Path, label: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        safe_create_knowledge_dir(root, parent, &format!("{label}目录"))?;
+    }
+    Ok(())
+}
+
+fn ensure_safe_knowledge_write_target(root: &Path, path: &Path, label: &str) -> Result<(), String> {
+    let target = resolve_knowledge_target(root, path, label)?;
+    if let Ok(metadata) = fs::symlink_metadata(&target) {
+        if is_symlink_or_reparse(&metadata) {
+            return Err(format!("{label}不能写入符号链接或重解析点。"));
+        }
+        if metadata.is_dir() {
+            return Err(format!("{label}目标已存在但不是文件。"));
+        }
+    }
+    Ok(())
+}
+
+fn canonical_knowledge_root(root: &Path, label: &str) -> Result<PathBuf, String> {
+    root.canonicalize()
+        .map_err(|error| format!("{label}知识库根目录解析失败：{error}"))
+}
+
+fn resolve_knowledge_target(root: &Path, path: &Path, label: &str) -> Result<PathBuf, String> {
+    let root = canonical_knowledge_root(root, label)?;
+    resolve_knowledge_target_from_canonical_root(&root, path, label)
+}
+
+fn resolve_knowledge_target_from_canonical_root(
+    root: &Path,
+    path: &Path,
+    label: &str,
+) -> Result<PathBuf, String> {
+    Ok(root.join(relative_knowledge_path(root, path, label)?))
+}
+
+fn relative_knowledge_path(root: &Path, path: &Path, label: &str) -> Result<PathBuf, String> {
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(format!("{label}路径包含非法片段。"));
+    }
+    let relative = if path.is_absolute() {
+        strip_prefix_compatible(path, root)
+            .ok_or_else(|| format!("{label}路径不在知识库根目录内。"))?
+    } else {
+        path.to_path_buf()
+    };
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(format!("{label}路径包含非法片段。"));
+    }
+    Ok(relative)
+}
+
+fn strip_prefix_compatible(path: &Path, root: &Path) -> Option<PathBuf> {
+    path.strip_prefix(root)
+        .ok()
+        .map(Path::to_path_buf)
+        .or_else(|| {
+            let root_text = normalize_path_prefix_text(root);
+            let path_text = normalize_path_prefix_text(path);
+            if path_text.eq_ignore_ascii_case(&root_text) {
+                return Some(PathBuf::new());
+            }
+            let root_with_separator = if root_text.ends_with('\\') || root_text.ends_with('/') {
+                root_text
+            } else {
+                format!("{root_text}\\")
+            };
+            if path_text
+                .to_ascii_lowercase()
+                .starts_with(&root_with_separator.to_ascii_lowercase())
+            {
+                let byte_start = root_with_separator.len();
+                return Some(PathBuf::from(&path_text[byte_start..]));
+            }
+            None
+        })
+}
+
+fn normalize_path_prefix_text(path: &Path) -> String {
+    path.to_string_lossy()
+        .trim_start_matches(r"\\?\")
+        .replace('/', r"\")
 }
 
 fn collect_pending_knowledge_fixes(
@@ -1250,27 +1282,15 @@ fn read_manifest(root: &Path) -> Result<KnowledgeCacheManifest, String> {
 
 fn write_manifest(root: &Path, manifest: &KnowledgeCacheManifest) -> Result<(), String> {
     let dir = root.join(CACHE_DIR);
-    fs::create_dir_all(&dir).map_err(|error| format!("知识缓存目录创建失败：{error}"))?;
+    safe_create_knowledge_dir(root, &dir, "知识缓存目录")?;
     let content = serde_json::to_string_pretty(manifest)
         .map_err(|error| format!("知识缓存序列化失败：{error}"))?;
-    fs::write(dir.join(MANIFEST_FILE), content)
-        .map_err(|error| format!("知识缓存 manifest 写入失败：{error}"))
-}
-
-fn cache_response(root: &Path, manifest: KnowledgeCacheManifest) -> KnowledgeCacheResponse {
-    KnowledgeCacheResponse {
-        ok: true,
-        manifest_path: root
-            .join(CACHE_DIR)
-            .join(MANIFEST_FILE)
-            .to_string_lossy()
-            .into_owned(),
-        generated_at: manifest.generated_at,
-        file_count: manifest.files.len(),
-        link_count: manifest.link_count,
-        unresolved_link_count: manifest.unresolved_link_count,
-        warnings: manifest.warnings,
-    }
+    safe_write_knowledge_file(
+        root,
+        &dir.join(MANIFEST_FILE),
+        &content,
+        "知识缓存 manifest",
+    )
 }
 
 fn search_knowledge_bm25(
@@ -1743,12 +1763,20 @@ fn health_report_timestamp(value: &str) -> String {
     {
         return format!(
             "{}{}{}{}{}{}{}{}T{}{}{}{}{}{}",
-            chars[0], chars[1], chars[2], chars[3],
-            chars[5], chars[6],
-            chars[8], chars[9],
-            chars[11], chars[12],
-            chars[14], chars[15],
-            chars[17], chars[18]
+            chars[0],
+            chars[1],
+            chars[2],
+            chars[3],
+            chars[5],
+            chars[6],
+            chars[8],
+            chars[9],
+            chars[11],
+            chars[12],
+            chars[14],
+            chars[15],
+            chars[17],
+            chars[18]
         );
     }
     compact_timestamp(value)
@@ -2004,6 +2032,37 @@ mod tests {
         );
         assert!(root.join("00知识库治理").join("调用记录台账.md").is_file());
         assert!(collect_low_risk_knowledge_fixes(&root).is_empty());
+    }
+
+    #[test]
+    fn safe_knowledge_write_rejects_linked_parent_when_available() {
+        let root = temp_root("safe-write-root");
+        let outside = temp_root("safe-write-outside");
+        let linked = root.join("00知识库治理");
+
+        if create_dir_link(&outside, &linked).is_err() {
+            return;
+        }
+
+        let result = safe_write_knowledge_file(
+            &root,
+            &linked.join("调用记录台账.md"),
+            CALL_LOG_TEMPLATE,
+            "调用记录台账",
+        );
+
+        assert!(result.is_err());
+        assert!(!outside.join("调用记录台账.md").exists());
+    }
+
+    #[cfg(windows)]
+    fn create_dir_link(target: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::windows::fs::symlink_dir(target, link)
+    }
+
+    #[cfg(unix)]
+    fn create_dir_link(target: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(target, link)
     }
 
     #[test]

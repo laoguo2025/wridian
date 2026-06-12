@@ -177,12 +177,6 @@ pub(crate) struct SelectActiveModelInput {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct TestModelProviderInput {
-    provider_id: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub(crate) struct TestModelProviderConfigInput {
     #[serde(default)]
     provider_id: String,
@@ -408,40 +402,6 @@ pub(crate) fn wridian_delete_model_provider(
 }
 
 #[tauri::command]
-pub(crate) async fn wridian_test_model_provider(
-    input: TestModelProviderInput,
-) -> Result<TestModelProviderResponse, String> {
-    let data_dir = wridian_data_dir()?;
-    ensure_workspace(&data_dir)?;
-    let file = read_model_accounts_file(&data_dir)?;
-    let provider = file
-        .providers
-        .iter()
-        .find(|provider| provider.id == input.provider_id)
-        .ok_or_else(|| "供应商配置不存在。".to_string())?;
-    let model = provider
-        .models
-        .first()
-        .ok_or_else(|| "请先为该供应商填写至少一个模型。".to_string())?;
-    let api_key = read_provider_secret(provider)?;
-    if api_key.trim().is_empty() {
-        return Err("请先保存该供应商的 API Key 或访问令牌。".to_string());
-    }
-    let settings = ActiveModelSettings {
-        provider_id: provider.id.clone(),
-        provider_name: provider.provider_name.clone(),
-        protocol: provider.protocol.clone(),
-        auth_style: provider.auth_style.clone(),
-        base_url: provider.base_url.clone(),
-        api_key,
-        model: resolve_provider_model(provider, model),
-        model_id: model_config_id(&provider.id, model),
-        extra_env: provider.extra_env.clone(),
-    };
-    test_model_chat(&settings).await
-}
-
-#[tauri::command]
 pub(crate) async fn wridian_test_model_provider_config(
     input: TestModelProviderConfigInput,
 ) -> Result<TestModelProviderResponse, String> {
@@ -463,10 +423,11 @@ pub(crate) async fn wridian_test_model_provider_config(
         .ok_or_else(|| "至少需要配置一个模型。".to_string())?;
     let mut api_key = input.api_key.trim().to_string();
     if api_key.is_empty() {
-        api_key = existing
-            .map(read_provider_secret)
-            .transpose()?
-            .unwrap_or_default();
+        if let Some(provider) = existing.cloned() {
+            api_key = tokio::task::spawn_blocking(move || read_provider_secret(&provider))
+                .await
+                .map_err(|error| format!("模型凭据读取任务失败：{error}"))??;
+        }
     }
     if api_key.trim().is_empty() {
         return Err("请先填写或保存该服务的 API Key / Token。".to_string());
@@ -641,7 +602,7 @@ pub(crate) async fn wridian_openai_oauth_start() -> Result<OpenAiOauthStartRespo
         return Err(format!(
             "OpenAI device code 请求失败：HTTP {} {}",
             status.as_u16(),
-            body.chars().take(240).collect::<String>()
+            response_body_summary(&body)
         ));
     }
     let value: Value = serde_json::from_str(&body)
@@ -1009,7 +970,7 @@ fn model_accounts_status(data_dir: &Path) -> Result<ModelAccountsStatus, String>
 }
 
 fn provider_status(provider: &StoredModelProviderFile) -> Result<ModelProviderStatus, String> {
-    let api_key = read_provider_secret(provider)?;
+    let api_key = read_provider_secret_for_status(provider)?;
     Ok(ModelProviderStatus {
         id: provider.id.clone(),
         preset_key: provider.preset_key.clone(),
@@ -1195,6 +1156,28 @@ fn read_provider_secret(provider: &StoredModelProviderFile) -> Result<String, St
     read_provider_api_key(&provider.id)
 }
 
+fn read_provider_secret_for_status(provider: &StoredModelProviderFile) -> Result<String, String> {
+    if normalize_auth_style(&provider.auth_style) != "oauth_external" {
+        return read_provider_api_key(&provider.id);
+    }
+    if provider.id == ANTHROPIC_OAUTH_PROVIDER_ID {
+        return Ok(read_anthropic_oauth_credentials()?
+            .map(|credentials| credentials.access_token)
+            .unwrap_or_default());
+    }
+    if provider.id == OPENAI_OAUTH_PROVIDER_ID {
+        return Ok(read_openai_oauth_credentials()?
+            .map(|credentials| credentials.access_token)
+            .unwrap_or_default());
+    }
+    if provider.id == GOOGLE_GEMINI_OAUTH_PROVIDER_ID {
+        return Ok(read_google_oauth_credentials()?
+            .map(|credentials| credentials.access_token)
+            .unwrap_or_default());
+    }
+    read_provider_api_key(&provider.id)
+}
+
 pub(crate) fn is_openai_oauth_settings(settings: &ActiveModelSettings) -> bool {
     settings.provider_id == OPENAI_OAUTH_PROVIDER_ID
         && normalize_auth_style(&settings.auth_style) == "oauth_external"
@@ -1250,7 +1233,7 @@ fn get_valid_anthropic_oauth_access_token() -> Result<String, String> {
         return Err(format!(
             "Anthropic OAuth token 刷新失败：HTTP {} {}",
             status.as_u16(),
-            body.chars().take(240).collect::<String>()
+            response_body_summary(&body)
         ));
     }
     let value: Value = serde_json::from_str(&body)
@@ -1327,7 +1310,7 @@ fn get_valid_openai_oauth_access_token() -> Result<String, String> {
         return Err(format!(
             "OpenAI OAuth token 刷新失败：HTTP {} {}",
             status.as_u16(),
-            body.chars().take(240).collect::<String>()
+            response_body_summary(&body)
         ));
     }
     let value: Value = serde_json::from_str(&body)
@@ -1413,7 +1396,7 @@ fn get_valid_google_oauth_access_token() -> Result<String, String> {
             return Err(format!(
                 "Gemini OAuth token 刷新失败：HTTP {} {}",
                 status.as_u16(),
-                body.chars().take(240).collect::<String>()
+                response_body_summary(&body)
             ));
         }
         let value: Value = serde_json::from_str(&body)
@@ -1809,7 +1792,7 @@ async fn poll_openai_device_authorization(
             return Err(format!(
                 "OpenAI device auth 轮询失败：HTTP {} {}",
                 status.as_u16(),
-                body.chars().take(240).collect::<String>()
+                response_body_summary(&body)
             ));
         }
         if started.elapsed() >= max_wait {
@@ -1852,7 +1835,7 @@ async fn exchange_anthropic_oauth_code(
         return Err(format!(
             "Anthropic OAuth token 交换失败：HTTP {} {}",
             status.as_u16(),
-            body.chars().take(240).collect::<String>()
+            response_body_summary(&body)
         ));
     }
     serde_json::from_str(&body)
@@ -1889,7 +1872,7 @@ async fn exchange_openai_oauth_code(
         return Err(format!(
             "OpenAI OAuth token 交换失败：HTTP {} {}",
             status.as_u16(),
-            body.chars().take(240).collect::<String>()
+            response_body_summary(&body)
         ));
     }
     serde_json::from_str(&body)
@@ -1929,7 +1912,7 @@ async fn exchange_google_oauth_code(
         return Err(format!(
             "Gemini OAuth token 交换失败：HTTP {} {}",
             status.as_u16(),
-            body.chars().take(240).collect::<String>()
+            response_body_summary(&body)
         ));
     }
     serde_json::from_str(&body)
@@ -2366,6 +2349,7 @@ fn truthy_env(value: Option<&String>) -> bool {
 }
 
 pub(crate) fn response_body_summary(body: &str) -> String {
+    let body = redact_response_body(body);
     let mut text = body
         .replace("<br>", "\n")
         .replace("<br/>", "\n")
@@ -2376,6 +2360,62 @@ pub(crate) fn response_body_summary(body: &str) -> String {
     }
     let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
     compact.chars().take(240).collect()
+}
+
+fn redact_response_body(body: &str) -> String {
+    if let Ok(mut value) = serde_json::from_str::<Value>(body) {
+        redact_json_value(&mut value);
+        return serde_json::to_string(&value).unwrap_or_else(|_| "<响应已脱敏>".to_string());
+    }
+    body.split_whitespace()
+        .map(redact_response_token)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn redact_json_value(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            for (key, value) in object {
+                if is_sensitive_response_key(key) {
+                    *value = Value::String("<redacted>".to_string());
+                } else {
+                    redact_json_value(value);
+                }
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                redact_json_value(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_sensitive_response_key(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    key.contains("token")
+        || key.contains("secret")
+        || key.contains("api_key")
+        || key.contains("apikey")
+        || key == "key"
+        || key == "authorization"
+        || key == "password"
+}
+
+fn redact_response_token(token: &str) -> String {
+    let lower = token.to_ascii_lowercase();
+    if lower.starts_with("bearer ") || lower.starts_with("sk-") || lower.starts_with("xox") {
+        return "<redacted>".to_string();
+    }
+    if token.chars().count() >= 48
+        && token.chars().any(|char| char.is_ascii_digit())
+        && token.chars().any(|char| char.is_ascii_alphabetic())
+    {
+        return "<redacted>".to_string();
+    }
+    token.to_string()
 }
 
 fn mask_api_key(api_key: &str) -> String {
@@ -3086,6 +3126,16 @@ mod tests {
     fn response_body_summary_strips_simple_html_error() {
         let body = "<html><head><title>404 Not Found</title></head><body><center><h1>404 Not Found</h1></center></body></html>";
         assert_eq!(response_body_summary(body), "404 Not Found 404 Not Found");
+    }
+
+    #[test]
+    fn response_body_summary_redacts_sensitive_json_fields() {
+        let body = r#"{"error":{"message":"bad token"},"access_token":"sk-test-secret","nested":{"refresh_token":"refresh-secret"}}"#;
+        let summary = response_body_summary(body);
+
+        assert!(summary.contains("<redacted>"));
+        assert!(!summary.contains("sk-test-secret"));
+        assert!(!summary.contains("refresh-secret"));
     }
 
     #[test]

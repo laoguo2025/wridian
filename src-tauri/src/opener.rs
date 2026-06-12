@@ -1,6 +1,7 @@
 use crate::runtime::{ensure_workspace, runtime_root, vault_root, wridian_data_dir};
 use crate::workspace::{read_active_work_root, resolved_knowledge_root};
 use serde::Deserialize;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Deserialize)]
@@ -16,6 +17,16 @@ pub(crate) fn wridian_open_local_path(input: OpenLocalPathInput) -> Result<(), S
     let path = allowed_local_open_path(&data_dir, &input.path)?;
     tauri_plugin_opener::open_path(path, None::<&str>)
         .map_err(|error| format!("打开本地路径失败：{error}"))
+}
+
+#[tauri::command]
+pub(crate) fn wridian_open_memory_tree_folder() -> Result<(), String> {
+    let data_dir = wridian_data_dir()?;
+    ensure_workspace(&data_dir)?;
+    let path = runtime_root(&data_dir).join("memory-tree");
+    fs::create_dir_all(&path).map_err(|error| format!("记忆文件夹创建失败：{error}"))?;
+    tauri_plugin_opener::open_path(path.to_string_lossy().into_owned(), None::<&str>)
+        .map_err(|error| format!("打开记忆文件夹失败：{error}"))
 }
 
 fn allowed_local_open_path(data_dir: &Path, requested: &str) -> Result<String, String> {

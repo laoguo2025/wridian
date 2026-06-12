@@ -171,7 +171,26 @@ export function ModelSettingsDialog({
                     key={provider.id}
                     name={provider.providerName}
                     description={preset?.descriptionZh || protocolLabel(provider.protocol)}
-                    action={<button type="button" className="mini-action danger" onClick={() => void deleteProvider(provider)} disabled={busyProviderId === provider.id}>断开</button>}
+                    action={
+                      <>
+                        <button
+                          type="button"
+                          className="mini-action"
+                          onClick={() => {
+                            if (!preset) {
+                              setMessage("该服务缺少接入预设，无法编辑。");
+                              return;
+                            }
+                            setConnectPreset(preset);
+                            setEditingProvider(provider);
+                          }}
+                          disabled={busyProviderId === provider.id}
+                        >
+                          编辑
+                        </button>
+                        <button type="button" className="mini-action danger" onClick={() => void deleteProvider(provider)} disabled={busyProviderId === provider.id}>断开</button>
+                      </>
+                    }
                   />
                 );
               })}
@@ -493,11 +512,11 @@ function PresetConnectDialog({
         </button>
         {showAdvanced ? (
           <div className="provider-catalog-details">
-            <div><span>preset</span><strong>{preset.key}</strong></div>
-            <div><span>authStyle</span><strong>{preset.authStyle}</strong></div>
-            <div><span>env</span><strong>{Object.keys(preset.defaultEnvOverrides).length ? JSON.stringify(preset.defaultEnvOverrides) : "{}"}</strong></div>
-            {preset.meta?.docsUrl ? <div><span>docs</span><button type="button" onClick={() => void onExternal(preset.meta?.docsUrl)}>打开文档</button></div> : null}
-            {preset.meta?.apiKeyUrl ? <div><span>key/login</span><button type="button" onClick={() => void onExternal(preset.meta?.apiKeyUrl)}>打开控制台</button></div> : null}
+            <div><span>服务标识</span><strong>{preset.key}</strong></div>
+            <div><span>授权方式</span><strong>{accessTypeLabel(preset)}</strong></div>
+            <div><span>附加参数</span><strong>{Object.keys(preset.defaultEnvOverrides).length ? JSON.stringify(preset.defaultEnvOverrides) : "无"}</strong></div>
+            {preset.meta?.docsUrl ? <div><span>文档</span><button type="button" onClick={() => void onExternal(preset.meta?.docsUrl)}>打开文档</button></div> : null}
+            {preset.meta?.apiKeyUrl ? <div><span>控制台</span><button type="button" onClick={() => void onExternal(preset.meta?.apiKeyUrl)}>打开控制台</button></div> : null}
             {preset.meta?.notes?.map((note) => <p key={note}>{note}</p>)}
           </div>
         ) : null}

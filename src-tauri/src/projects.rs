@@ -38,19 +38,6 @@ pub(crate) struct ProjectState {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct SaveProjectInput {
-    id: Option<String>,
-    name: String,
-    description: Option<String>,
-    model: Option<String>,
-    system_prompt: Option<String>,
-    inclusions: Option<Vec<String>>,
-    exclusions: Option<Vec<String>>,
-    web_urls: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub(crate) struct SelectProjectInput {
     id: Option<String>,
 }
@@ -101,49 +88,6 @@ pub(crate) fn wridian_get_project_state() -> Result<ProjectState, String> {
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
     read_project_state(&data_dir)
-}
-
-#[tauri::command]
-pub(crate) fn wridian_save_project(input: SaveProjectInput) -> Result<ProjectState, String> {
-    let data_dir = wridian_data_dir()?;
-    ensure_workspace(&data_dir)?;
-    let mut state = read_project_state(&data_dir)?;
-    let id = input
-        .id
-        .map(|id| sanitize_id(&id))
-        .filter(|id| !id.is_empty())
-        .unwrap_or_else(|| format!("project-{}", chrono_like_timestamp()));
-    let project = ProjectConfig {
-        id: id.clone(),
-        name: input.name.trim().to_string(),
-        description: input.description.unwrap_or_default().trim().to_string(),
-        model: input.model.and_then(|model| {
-            let trimmed = model.trim().to_string();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed)
-            }
-        }),
-        system_prompt: input.system_prompt.unwrap_or_default().trim().to_string(),
-        inclusions: normalize_patterns(input.inclusions.unwrap_or_default()),
-        exclusions: normalize_patterns(input.exclusions.unwrap_or_default()),
-        web_urls: normalize_patterns(input.web_urls.unwrap_or_default()),
-        updated_at: crate::runtime::iso_timestamp(),
-    };
-    if project.name.is_empty() {
-        return Err("项目名称不能为空。".to_string());
-    }
-    if let Some(existing) = state.projects.iter_mut().find(|item| item.id == id) {
-        *existing = project;
-    } else {
-        state.projects.push(project);
-    }
-    if state.active_project_id.is_none() {
-        state.active_project_id = Some(id);
-    }
-    write_project_state(&data_dir, &state)?;
-    Ok(state)
 }
 
 #[tauri::command]
@@ -754,38 +698,8 @@ fn best_snippet(content: &str, terms: &HashSet<String>) -> String {
         .collect()
 }
 
-fn normalize_patterns(patterns: Vec<String>) -> Vec<String> {
-    patterns
-        .into_iter()
-        .map(|pattern| pattern.trim().trim_matches('"').to_string())
-        .filter(|pattern| !pattern.is_empty())
-        .collect()
-}
-
 fn normalize_path_text(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/").to_lowercase()
-}
-
-fn sanitize_id(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| {
-            if ch.is_alphanumeric() || ch == '-' || ch == '_' {
-                ch
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>()
-        .trim_matches('-')
-        .to_string()
-}
-
-fn chrono_like_timestamp() -> String {
-    crate::runtime::iso_timestamp()
-        .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
-        .collect()
 }
 
 #[cfg(test)]
