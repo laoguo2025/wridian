@@ -1008,7 +1008,7 @@ fn build_cocreation_prompt(
 
     let source_label = prompt_source_label(&input.source_path, &input.title);
     format!(
-        "稿件类型：{}\n当前文件：{}\n来源路径：{}\n\n上下文编译顺序：当前稿件/选区 → 作品库和知识库文件树 → 规则路由 → 项目记忆 → 最近对话现场 → 压缩记忆 → 已选知识卡 → 点名文件 → 技能规则 → 用户请求。每个槽位独立预算，超预算时按此优先级裁剪，不把作品记忆、知识卡、规则路由和技能规则混写。\n\n规则路由协议：WRIDIAN.md、AGENT.md、AGENTS.md 定义当前库内的长期行动规则；index.md 和 hot.md 定义当前库的导航与近期上下文。规则路由只说明如何工作和如何定位资料，不等于把知识卡写入作品记忆。\n\n技能工作流协议：当 [9 技能规则] 非空时，所选技能必须按可执行工作流处理，不得只输出泛泛建议。先确认输入和扫描范围，再给出产物清单；需要落地文件时必须返回 fileOperations；完成后在 reply 中说明质量检查结果和回滚方式。技能产物优先写入当前库内相对路径：作品拆解进入知识库 02拆解报告，知识卡进入知识库 03-07，作者/大神 skill 进入知识库 08大神蒸馏，知识库体检进入 00知识库治理。不能验证来源、关联、frontmatter 或可分发性时，不得声称完成，只能输出待补缺口。\n\n文件树权限协议：用户在对话中提到作品库或知识库文件树内的文件时，Wridian 可以在当前库内读取该文件内容，并可通过 fileOperations 增、改、重命名或移到回收站。无需默认展示文件内容给用户；需要说明时只说明操作结果。\n\n文件树操作协议：如需增、改、删文件树，必须在 fileOperations 数组里返回操作，不要只在 reply 里描述。只允许相对路径，不允许绝对路径或 ..。action 只能是 writeFile、createFolder、rename、trash；library 只能是 works 或 knowledge；writeFile 只能写 md、txt、docx；rename 需要 newName；writeFile 需要 content；trash 表示移到库内 .wridian-trash 回收站。\n\n输出格式：必须返回 json object，字段为 reply、edits、fileOperations、memories。\n\n[1 当前稿件与选区]\n{}\n\n[2 作品库和知识库文件树]\n{}\n\n[3 规则路由]\n{}\n\n[4 项目记忆]\n{}\n\n[5 最近对话现场]\n{}\n\n[6 压缩记忆]\n{}\n\n[7 已选知识卡]\n{}\n\n[8 点名文件]\n{}\n\n[9 技能规则]\n{}\n\n[10 用户请求]\n{}",
+        "稿件类型：{}\n当前文件：{}\n来源路径：{}\n\n上下文编译顺序：当前稿件/选区 → 作品库和知识库文件树 → 规则路由 → 项目记忆 → 最近对话现场 → 压缩记忆 → 已选知识卡 → 点名文件 → 技能规则 → 用户请求。每个槽位独立预算，超预算时按此优先级裁剪，不把作品记忆、知识卡、规则路由和技能规则混写。\n\n规则路由协议：WRIDIAN.md、AGENT.md、AGENTS.md 定义当前库内的长期行动规则；index.md 和 hot.md 定义当前库的导航与近期上下文。规则路由只说明如何工作和如何定位资料，不等于把知识卡写入作品记忆。\n\n技能工作流协议：当 [9 技能规则] 非空时，所选技能必须按可执行工作流处理，不得只输出泛泛建议。先确认输入和扫描范围，再给出产物清单；需要落地文件时必须返回 fileOperations；完成后在 reply 中说明质量检查结果和回滚方式。技能产物优先写入当前库内相对路径：作品拆解进入知识库 02拆解报告，知识卡进入知识库 03-07，作者/大神 skill 进入知识库 08大神蒸馏，知识库体检进入 00知识库治理。不能验证来源、关联、frontmatter 或可分发性时，不得声称完成，只能输出待补缺口。\n\n文件树权限协议：用户在对话中提到作品库或知识库文件树内的文件时，Wridian 可以在当前库内读取该文件内容，并可通过 fileOperations 增、改、重命名或移到回收站。无需默认展示文件内容给用户；需要说明时只说明操作结果。\n\n文件树操作协议：如需增、改、删文件树，必须在 fileOperations 数组里返回操作，不要只在 reply 里描述。只允许相对路径，不允许绝对路径或 ..。action 只能是 writeFile、createFolder、rename、trash；library 只能是 works 或 knowledge；writeFile 只能写 md、txt、docx；rename 需要 newName；writeFile 需要 content；trash 表示移到用户本机系统回收站，不创建库内 .wridian-trash。\n\n输出格式：必须返回 json object，字段为 reply、edits、fileOperations、memories。\n\n[1 当前稿件与选区]\n{}\n\n[2 作品库和知识库文件树]\n{}\n\n[3 规则路由]\n{}\n\n[4 项目记忆]\n{}\n\n[5 最近对话现场]\n{}\n\n[6 压缩记忆]\n{}\n\n[7 已选知识卡]\n{}\n\n[8 点名文件]\n{}\n\n[9 技能规则]\n{}\n\n[10 用户请求]\n{}",
         draft_kind,
         input.title,
         source_label,
@@ -1391,7 +1391,7 @@ fn apply_model_file_operation(
             })
         }
         "trash" => apply_workspace_trash_node(data_dir, &library, &path)
-            .map(|path| format!("已移到回收站 {}", path.to_string_lossy())),
+            .map(|path| format!("已移到系统回收站 {}", path.to_string_lossy())),
         _ => Err("未知文件操作 action。".to_string()),
     };
     let applied = match result {

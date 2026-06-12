@@ -287,24 +287,19 @@ pub(crate) fn wridian_rename_work_node(input: RenameNodeInput) -> Result<Workspa
 pub(crate) fn wridian_trash_work_node(input: FilePathInput) -> Result<WorkspaceInfo, String> {
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
-    let source = resolve_allowed_existing_node(&data_dir, &input.path)?;
+    trash_workspace_node(&data_dir, &input.path)?;
+    workspace_info(&data_dir)
+}
+
+fn trash_workspace_node(data_dir: &Path, path: &str) -> Result<(), String> {
+    let source = resolve_allowed_existing_node(data_dir, path)?;
     let root = containing_work_root(&data_dir, &source)?
         .ok_or_else(|| "文件不在当前 Wridian 工作目录内。".to_string())?;
     if source == root {
         return Err("不能移动工作区根目录。".to_string());
     }
-    let trash = root.join(".wridian-trash");
-    fs::create_dir_all(&trash).map_err(|error| format!("回收站创建失败：{error}"))?;
-    let name = source
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .ok_or_else(|| "不能移动工作区根目录。".to_string())?;
-    let target = unique_child_path(
-        &trash,
-        &format!("{}-{name}", crate::runtime::filename_timestamp()),
-    );
-    fs::rename(&source, &target).map_err(|error| format!("移到回收站失败：{error}"))?;
-    workspace_info(&data_dir)
+    move_workspace_node_to_system_trash(&source)?;
+    Ok(())
 }
 
 pub(crate) fn read_workspace_file_trees(data_dir: &Path) -> Result<Vec<WorkFileNode>, String> {
@@ -389,18 +384,8 @@ pub(crate) fn apply_workspace_trash_node(
     if source == root {
         return Err("不能移动库根目录。".to_string());
     }
-    let trash = root.join(".wridian-trash");
-    fs::create_dir_all(&trash).map_err(|error| format!("回收站创建失败：{error}"))?;
-    let name = source
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .ok_or_else(|| "不能移动库根目录。".to_string())?;
-    let target = unique_child_path(
-        &trash,
-        &format!("{}-{name}", crate::runtime::filename_timestamp()),
-    );
-    fs::rename(&source, &target).map_err(|error| format!("移到回收站失败：{error}"))?;
-    Ok(target)
+    move_workspace_node_to_system_trash(&source)?;
+    Ok(source)
 }
 
 fn workspace_info(data_dir: &Path) -> Result<WorkspaceInfo, String> {
@@ -712,6 +697,20 @@ fn should_skip_entry(name: &str) -> bool {
         name,
         ".git" | "node_modules" | ".wridian" | ".wridian-trash"
     ) || name.starts_with('.')
+}
+
+#[cfg(not(test))]
+fn move_workspace_node_to_system_trash(path: &Path) -> Result<(), String> {
+    trash::delete(path).map_err(|error| format!("移到系统回收站失败：{error}"))
+}
+
+#[cfg(test)]
+fn move_workspace_node_to_system_trash(path: &Path) -> Result<(), String> {
+    if path.is_dir() {
+        fs::remove_dir_all(path).map_err(|error| format!("测试回收站删除失败：{error}"))
+    } else {
+        fs::remove_file(path).map_err(|error| format!("测试回收站删除失败：{error}"))
+    }
 }
 
 fn should_skip_workspace_tree_node(library: &str, relative_path: &str) -> bool {
@@ -1366,6 +1365,69 @@ mod tests {
     }
 
     #[test]
+    fn workspace_trash_moves_to_system_trash_without_local_trash_folder() {
+        let data_dir = temp_data_dir("system-trash");
+        let work_root = data_dir.join("user-works");
+        let knowledge_root = data_dir.join("user-knowledge");
+        fs::create_dir_all(&work_root).expect("create work root");
+        fs::create_dir_all(&knowledge_root).expect("create knowledge root");
+        let work_file = work_root.join("旧稿.md");
+        let knowledge_file = knowledge_root.join("旧卡.md");
+        fs::write(&work_file, "旧稿").expect("write work file");
+        fs::write(&knowledge_file, "旧卡").expect("write knowledge file");
+        fs::create_dir_all(crate::runtime::runtime_root(&data_dir)).expect("create runtime");
+        fs::write(
+            workspace_config_path(&data_dir),
+            serde_json::json!({
+                "schemaVersion": 1,
+                "activeWorkRoot": work_root.to_string_lossy(),
+                "knowledgeRoot": knowledge_root.to_string_lossy()
+            })
+            .to_string(),
+        )
+        .expect("write workspace config");
+
+        trash_workspace_node(&data_dir, &work_file.to_string_lossy()).expect("trash work file");
+        let info = workspace_info(&data_dir).expect("workspace info");
+        assert!(!work_file.exists());
+        assert!(!work_root.join(".wridian-trash").exists());
+        assert!(!info.files.iter().any(|node| node.name == "旧稿.md"));
+
+        let removed = apply_workspace_trash_node(&data_dir, "knowledge", "旧卡.md")
+            .expect("trash knowledge file");
+        assert_eq!(removed.file_name(), knowledge_file.file_name());
+        assert_eq!(
+            removed.parent().and_then(Path::file_name),
+            knowledge_file.parent().and_then(Path::file_name)
+        );
+        assert!(!knowledge_file.exists());
+        assert!(!knowledge_root.join(".wridian-trash").exists());
+    }
+
+    #[test]
+    fn workspace_trash_rejects_roots_and_outside_paths() {
+        let data_dir = temp_data_dir("system-trash-boundary");
+        let work_root = data_dir.join("user-works");
+        let outside = data_dir.join("outside.md");
+        fs::create_dir_all(&work_root).expect("create work root");
+        fs::write(&outside, "outside").expect("write outside file");
+        fs::create_dir_all(crate::runtime::runtime_root(&data_dir)).expect("create runtime");
+        fs::write(
+            workspace_config_path(&data_dir),
+            serde_json::json!({
+                "schemaVersion": 1,
+                "activeWorkRoot": work_root.to_string_lossy()
+            })
+            .to_string(),
+        )
+        .expect("write workspace config");
+
+        assert!(trash_workspace_node(&data_dir, &work_root.to_string_lossy()).is_err());
+        assert!(trash_workspace_node(&data_dir, &outside.to_string_lossy()).is_err());
+        assert!(outside.exists());
+    }
+
+    #[test]
     fn docx_plain_text_can_roundtrip() {
         let data_dir = temp_data_dir("docx-roundtrip");
         let path = data_dir.join("剧本.docx");
@@ -1394,8 +1456,11 @@ mod tests {
             "x".repeat((MAX_WORKSPACE_TEXT_FILE_BYTES as usize) + 1),
         )
         .expect("write large text");
-        fs::write(&allowed_image_path, vec![0_u8; MAX_PREVIEW_ASSET_BYTES as usize])
-            .expect("write allowed image");
+        fs::write(
+            &allowed_image_path,
+            vec![0_u8; MAX_PREVIEW_ASSET_BYTES as usize],
+        )
+        .expect("write allowed image");
         fs::write(
             &image_path,
             vec![0_u8; (MAX_PREVIEW_ASSET_BYTES as usize) + 1],

@@ -70,3 +70,4 @@
   - `.workbench/governance/2026-06-13-code-health-audit-fixes.md`
   - `.workbench/governance/2026-06-13-package-0.0.7-installer-rebuild.md`
   - `.workbench/governance/2026-06-13-preview-asset-limit-20mb.md`
+  - `.workbench/governance/2026-06-13-system-trash-file-tree.md`
