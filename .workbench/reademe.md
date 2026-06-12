@@ -73,3 +73,4 @@
   - `.workbench/governance/2026-06-13-system-trash-file-tree.md`
   - `.workbench/governance/2026-06-13-model-provider-detail-ui-removal.md`
   - `.workbench/governance/2026-06-13-inline-diff-chat-editing-fixes.md`
+  - `.workbench/governance/2026-06-13-package-0.0.7-test-inline-diff.md`
