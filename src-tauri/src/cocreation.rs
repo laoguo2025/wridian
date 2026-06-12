@@ -22,9 +22,11 @@ use crate::workspace::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs;
 use std::future::Future;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
@@ -1365,6 +1367,7 @@ fn apply_model_file_operation(
     let action = operation.action.trim().to_string();
     let library = operation.library.trim().to_string();
     let path = operation.path.trim().to_string();
+    let before = file_operation_snapshot(data_dir, &library, &path);
     let result = match action.as_str() {
         "writeFile" => apply_workspace_write_file(
             data_dir,
@@ -1391,7 +1394,7 @@ fn apply_model_file_operation(
             .map(|path| format!("已移到回收站 {}", path.to_string_lossy())),
         _ => Err("未知文件操作 action。".to_string()),
     };
-    match result {
+    let applied = match result {
         Ok(message) => AppliedFileOperation {
             action,
             library,
@@ -1406,7 +1409,152 @@ fn apply_model_file_operation(
             ok: false,
             message: error,
         },
+    };
+    audit_model_file_operation(data_dir, operation, &before, &applied);
+    applied
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelFileOperationAudit<'a> {
+    timestamp: String,
+    action: &'a str,
+    library: &'a str,
+    path: &'a str,
+    new_name: Option<&'a str>,
+    ok: bool,
+    message: &'a str,
+    before: FileOperationSnapshot,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct FileOperationSnapshot {
+    exists: bool,
+    kind: String,
+    len: Option<u64>,
+    sha256: Option<String>,
+    note: Option<String>,
+}
+
+fn file_operation_snapshot(
+    data_dir: &Path,
+    library: &str,
+    relative_path: &str,
+) -> FileOperationSnapshot {
+    let Ok(root) = crate::workspace::workspace_library_root_for_audit(data_dir, library) else {
+        return FileOperationSnapshot {
+            exists: false,
+            kind: "unknown".to_string(),
+            len: None,
+            sha256: None,
+            note: Some("库目录无法解析。".to_string()),
+        };
+    };
+    let Ok(path) =
+        crate::workspace::resolve_relative_workspace_target_for_audit(&root, relative_path)
+    else {
+        return FileOperationSnapshot {
+            exists: false,
+            kind: "unknown".to_string(),
+            len: None,
+            sha256: None,
+            note: Some("相对路径无效。".to_string()),
+        };
+    };
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return FileOperationSnapshot {
+                exists: false,
+                kind: "missing".to_string(),
+                len: None,
+                sha256: None,
+                note: None,
+            };
+        }
+        Err(error) => {
+            return FileOperationSnapshot {
+                exists: false,
+                kind: "unknown".to_string(),
+                len: None,
+                sha256: None,
+                note: Some(format!("路径信息读取失败：{error}")),
+            };
+        }
+    };
+    if metadata.is_dir() {
+        return FileOperationSnapshot {
+            exists: true,
+            kind: "directory".to_string(),
+            len: None,
+            sha256: None,
+            note: None,
+        };
     }
+    if !metadata.is_file() {
+        return FileOperationSnapshot {
+            exists: true,
+            kind: "other".to_string(),
+            len: Some(metadata.len()),
+            sha256: None,
+            note: None,
+        };
+    }
+    let sha256 = if metadata.len() <= 2 * 1024 * 1024 {
+        fs::read(&path).ok().map(|bytes| sha256_bytes(&bytes))
+    } else {
+        None
+    };
+    FileOperationSnapshot {
+        exists: true,
+        kind: "file".to_string(),
+        len: Some(metadata.len()),
+        sha256,
+        note: (metadata.len() > 2 * 1024 * 1024).then(|| "文件过大，审计只记录大小。".to_string()),
+    }
+}
+
+fn audit_model_file_operation(
+    data_dir: &Path,
+    operation: &ModelFileOperation,
+    before: &FileOperationSnapshot,
+    applied: &AppliedFileOperation,
+) {
+    let dir = runtime_root(data_dir);
+    if fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let audit = ModelFileOperationAudit {
+        timestamp: crate::runtime::iso_timestamp(),
+        action: applied.action.as_str(),
+        library: applied.library.as_str(),
+        path: applied.path.as_str(),
+        new_name: operation.new_name.as_deref(),
+        ok: applied.ok,
+        message: applied.message.as_str(),
+        before: before.clone(),
+    };
+    let Ok(line) = serde_json::to_string(&audit) else {
+        return;
+    };
+    if let Ok(mut file) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("model-file-operations.jsonl"))
+    {
+        let _ = writeln!(file, "{line}");
+    }
+}
+
+fn sha256_bytes(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn filter_context_items<'a>(
@@ -2183,6 +2331,13 @@ mod tests {
             fs::read_to_string(work_root.join("测试").join("新场景.md")).expect("read written"),
             "第一场"
         );
+        let audit_path =
+            crate::runtime::runtime_root(&data_dir).join("model-file-operations.jsonl");
+        let audit = fs::read_to_string(audit_path).expect("read operation audit");
+        assert!(audit.contains(r#""action":"writeFile""#));
+        assert!(audit.contains(r#""library":"works""#));
+        assert!(audit.contains(r#""path":"测试/新场景.md""#));
+        assert!(audit.contains(r#""exists":false"#));
     }
 
     #[test]

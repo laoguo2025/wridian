@@ -1,6 +1,7 @@
 use crate::memory::read_project_continuity_memory;
 use crate::path_safety::safe_child_path;
 use crate::runtime::{ensure_workspace, runtime_root, wridian_data_dir};
+use crate::text_index::tokenize_mixed_set;
 use crate::workspace::{
     is_supported_writing_file, read_active_work_root, read_workspace_text_content,
     resolved_knowledge_root, works_root,
@@ -276,7 +277,7 @@ fn find_relevant_notes(
         input.content,
         input.query.as_deref().unwrap_or_default()
     );
-    let source_terms = tokenize_mixed(&source_text);
+    let source_terms = tokenize_mixed_set(&source_text);
     if source_terms.is_empty() {
         return Ok(Vec::new());
     }
@@ -300,7 +301,7 @@ fn find_relevant_notes(
         }
         let content = candidate_content.content;
         let path_text = path.to_string_lossy().to_string();
-        let candidate_terms = tokenize_mixed(&format!("{path_text}\n{content}"));
+        let candidate_terms = tokenize_mixed_set(&format!("{path_text}\n{content}"));
         let lexical_score = overlap_score(&source_terms, &candidate_terms);
         let common_terms = top_common_terms(&source_terms, &candidate_terms, 4);
         let candidate_links = extract_wikilinks(&content);
@@ -513,24 +514,6 @@ fn project_allows_path(project: Option<&ProjectConfig>, path: &Path) -> bool {
             .inclusions
             .iter()
             .any(|pattern| !pattern.is_empty() && normalized.contains(&pattern.to_lowercase()))
-}
-
-fn tokenize_mixed(text: &str) -> HashSet<String> {
-    let lower = text.to_lowercase();
-    let mut tokens = HashSet::new();
-    for token in lower.split(|ch: char| !ch.is_alphanumeric() && ch != '_') {
-        if token.chars().count() > 1 {
-            tokens.insert(token.to_string());
-        }
-    }
-    let cjk: Vec<char> = text
-        .chars()
-        .filter(|ch| ('\u{4e00}'..='\u{9fff}').contains(ch))
-        .collect();
-    for window in cjk.windows(2) {
-        tokens.insert(window.iter().collect());
-    }
-    tokens
 }
 
 fn overlap_score(left: &HashSet<String>, right: &HashSet<String>) -> f64 {

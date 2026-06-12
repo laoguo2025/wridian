@@ -67,3 +67,4 @@
   - `.workbench/governance/2026-06-12-project-health-graph-display-boundary.md`
   - `.workbench/governance/2026-06-12-package-0.0.7-installer-display-boundaries.md`
   - `.workbench/governance/2026-06-12-health-report-timestamp-uninstall-cleanup.md`
+  - `.workbench/governance/2026-06-13-code-health-audit-fixes.md`

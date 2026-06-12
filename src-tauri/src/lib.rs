@@ -12,6 +12,7 @@ mod path_safety;
 mod projects;
 mod rule_router;
 mod runtime;
+mod text_index;
 mod workspace;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

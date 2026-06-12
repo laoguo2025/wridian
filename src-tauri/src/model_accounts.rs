@@ -37,6 +37,11 @@ const OPENAI_OAUTH_REFRESH_SKEW_SECONDS: u64 = 300;
 const GOOGLE_GEMINI_OAUTH_PROVIDER_ID: &str = "google-gemini-cli";
 const GOOGLE_OAUTH_CLIENT_ID_ENV: &str = "WRIDIAN_GOOGLE_OAUTH_CLIENT_ID";
 const GOOGLE_OAUTH_CLIENT_SECRET_ENV: &str = "WRIDIAN_GOOGLE_OAUTH_CLIENT_SECRET";
+const GOOGLE_CODE_ASSIST_USER_AGENT_ENV: &str = "WRIDIAN_GOOGLE_CODE_ASSIST_USER_AGENT";
+const GOOGLE_CODE_ASSIST_API_CLIENT_ENV: &str = "WRIDIAN_GOOGLE_CODE_ASSIST_API_CLIENT";
+const ANTHROPIC_HAIKU_MODEL_ENV: &str = "WRIDIAN_ANTHROPIC_HAIKU_MODEL";
+const ANTHROPIC_SONNET_MODEL_ENV: &str = "WRIDIAN_ANTHROPIC_SONNET_MODEL";
+const ANTHROPIC_OPUS_MODEL_ENV: &str = "WRIDIAN_ANTHROPIC_OPUS_MODEL";
 const GOOGLE_OAUTH_DEFAULT_CLIENT_ID_PROJECT_NUM: &str = "681255809395";
 const GOOGLE_OAUTH_DEFAULT_CLIENT_ID_HASH: &str = "oo8ft2oprdrnp9e3aqf6av3hmdib135j";
 const GOOGLE_OAUTH_DEFAULT_CLIENT_SECRET_PREFIX: &str = "GOCSPX";
@@ -2082,7 +2087,7 @@ pub(crate) async fn post_google_code_assist_json(
         .timeout(Duration::from_secs(90))
         .build()
         .map_err(|error| format!("Gemini Code Assist 客户端创建失败：{error}"))?;
-    let mut user_agent = GOOGLE_CODE_ASSIST_USER_AGENT.to_string();
+    let mut user_agent = google_code_assist_user_agent();
     if !model.trim().is_empty() {
         user_agent.push_str(" model/");
         user_agent.push_str(model.trim());
@@ -2093,7 +2098,7 @@ pub(crate) async fn post_google_code_assist_json(
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
         .header("User-Agent", user_agent)
-        .header("X-Goog-Api-Client", GOOGLE_CODE_ASSIST_API_CLIENT)
+        .header("X-Goog-Api-Client", google_code_assist_api_client())
         .header("x-activity-request-id", random_urlsafe(16))
         .json(body)
         .send()
@@ -2200,7 +2205,10 @@ fn resolve_provider_model(provider: &StoredModelProviderFile, model: &str) -> St
     let model = model.trim();
     if model.eq_ignore_ascii_case("haiku") {
         if is_first_party_anthropic_provider(provider) {
-            return "claude-haiku-4-5-20251001".to_string();
+            return first_party_anthropic_alias_model(
+                ANTHROPIC_HAIKU_MODEL_ENV,
+                "claude-haiku-4-5-20251001",
+            );
         }
         if let Some(mapped) = provider.extra_env.get("ANTHROPIC_DEFAULT_HAIKU_MODEL") {
             return mapped.trim().to_string();
@@ -2208,7 +2216,10 @@ fn resolve_provider_model(provider: &StoredModelProviderFile, model: &str) -> St
     }
     if model.eq_ignore_ascii_case("sonnet") {
         if is_first_party_anthropic_provider(provider) {
-            return "claude-sonnet-4-6".to_string();
+            return first_party_anthropic_alias_model(
+                ANTHROPIC_SONNET_MODEL_ENV,
+                "claude-sonnet-4-6",
+            );
         }
         if let Some(mapped) = provider.extra_env.get("ANTHROPIC_DEFAULT_SONNET_MODEL") {
             return mapped.trim().to_string();
@@ -2216,13 +2227,37 @@ fn resolve_provider_model(provider: &StoredModelProviderFile, model: &str) -> St
     }
     if model.eq_ignore_ascii_case("opus") {
         if is_first_party_anthropic_provider(provider) {
-            return "claude-opus-4-8".to_string();
+            return first_party_anthropic_alias_model(ANTHROPIC_OPUS_MODEL_ENV, "claude-opus-4-8");
         }
         if let Some(mapped) = provider.extra_env.get("ANTHROPIC_DEFAULT_OPUS_MODEL") {
             return mapped.trim().to_string();
         }
     }
     model.to_string()
+}
+
+fn first_party_anthropic_alias_model(env_key: &str, default_model: &str) -> String {
+    std::env::var(env_key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| default_model.to_string())
+}
+
+fn google_code_assist_user_agent() -> String {
+    std::env::var(GOOGLE_CODE_ASSIST_USER_AGENT_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| GOOGLE_CODE_ASSIST_USER_AGENT.to_string())
+}
+
+fn google_code_assist_api_client() -> String {
+    std::env::var(GOOGLE_CODE_ASSIST_API_CLIENT_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| GOOGLE_CODE_ASSIST_API_CLIENT.to_string())
 }
 
 fn is_first_party_anthropic_provider(provider: &StoredModelProviderFile) -> bool {
@@ -3188,6 +3223,42 @@ mod tests {
             resolve_provider_model(&provider, "haiku"),
             "claude-haiku-4-5-20251001"
         );
+    }
+
+    #[test]
+    fn provider_model_resolution_allows_env_overrides_for_first_party_aliases() {
+        std::env::set_var(ANTHROPIC_SONNET_MODEL_ENV, "claude-sonnet-custom");
+        let provider = StoredModelProviderFile {
+            id: ANTHROPIC_OAUTH_PROVIDER_ID.to_string(),
+            preset_key: Some(ANTHROPIC_OAUTH_PROVIDER_ID.to_string()),
+            provider_name: "Anthropic".to_string(),
+            provider_type: Some(ANTHROPIC_OAUTH_PROVIDER_ID.to_string()),
+            protocol: "anthropic".to_string(),
+            auth_style: "oauth_external".to_string(),
+            base_url: "https://api.anthropic.com".to_string(),
+            models: vec!["sonnet".to_string()],
+            extra_env: std::collections::BTreeMap::new(),
+            key_stored: true,
+            api_key: None,
+        };
+
+        assert_eq!(
+            resolve_provider_model(&provider, "sonnet"),
+            "claude-sonnet-custom"
+        );
+        std::env::remove_var(ANTHROPIC_SONNET_MODEL_ENV);
+    }
+
+    #[test]
+    fn google_code_assist_headers_allow_env_overrides() {
+        std::env::set_var(GOOGLE_CODE_ASSIST_USER_AGENT_ENV, "wridian-test-agent");
+        std::env::set_var(GOOGLE_CODE_ASSIST_API_CLIENT_ENV, "wridian-test-client");
+
+        assert_eq!(google_code_assist_user_agent(), "wridian-test-agent");
+        assert_eq!(google_code_assist_api_client(), "wridian-test-client");
+
+        std::env::remove_var(GOOGLE_CODE_ASSIST_USER_AGENT_ENV);
+        std::env::remove_var(GOOGLE_CODE_ASSIST_API_CLIENT_ENV);
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use crate::metadata_index::{read_library_metadata_index, MetadataFile, MetadataLibraryIndex};
 use crate::path_safety::is_symlink_or_reparse;
 use crate::runtime::{ensure_workspace, iso_timestamp, wridian_data_dir};
+use crate::text_index::{term_frequency, tokenize_mixed};
 use crate::workspace::resolved_knowledge_root;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1236,7 +1237,7 @@ fn build_manifest(
             };
             (
                 sha256_hex(&content),
-                tokenize_mixed_vec(&format!(
+                tokenize_mixed(&format!(
                     "{}\n{}\n{}\n{}",
                     file.title,
                     file.aliases.join(" "),
@@ -1298,7 +1299,7 @@ fn search_knowledge_bm25(
     query: &str,
     limit: Option<usize>,
 ) -> Result<Vec<KnowledgeSearchHit>, String> {
-    let query_tokens = tokenize_mixed_vec(query);
+    let query_tokens = tokenize_mixed(query);
     if query_tokens.is_empty() {
         return Ok(Vec::new());
     }
@@ -1327,7 +1328,7 @@ fn search_knowledge_bm25(
             file.tags.join(" "),
             content
         );
-        let tokens = tokenize_mixed_vec(&weighted);
+        let tokens = tokenize_mixed(&weighted);
         if tokens.is_empty() {
             continue;
         }
@@ -1685,32 +1686,6 @@ fn format_hot_file_line(file: &KnowledgeCacheFile) -> String {
             file.tags.join("、")
         }
     )
-}
-
-fn tokenize_mixed_vec(text: &str) -> Vec<String> {
-    let lower = text.to_lowercase();
-    let mut tokens = Vec::new();
-    for token in lower.split(|ch: char| !ch.is_alphanumeric() && ch != '_') {
-        if token.chars().count() > 1 {
-            tokens.push(token.to_string());
-        }
-    }
-    let cjk = text
-        .chars()
-        .filter(|ch| ('\u{4e00}'..='\u{9fff}').contains(ch))
-        .collect::<Vec<_>>();
-    for window in cjk.windows(2) {
-        tokens.push(window.iter().collect());
-    }
-    tokens
-}
-
-fn term_frequency(tokens: Vec<String>) -> HashMap<String, usize> {
-    let mut values = HashMap::new();
-    for token in tokens {
-        *values.entry(token).or_default() += 1;
-    }
-    values
 }
 
 fn best_snippet(content: &str, terms: &HashSet<String>) -> String {

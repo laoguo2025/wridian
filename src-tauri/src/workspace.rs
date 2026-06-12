@@ -11,6 +11,9 @@ use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use zip::write::SimpleFileOptions;
 
+const MAX_WORKSPACE_TEXT_FILE_BYTES: u64 = 512 * 1024;
+const MAX_PREVIEW_ASSET_BYTES: u64 = 10 * 1024 * 1024;
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WorkspaceInfo {
@@ -435,6 +438,13 @@ fn workspace_library_root(data_dir: &Path, library: &str) -> Result<PathBuf, Str
         .map_err(|error| format!("库目录解析失败：{error}"))
 }
 
+pub(crate) fn workspace_library_root_for_audit(
+    data_dir: &Path,
+    library: &str,
+) -> Result<PathBuf, String> {
+    workspace_library_root(data_dir, library)
+}
+
 fn resolve_relative_workspace_target(root: &Path, relative_path: &str) -> Result<PathBuf, String> {
     let relative = normalize_relative_workspace_path(relative_path)?;
     let target = root.join(relative);
@@ -443,6 +453,13 @@ fn resolve_relative_workspace_target(root: &Path, relative_path: &str) -> Result
     } else {
         Err("目标路径不在当前库内。".to_string())
     }
+}
+
+pub(crate) fn resolve_relative_workspace_target_for_audit(
+    root: &Path,
+    relative_path: &str,
+) -> Result<PathBuf, String> {
+    resolve_relative_workspace_target(root, relative_path)
 }
 
 fn ensure_safe_workspace_parent(root: &Path, path: &Path, label: &str) -> Result<(), String> {
@@ -960,6 +977,7 @@ fn copy_dir_recursive(root: &Path, source: &Path, target: &Path) -> Result<(), S
 }
 
 pub(crate) fn read_workspace_text_content(path: &Path) -> Result<String, String> {
+    ensure_file_size_at_most(path, MAX_WORKSPACE_TEXT_FILE_BYTES, "文件读取")?;
     if file_extension(path).as_deref() == Some("docx") {
         return read_docx_plain_text(path);
     }
@@ -972,6 +990,7 @@ fn read_editable_file_content(path: &Path) -> Result<String, String> {
 
 fn write_editable_file_content(path: &Path, content: &str) -> Result<(), String> {
     if file_extension(path).as_deref() == Some("docx") {
+        ensure_docx_plain_text_editable(path)?;
         return write_docx_plain_text(path, content);
     }
     fs::write(path, content).map_err(|error| format!("文件保存失败：{error}"))
@@ -990,6 +1009,7 @@ fn workspace_preview_type(path: &Path) -> String {
 fn preview_asset_response(path: &Path) -> Result<PreviewAssetResponse, String> {
     let mime_type =
         preview_asset_mime_type(path).ok_or_else(|| "当前格式不能直接预览。".to_string())?;
+    ensure_file_size_at_most(path, MAX_PREVIEW_ASSET_BYTES, "预览文件")?;
     let bytes = fs::read(path).map_err(|error| format!("预览文件读取失败：{error}"))?;
     let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
     Ok(PreviewAssetResponse {
@@ -1011,6 +1031,21 @@ fn preview_asset_mime_type(path: &Path) -> Option<&'static str> {
     }
 }
 
+fn ensure_file_size_at_most(path: &Path, max_bytes: u64, label: &str) -> Result<(), String> {
+    let metadata = fs::metadata(path).map_err(|error| format!("{label}大小检查失败：{error}"))?;
+    if metadata.len() > max_bytes {
+        return Err(format!(
+            "{label}过大，已跳过。当前上限为 {} MB。",
+            bytes_to_display_mb(max_bytes)
+        ));
+    }
+    Ok(())
+}
+
+fn bytes_to_display_mb(bytes: u64) -> u64 {
+    (bytes / (1024 * 1024)).max(1)
+}
+
 fn read_docx_plain_text(path: &Path) -> Result<String, String> {
     let bytes = fs::read(path).map_err(|error| format!("DOCX 读取失败：{error}"))?;
     let cursor = Cursor::new(bytes);
@@ -1023,6 +1058,26 @@ fn read_docx_plain_text(path: &Path) -> Result<String, String> {
         .read_to_string(&mut document)
         .map_err(|error| format!("DOCX 正文解码失败：{error}"))?;
     Ok(docx_document_xml_to_text(&document))
+}
+
+fn ensure_docx_plain_text_editable(path: &Path) -> Result<(), String> {
+    let bytes = fs::read(path).map_err(|error| format!("DOCX 读取失败：{error}"))?;
+    let cursor = Cursor::new(bytes);
+    let mut archive =
+        zip::ZipArchive::new(cursor).map_err(|error| format!("DOCX 格式解析失败：{error}"))?;
+    let mut document = String::new();
+    archive
+        .by_name("word/document.xml")
+        .map_err(|error| format!("DOCX 正文读取失败：{error}"))?
+        .read_to_string(&mut document)
+        .map_err(|error| format!("DOCX 正文解码失败：{error}"))?;
+    if docx_has_complex_semantics(&document) {
+        return Err(
+            "该 DOCX 包含表格、脚注、批注、修订或复杂结构；Wridian 当前只允许保存纯文本 DOCX，避免破坏原文档。"
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 fn write_docx_plain_text(path: &Path, content: &str) -> Result<(), String> {
@@ -1073,6 +1128,24 @@ fn write_docx_plain_text(path: &Path, content: &str) -> Result<(), String> {
             .map_err(|error| format!("DOCX 保存失败：{error}"))?;
     }
     fs::write(path, output.into_inner()).map_err(|error| format!("DOCX 保存失败：{error}"))
+}
+
+fn docx_has_complex_semantics(document_xml: &str) -> bool {
+    [
+        "<w:tbl",
+        "<w:footnoteReference",
+        "<w:endnoteReference",
+        "<w:commentRangeStart",
+        "<w:commentReference",
+        "<w:ins",
+        "<w:del",
+        "<w:drawing",
+        "<w:pict",
+        "<w:hyperlink",
+        "<w:sdt",
+    ]
+    .iter()
+    .any(|marker| document_xml.contains(marker))
 }
 
 fn docx_document_xml_to_text(xml: &str) -> String {
@@ -1311,6 +1384,42 @@ mod tests {
     }
 
     #[test]
+    fn workspace_text_and_asset_preview_reject_oversized_files() {
+        let data_dir = temp_data_dir("oversized-preview");
+        let text_path = data_dir.join("large.txt");
+        let image_path = data_dir.join("large.png");
+        fs::write(
+            &text_path,
+            "x".repeat((MAX_WORKSPACE_TEXT_FILE_BYTES as usize) + 1),
+        )
+        .expect("write large text");
+        fs::write(
+            &image_path,
+            vec![0_u8; (MAX_PREVIEW_ASSET_BYTES as usize) + 1],
+        )
+        .expect("write large image");
+
+        assert!(read_workspace_text_content(&text_path).is_err());
+        assert!(preview_asset_response(&image_path).is_err());
+    }
+
+    #[test]
+    fn complex_docx_save_is_rejected_to_preserve_semantics() {
+        let data_dir = temp_data_dir("complex-docx");
+        let path = data_dir.join("复杂.docx");
+        write_test_docx_document_xml(
+            &path,
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:tbl><w:tr><w:tc><w:p><w:r><w:t>表格</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:sectPr/></w:body></w:document>"#,
+        )
+        .expect("write complex docx");
+
+        assert!(write_editable_file_content(&path, "替换").is_err());
+        assert!(read_docx_plain_text(&path)
+            .expect("read original docx")
+            .contains("表格"));
+    }
+
+    #[test]
     fn workspace_tree_skips_directory_links_when_available() {
         let data_dir = temp_data_dir("tree-link-skip");
         let work_root = data_dir.join("user-works");
@@ -1496,6 +1605,10 @@ mod tests {
     }
 
     fn write_minimal_test_docx(path: &Path, content: &str) -> Result<(), String> {
+        write_test_docx_document_xml(path, &minimal_docx_document_xml(content))
+    }
+
+    fn write_test_docx_document_xml(path: &Path, document_xml: &str) -> Result<(), String> {
         let mut output = Cursor::new(Vec::new());
         {
             let mut writer = zip::ZipWriter::new(&mut output);
@@ -1511,7 +1624,7 @@ mod tests {
                 .start_file("word/document.xml", options)
                 .map_err(|error| error.to_string())?;
             writer
-                .write_all(minimal_docx_document_xml(content).as_bytes())
+                .write_all(document_xml.as_bytes())
                 .map_err(|error| error.to_string())?;
             writer.finish().map_err(|error| error.to_string())?;
         }
