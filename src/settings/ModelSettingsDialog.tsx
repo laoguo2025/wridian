@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { ModelAccountsStatus, ModelProviderStatus, TestModelProviderResponse } from "../appTypes";
 import {
-  accessTypeLabel,
   defaultModelIds,
   presetByKey,
   protocolLabel,
@@ -134,16 +133,6 @@ export function ModelSettingsDialog({
     }
   };
 
-  const openExternal = async (url?: string) => {
-    if (!url) return;
-    try {
-      const { openUrl } = await import("@tauri-apps/plugin-opener");
-      await openUrl(url);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    }
-  };
-
   return (
     <div className="modal-backdrop" onMouseDown={onClose} role="presentation">
       <section className="settings-dialog model-settings-dialog" role="dialog" aria-modal="true" aria-label="模型账户" onMouseDown={(event) => event.stopPropagation()}>
@@ -248,7 +237,6 @@ export function ModelSettingsDialog({
             provider={editingProvider}
             busy={busyProviderId === connectPreset.key}
             onClose={() => { setConnectPreset(null); setEditingProvider(null); }}
-            onExternal={openExternal}
             onOauthLogin={async (preset, data) => {
               setBusyProviderId(preset.key);
               setMessage("");
@@ -327,7 +315,6 @@ function ProviderCard({
 function PresetConnectDialog({
   busy,
   onClose,
-  onExternal,
   onOauthLogin,
   onSave,
   preset,
@@ -335,7 +322,6 @@ function PresetConnectDialog({
 }: {
   busy: boolean;
   onClose: () => void;
-  onExternal: (url?: string) => Promise<void>;
   onOauthLogin: (preset: VendorPreset, data: ProviderFormData) => Promise<void>;
   onSave: (data: ProviderFormData) => Promise<void>;
   preset: VendorPreset;
@@ -346,7 +332,6 @@ function PresetConnectDialog({
   const [apiKey, setApiKey] = useState("");
   const [modelsText, setModelsText] = useState((provider?.models.length ? provider.models : defaultModelIds(preset)).join("\n"));
   const [envText, setEnvText] = useState(formatEnvOverrides(provider?.extraEnv ?? preset.defaultEnvOverrides));
-  const [showAdvanced, setShowAdvanced] = useState(false);
   const [error, setError] = useState("");
   const [testMessage, setTestMessage] = useState("");
   const [testing, setTesting] = useState(false);
@@ -443,7 +428,6 @@ function PresetConnectDialog({
 
         <div className="provider-connect-meta">
           <span>{protocolLabel(preset.protocol)}</span>
-          <span>{accessTypeLabel(preset)}</span>
           {preset.sdkProxyOnly ? <span>Claude Code 兼容</span> : null}
         </div>
 
@@ -506,20 +490,6 @@ function PresetConnectDialog({
             </label>
           ) : null}
         </div>
-
-        <button type="button" className="provider-advanced-toggle" onClick={() => setShowAdvanced((value) => !value)}>
-          {showAdvanced ? "收起接入详情" : "查看接入详情"}
-        </button>
-        {showAdvanced ? (
-          <div className="provider-catalog-details">
-            <div><span>服务标识</span><strong>{preset.key}</strong></div>
-            <div><span>授权方式</span><strong>{accessTypeLabel(preset)}</strong></div>
-            <div><span>附加参数</span><strong>{Object.keys(preset.defaultEnvOverrides).length ? JSON.stringify(preset.defaultEnvOverrides) : "无"}</strong></div>
-            {preset.meta?.docsUrl ? <div><span>文档</span><button type="button" onClick={() => void onExternal(preset.meta?.docsUrl)}>打开文档</button></div> : null}
-            {preset.meta?.apiKeyUrl ? <div><span>控制台</span><button type="button" onClick={() => void onExternal(preset.meta?.apiKeyUrl)}>打开控制台</button></div> : null}
-            {preset.meta?.notes?.map((note) => <p key={note}>{note}</p>)}
-          </div>
-        ) : null}
 
         {error ? <div className="settings-message error">{error}</div> : null}
         {testMessage ? <div className="settings-message">{testMessage}</div> : null}
