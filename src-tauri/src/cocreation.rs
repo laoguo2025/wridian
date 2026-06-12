@@ -1009,7 +1009,7 @@ fn build_cocreation_prompt(
 
     let source_label = prompt_source_label(&input.source_path, &input.title);
     format!(
-        "稿件类型：{}\n当前文件：{}\n来源路径：{}\n\n上下文编译顺序：当前稿件/选区 → 作品库和知识库文件树 → 规则路由 → 项目记忆 → 最近对话现场 → 压缩记忆 → 已选知识卡 → 点名文件 → 技能规则 → 用户请求。每个槽位独立预算，超预算时按此优先级裁剪，不把作品记忆、知识卡、规则路由和技能规则混写。\n\n规则路由协议：WRIDIAN.md、AGENT.md、AGENTS.md 定义当前库内的长期行动规则；index.md 和 hot.md 定义当前库的导航与近期上下文。规则路由只说明如何工作和如何定位资料，不等于把知识卡写入作品记忆。\n\n技能工作流协议：当 [9 技能规则] 非空时，所选技能必须按可执行工作流处理，不得只输出泛泛建议。先确认输入和扫描范围，再给出产物清单；需要落地文件时必须返回 fileOperations；完成后在 reply 中说明质量检查结果和回滚方式。技能产物优先写入当前库内相对路径：作品拆解进入知识库 02拆解报告，知识卡进入知识库 03-07，作者/大神 skill 进入知识库 08大神蒸馏，知识库体检进入 00知识库治理。不能验证来源、关联、frontmatter 或可分发性时，不得声称完成，只能输出待补缺口。\n\n编辑回复协议：如果本轮返回 edits，reply 必须点评改前的原文或选中文本，并说明你的修改方案；不要把 replacement 当作已经生效的正文来点评，也不要声称已保存或已写入当前文件。正文是否生效由用户在内联 diff 中确认。\n\n文件树权限协议：用户在对话中提到作品库或知识库文件树内的文件时，Wridian 可以在当前库内读取该文件内容，并可通过 fileOperations 新建文件、创建文件夹、重命名或移到回收站。无需默认展示文件内容给用户；需要说明时只说明操作结果。\n\n文件树操作协议：如需操作文件树，必须在 fileOperations 数组里返回操作，不要只在 reply 里描述。只允许相对路径，不允许绝对路径或 ..。action 只能是 writeFile、createFolder、rename、trash；library 只能是 works 或 knowledge；writeFile 只能用于新建不存在的 md、txt、docx 文件并写入初始内容；对已有文件内容执行新增、修改、删除时必须返回 edits 供前端内联 diff 确认，新建含内容文件除外；rename 需要 newName；writeFile 需要 content；trash 表示移到用户本机系统回收站，不创建库内 .wridian-trash。\n\n输出格式：必须返回 json object，字段为 reply、edits、fileOperations、memories。\n\n[1 当前稿件与选区]\n{}\n\n[2 作品库和知识库文件树]\n{}\n\n[3 规则路由]\n{}\n\n[4 项目记忆]\n{}\n\n[5 最近对话现场]\n{}\n\n[6 压缩记忆]\n{}\n\n[7 已选知识卡]\n{}\n\n[8 点名文件]\n{}\n\n[9 技能规则]\n{}\n\n[10 用户请求]\n{}",
+        "稿件类型：{}\n当前文件：{}\n来源路径：{}\n\n上下文编译顺序：当前稿件/选区 → 作品库和知识库文件树 → 规则路由 → 项目记忆 → 最近对话现场 → 压缩记忆 → 已选知识卡 → 点名文件 → 技能规则 → 用户请求。每个槽位独立预算，超预算时按此优先级裁剪，不把作品记忆、知识卡、规则路由和技能规则混写。\n\n规则路由协议：WRIDIAN.md、AGENT.md、AGENTS.md 定义当前库内的长期行动规则；index.md 和 hot.md 定义当前库的导航与近期上下文。规则路由只说明如何工作和如何定位资料，不等于把知识卡写入作品记忆。\n\n技能工作流协议：当 [9 技能规则] 非空时，所选技能必须按可执行工作流处理，不得只输出泛泛建议。先确认输入和扫描范围，再给出产物清单；需要落地文件时必须返回 fileOperations；完成后在 reply 中说明质量检查结果和回滚方式。技能产物优先写入当前库内相对路径：作品拆解进入知识库 02拆解报告，知识卡进入知识库 03-07，作者/大神 skill 进入知识库 08大神蒸馏，知识库体检进入 00知识库治理。不能验证来源、关联、frontmatter 或可分发性时，不得声称完成，只能输出待补缺口。\n\n编辑回复协议：只有当用户明确要求修改、重写、润色、替换、整理当前稿件正文、改成某版本或删除正文内容时，才返回 edits；普通聊天、询问原因、让给建议或比较方案时 edits 必须为空。用户明确要求改正文时，不要给多个候选方案让用户选择；直接给唯一改稿结果。Wridian 会自动写入能安全定位的 edits，并保留撤销。reply 只简短说明已整理的重点；不要说“我给你两个方向/挑一个/确认后再改”，不要把 replacement 长篇贴到 reply 里。\n\n文件树权限协议：用户在对话中提到作品库或知识库文件树内的文件时，Wridian 可以在当前库内读取该文件内容，并可通过 fileOperations 新建文件、创建文件夹、重命名或移到回收站。无需默认展示文件内容给用户；需要说明时只说明操作结果。\n\n文件树操作协议：如需操作文件树，必须在 fileOperations 数组里返回操作，不要只在 reply 里描述。只允许相对路径，不允许绝对路径或 ..。action 只能是 writeFile、createFolder、rename、trash；library 只能是 works 或 knowledge；writeFile 只能用于新建不存在的 md、txt、docx 文件并写入初始内容；对已有文件内容执行新增、修改、删除时，只有用户明确要求改正文才返回 edits，新建含内容文件除外；rename 需要 newName；writeFile 需要 content；trash 表示移到用户本机系统回收站，不创建库内 .wridian-trash。\n\n输出格式：必须返回 json object，字段为 reply、edits、fileOperations、memories。\n\n[1 当前稿件与选区]\n{}\n\n[2 作品库和知识库文件树]\n{}\n\n[3 规则路由]\n{}\n\n[4 项目记忆]\n{}\n\n[5 最近对话现场]\n{}\n\n[6 压缩记忆]\n{}\n\n[7 已选知识卡]\n{}\n\n[8 点名文件]\n{}\n\n[9 技能规则]\n{}\n\n[10 用户请求]\n{}",
         draft_kind,
         input.title,
         source_label,
@@ -2025,15 +2025,16 @@ fn cocreation_system_prompt() -> &'static str {
 你的任务是围绕当前稿件给出可执行的写作建议、局部改写方案或结构判断。
 你会同时服务小说和短剧/剧本创作：小说关注章节、人物动机、叙述节奏、伏笔和设定一致性；短剧/剧本关注对白、场景冲突、钩子、角色口吻和分集节奏。
 当稿件类型是短剧/剧本时，优先关注场次、对白可表演性、结尾钩子、分集节奏和低成本拍摄约束。
-不要写成通用聊天回复；不要自动声称已经修改正文。
+不要写成通用聊天回复；用户要求改正文时不要只给建议或候选方案。
 如果本轮带有技能规则，必须按技能工作流回复：确认输入与扫描范围、说明产物、需要写入时使用 fileOperations、说明质检结果和回滚方式。
 你需要判断本轮是否产生值得长期保留的创作记忆。如果没有，memories 输出空数组；如果有，只提取稳定、可复用、对后续写作有约束或参考价值的事实，不记录一次性闲聊。
 必须输出 JSON 对象（json object）：
 {"reply":"给用户看的正常回复","edits":[{"target":"需要被替换的原文片段，必须从稿件内容或用户选中片段中逐字复制","replacement":"替换后的新文本","rationale":"简短理由"}],"fileOperations":[{"action":"writeFile|createFolder|rename|trash","library":"works|knowledge","path":"库内相对路径","newName":"rename 时的新名称","content":"writeFile 时的新内容"}],"memories":[{"branch":"novel|drama|knowledge|skill|user|relationship|journey|awareness|sense","title":"短标题","summary":"要沉淀的长期记忆正文","reason":"为什么值得沉淀","sourcePath":"当前来源路径或空"}]}
 如果只是聊天、讨论、解释，edits 输出空数组。
-如果用户要求修改、润色、批量替换角色名、调整对白或重写片段，必须尽量给 edits。
-对已有文件内容做新增、修改、删除时必须给 edits；只有新建不存在的文件并写入初始内容时，才使用 fileOperations.writeFile。
-返回 edits 时，reply 要点评改前原文或选中文本的问题，并说明修改方案；不要点评 replacement，也不要说修改已经生效。
+只有当用户明确要求修改、重写、润色、替换、整理当前稿件正文、调整对白、删除正文内容或改成某版本时，才返回 edits；普通聊天、询问原因、让给建议或比较方案时 edits 输出空数组。
+用户明确要求改正文时，必须给唯一改稿结果并尽量给 edits；不要给“两个方向/两个选择/你挑一个”。
+对已有文件内容做新增、修改、删除时，只有用户明确要求改正文才给 edits；Wridian 会自动写入能安全定位的 edits；只有新建不存在的文件并写入初始内容时，才使用 fileOperations.writeFile。
+返回 edits 时，reply 只简短说明已整理的重点和无法自动定位的风险；不要把 replacement 长篇贴到 reply 里。
 target 必须是原文中存在的精确片段；不要用行号、摘要或正则；不能确定精确原文时只给 reply，不给 edits。"#
 }
 

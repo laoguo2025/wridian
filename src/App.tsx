@@ -304,6 +304,7 @@ function App() {
   const draftEditorRef = useRef<HTMLDivElement | null>(null);
   const fontSizeControlRef = useRef<HTMLDivElement | null>(null);
   const draftSelectionRef = useRef<TextSelection>({ start: editorContent.length, end: editorContent.length });
+  const editorContentRef = useRef(editorContent);
   const selectedPathRef = useRef("");
   const openFileRequestSeqRef = useRef(0);
   const relevantNotesRequestSeqRef = useRef(0);
@@ -314,9 +315,38 @@ function App() {
     promptPillsRef.current = value;
     setPromptPills(value);
   }, []);
-  const appendDraftEdits = useCallback((edits: DraftEdit[]) => {
-    setPendingEdits((current) => [...current, ...edits]);
+  const appendDraftEdits = useCallback((edits: DraftEdit[], autoApply: boolean) => {
+    if (!edits.length) return;
+    if (!autoApply) {
+      setPendingEdits((current) => [...current, ...edits]);
+      return;
+    }
+    const content = editorContentRef.current;
+    const guardReport = createDraftReplaceGuardReport(content, edits);
+    if (!guardReport.matches.length) {
+      setPendingEdits((current) => [...current, ...edits]);
+      return;
+    }
+    const appliedIds = new Set(guardReport.matches.map((match) => match.edit.id));
+    const nextContent = [...guardReport.matches].sort((left, right) => right.index - left.index).reduce((currentContent, match) => {
+      const start = match.index;
+      const end = start + match.edit.target.length;
+      return `${currentContent.slice(0, start)}${match.edit.replacement}${currentContent.slice(end)}`;
+    }, content);
+    editorContentRef.current = nextContent;
+    setAcceptedEditUndo({ path: selectedPathRef.current, content });
+    setEditorContent(nextContent);
+    setPendingEdits((current) => [
+      ...current,
+      ...edits.filter((edit) => !appliedIds.has(edit.id)),
+    ]);
+    draftSelectionRef.current = { start: 0, end: 0 };
+    setSelectionActionPosition(null);
   }, []);
+
+  useEffect(() => {
+    editorContentRef.current = editorContent;
+  }, [editorContent]);
 
   useEffect(() => {
     selectedPathRef.current = selectedPath;

@@ -43,7 +43,7 @@ export function useChatManager({
   onDraftEdits,
   onWorkspaceChanged,
 }: {
-  onDraftEdits: (edits: ChatDraftEdit[]) => void;
+  onDraftEdits: (edits: ChatDraftEdit[], autoApply: boolean) => void;
   onWorkspaceChanged?: () => void;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -181,7 +181,7 @@ export function useChatManager({
           sessionId: sessionIdRef.current,
         }),
       );
-      onDraftEdits(createPendingDraftEdits(response.edits, input.contextPills));
+      onDraftEdits(createPendingDraftEdits(response.edits, input.contextPills), shouldAutoApplyDraftEdits(input.text));
       if (response.fileOperations.some((operation) => operation.ok)) {
         onWorkspaceChanged?.();
       }
@@ -400,6 +400,18 @@ function createPendingDraftEdits(edits: CoCreateEdit[], contextPills: PromptCont
     sourceRange: selectedRangePill?.value.trim() === edit.target.trim() ? selectedRangePill.range : undefined,
     status: "pending" as const,
   }));
+}
+
+function shouldAutoApplyDraftEdits(userInput: string) {
+  const input = userInput.trim();
+  if (!input) return false;
+  if (/建议|方案|思路|为什么|怎么回事|原因|比较|评价|分析|解释/.test(input) && !/改成|换成|替换|删掉|删除|重写|改写/.test(input)) {
+    return false;
+  }
+  if (/重写|改写|润色|修改|更改|替换|改成|换成|删掉|删除|合并|拆分|修正/.test(input)) {
+    return true;
+  }
+  return /整理|优化|批量/.test(input) && /正文|稿件|原文|内容|这段|两段|选中|对白|句子|段落|修改|替换|删除/.test(input);
 }
 
 function isAbortError(error: unknown) {
