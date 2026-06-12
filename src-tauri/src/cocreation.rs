@@ -1846,9 +1846,9 @@ fn parse_cocreation_model_output(output: &str) -> Result<ParsedCoCreateResponse,
     let trimmed = output.trim();
     let parsed: ModelCoCreateResponse = match serde_json::from_str(trimmed) {
         Ok(parsed) => parsed,
-        Err(error) => {
+        Err(_) => {
             let Some(payload) = extract_json_payload(trimmed) else {
-                return Err(format!("对话结果不是有效 JSON：{error}"));
+                return Ok(plain_text_cocreation_response(trimmed));
             };
             serde_json::from_str(&payload)
                 .map_err(|parse_error| format!("对话结果不是有效 JSON：{parse_error}"))?
@@ -1885,6 +1885,15 @@ fn parse_cocreation_model_output(output: &str) -> Result<ParsedCoCreateResponse,
         file_operations: parsed.file_operations,
         memories,
     })
+}
+
+fn plain_text_cocreation_response(output: &str) -> ParsedCoCreateResponse {
+    ParsedCoCreateResponse {
+        reply: output.trim().to_string(),
+        edits: Vec::new(),
+        file_operations: Vec::new(),
+        memories: Vec::new(),
+    }
 }
 
 fn extract_json_payload(output: &str) -> Option<String> {
@@ -2703,9 +2712,22 @@ mod tests {
     }
 
     #[test]
-    fn parse_cocreation_model_output_rejects_plain_text_reply() {
-        let error = parse_cocreation_model_output("现在的年月日时间是 2026-06-11。")
-            .expect_err("plain text must not be accepted as structured output");
+    fn parse_cocreation_model_output_accepts_plain_text_reply() {
+        let parsed = parse_cocreation_model_output("现在的年月日时间是 2026-06-11。")
+            .expect("plain text should be surfaced as reply");
+
+        assert_eq!(parsed.reply, "现在的年月日时间是 2026-06-11。");
+        assert!(parsed.edits.is_empty());
+        assert!(parsed.file_operations.is_empty());
+        assert!(parsed.memories.is_empty());
+    }
+
+    #[test]
+    fn parse_cocreation_model_output_rejects_broken_json_payload() {
+        let error = parse_cocreation_model_output(
+            "```json\n{\"reply\":\"好\",\"edits\":[}\n```",
+        )
+        .expect_err("broken structured output should still fail");
 
         assert!(error.contains("不是有效 JSON"));
     }
