@@ -1,10 +1,12 @@
 use crate::memory::{read_relevant_memory_snippets, write_memory_leaves, MemoryLeafDraft};
 use crate::model_accounts::{
-    anthropic_messages_url, apply_anthropic_auth_headers, ensure_supported_protocol,
-    gemini_generate_content_url, is_anthropic_compatible_parse_error, is_openai_oauth_settings,
-    openai_chat_completions_url, openai_oauth_account_id, read_active_model_settings,
-    read_anthropic_response_text, read_gemini_response_text, response_body_summary,
-    ActiveModelSettings, GEMINI_DEFAULT_MAX_OUTPUT_TOKENS,
+    anthropic_messages_url, apply_anthropic_auth_headers, ensure_google_gemini_oauth_project_id,
+    ensure_supported_protocol, gemini_generate_content_url,
+    google_gemini_cloudcode_generate_content_url, google_gemini_cloudcode_request_body,
+    is_anthropic_compatible_parse_error, is_google_gemini_oauth_settings, is_openai_oauth_settings,
+    openai_chat_completions_url, openai_oauth_account_id, post_google_code_assist_json,
+    read_active_model_settings, read_anthropic_response_text, read_gemini_response_text,
+    response_body_summary, ActiveModelSettings, GEMINI_DEFAULT_MAX_OUTPUT_TOKENS,
 };
 use crate::projects::{active_project_model, read_active_project_context};
 use crate::runtime::{ensure_workspace, runtime_root, wridian_data_dir};
@@ -597,6 +599,17 @@ async fn cocreate_with_gemini(
     active_project_context: &str,
 ) -> Result<ParsedCoCreateResponse, String> {
     let model = project_model.unwrap_or(&settings.model);
+    if is_google_gemini_oauth_settings(settings) {
+        return cocreate_with_google_gemini_cloudcode(
+            settings,
+            model,
+            input,
+            memories,
+            active_context,
+            active_project_context,
+        )
+        .await;
+    }
     let url = gemini_generate_content_url(&settings.base_url, model);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(90))
@@ -642,6 +655,51 @@ async fn cocreate_with_gemini(
             response_body_summary(&body)
         ));
     }
+    let content = read_gemini_response_text(&body)?;
+    let parsed = parse_cocreation_model_output(&content)?;
+    if parsed.reply.trim().is_empty() {
+        Err("模型返回了空回复。".to_string())
+    } else {
+        Ok(parsed)
+    }
+}
+
+async fn cocreate_with_google_gemini_cloudcode(
+    settings: &ActiveModelSettings,
+    model: &str,
+    input: &CoCreateInput,
+    memories: &[String],
+    active_context: &str,
+    active_project_context: &str,
+) -> Result<ParsedCoCreateResponse, String> {
+    let project_id = ensure_google_gemini_oauth_project_id(&settings.api_key, model).await?;
+    let inner_request = json!({
+        "systemInstruction": {
+            "parts": [{ "text": cocreation_system_prompt() }]
+        },
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    { "text": build_cocreation_prompt(input, memories, active_context, active_project_context) }
+                ]
+            }
+        ],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "maxOutputTokens": GEMINI_DEFAULT_MAX_OUTPUT_TOKENS,
+            "temperature": 0.7
+        }
+    });
+    let body = google_gemini_cloudcode_request_body(&project_id, model, inner_request);
+    let response = post_google_code_assist_json(
+        &google_gemini_cloudcode_generate_content_url(),
+        &body,
+        &settings.api_key,
+        model,
+    )
+    .await?;
+    let body = serde_json::to_string(&response).map_err(|error| error.to_string())?;
     let content = read_gemini_response_text(&body)?;
     let parsed = parse_cocreation_model_output(&content)?;
     if parsed.reply.trim().is_empty() {
@@ -1420,9 +1478,7 @@ mod tests {
 
         assert!(prompt
             .contains("[5 已选知识卡]\n【memory｜知识卡｜03故事模型/知识卡.md】\n一条显式知识卡"));
-        assert!(
-            prompt.contains("[7 技能规则]\n【tool｜知识库运维】\nWridian 技能协议：知识库运维")
-        );
+        assert!(prompt.contains("[7 技能规则]\n【tool｜知识库运维】\nWridian 技能协议：知识库运维"));
     }
 
     #[test]

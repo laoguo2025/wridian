@@ -3112,7 +3112,7 @@ button {
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--bg-panel);
-  box-shadow: var(--shadow-pop);
+  box-shadow: none;
   color: var(--text-primary);
   padding: 14px;
   display: grid;

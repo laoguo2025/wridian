@@ -4,7 +4,7 @@ use base64::Engine;
 use keyring_core::{set_default_store, Entry, Error as KeyringError};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{Read, Write};
@@ -27,11 +27,12 @@ const ANTHROPIC_OAUTH_SCOPES: &str = "org:create_api_key user:profile user:infer
 const ANTHROPIC_OAUTH_REFRESH_SKEW_SECONDS: u64 = 300;
 const OPENAI_OAUTH_PROVIDER_ID: &str = "openai-official";
 const OPENAI_OAUTH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
-const OPENAI_OAUTH_AUTH_ENDPOINT: &str = "https://auth.openai.com/oauth/authorize";
+const OPENAI_DEVICE_USERCODE_ENDPOINT: &str =
+    "https://auth.openai.com/api/accounts/deviceauth/usercode";
+const OPENAI_DEVICE_TOKEN_ENDPOINT: &str = "https://auth.openai.com/api/accounts/deviceauth/token";
+const OPENAI_DEVICE_VERIFY_URL: &str = "https://auth.openai.com/codex/device";
+const OPENAI_DEVICE_REDIRECT_URI: &str = "https://auth.openai.com/deviceauth/callback";
 const OPENAI_OAUTH_TOKEN_ENDPOINT: &str = "https://auth.openai.com/oauth/token";
-const OPENAI_OAUTH_REDIRECT_BIND_HOST: &str = "127.0.0.1";
-const OPENAI_OAUTH_REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
-const OPENAI_OAUTH_CALLBACK_PATH: &str = "/auth/callback";
 const OPENAI_OAUTH_REFRESH_SKEW_SECONDS: u64 = 300;
 const GOOGLE_GEMINI_OAUTH_PROVIDER_ID: &str = "google-gemini-cli";
 const GOOGLE_OAUTH_CLIENT_ID_ENV: &str = "WRIDIAN_GOOGLE_OAUTH_CLIENT_ID";
@@ -40,10 +41,21 @@ const GOOGLE_OAUTH_AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v
 const GOOGLE_OAUTH_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_OAUTH_USERINFO_ENDPOINT: &str = "https://www.googleapis.com/oauth2/v1/userinfo";
 const GOOGLE_OAUTH_SCOPES: &str =
-    "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email";
+    "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile";
 const GOOGLE_OAUTH_REDIRECT_HOST: &str = "127.0.0.1";
 const GOOGLE_OAUTH_CALLBACK_PATH: &str = "/oauth2callback";
-const GOOGLE_OAUTH_REFRESH_SKEW_SECONDS: u64 = 300;
+const GOOGLE_OAUTH_REFRESH_SKEW_SECONDS: u64 = 60;
+const GOOGLE_GEMINI_CLOUDCODE_BASE_URL: &str = "cloudcode-pa://google";
+const GOOGLE_CODE_ASSIST_ENDPOINT: &str = "https://cloudcode-pa.googleapis.com";
+const GOOGLE_CODE_ASSIST_FALLBACK_ENDPOINTS: &[&str] = &[
+    "https://daily-cloudcode-pa.sandbox.googleapis.com",
+    "https://autopush-cloudcode-pa.sandbox.googleapis.com",
+];
+const GOOGLE_CODE_ASSIST_FREE_TIER_ID: &str = "free-tier";
+const GOOGLE_CODE_ASSIST_LEGACY_TIER_ID: &str = "legacy-tier";
+const GOOGLE_CODE_ASSIST_STANDARD_TIER_ID: &str = "standard-tier";
+const GOOGLE_CODE_ASSIST_USER_AGENT: &str = "google-api-nodejs-client/9.15.1 (gzip)";
+const GOOGLE_CODE_ASSIST_API_CLIENT: &str = "gl-node/24.0.0";
 pub(crate) const GEMINI_DEFAULT_MAX_OUTPUT_TOKENS: u32 = 65535;
 
 #[derive(Debug, Serialize)]
@@ -67,11 +79,25 @@ pub(crate) struct AnthropicOauthStartResponse {
     auth_url: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OpenAiOauthStartResponse {
+    session_id: String,
+    auth_url: String,
+    user_code: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AnthropicOauthCompleteInput {
     session_id: String,
     code: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OpenAiOauthCompleteInput {
+    session_id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -236,11 +262,21 @@ struct StoredGoogleOauthCredentials {
     access_token: String,
     expires_at: u64,
     email: Option<String>,
+    #[serde(default)]
+    project_id: String,
+    #[serde(default)]
+    managed_project_id: String,
 }
 
 struct GoogleOauthClientConfig {
     client_id: String,
     client_secret: String,
+}
+
+#[derive(Debug, Clone)]
+struct GoogleCodeAssistProjectInfo {
+    current_tier_id: String,
+    cloudaicompanion_project: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -263,6 +299,15 @@ struct StoredOpenAiOauthCredentials {
     email: Option<String>,
     account_id: Option<String>,
     plan: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredOpenAiDeviceSession {
+    device_auth_id: String,
+    user_code: String,
+    interval: u64,
+    created_at: u64,
 }
 
 #[tauri::command]
@@ -453,8 +498,7 @@ pub(crate) async fn wridian_test_model_provider_config(
 }
 
 pub(crate) fn is_anthropic_compatible_parse_error(error: &str) -> bool {
-    error == "Anthropic 响应中没有可用文本。"
-        || error.starts_with("Anthropic 响应 JSON 解析失败：")
+    error == "Anthropic 响应中没有可用文本。" || error.starts_with("Anthropic 响应 JSON 解析失败：")
 }
 
 pub(crate) fn apply_anthropic_auth_headers(
@@ -555,11 +599,7 @@ pub(crate) async fn wridian_anthropic_oauth_complete(
             protocol: "anthropic".to_string(),
             auth_style: "oauth_external".to_string(),
             base_url: "https://api.anthropic.com".to_string(),
-            models: vec![
-                "sonnet".to_string(),
-                "opus".to_string(),
-                "haiku".to_string(),
-            ],
+            models: anthropic_oauth_provider_models(),
             extra_env: std::collections::BTreeMap::new(),
             key_stored: true,
             api_key: None,
@@ -572,23 +612,110 @@ pub(crate) async fn wridian_anthropic_oauth_complete(
 }
 
 #[tauri::command]
-pub(crate) async fn wridian_openai_oauth_login() -> Result<ProviderOauthResponse, String> {
+pub(crate) async fn wridian_openai_oauth_start() -> Result<OpenAiOauthStartResponse, String> {
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
-    let verifier = random_urlsafe(32);
-    let challenge = pkce_challenge(&verifier);
-    let state = random_urlsafe(24);
-    let listener = TcpListener::bind((OPENAI_OAUTH_REDIRECT_BIND_HOST, 1455))
-        .map_err(|error| format!("OpenAI OAuth 回调端口监听失败：{error}"))?;
-    let auth_url = openai_oauth_auth_url(OPENAI_OAUTH_REDIRECT_URI, &state, &challenge);
-    open_browser_url(&auth_url)?;
-    let captured = tauri::async_runtime::spawn_blocking(move || {
-        capture_oauth_code(listener, OPENAI_OAUTH_CALLBACK_PATH, &state, "OpenAI")
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|error| format!("OpenAI device code 客户端创建失败：{error}"))?;
+    let response = client
+        .post(OPENAI_DEVICE_USERCODE_ENDPOINT)
+        .json(&json!({ "client_id": OPENAI_OAUTH_CLIENT_ID }))
+        .send()
+        .await
+        .map_err(|error| format!("OpenAI device code 请求失败：{error}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("OpenAI device code 响应读取失败：{error}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "OpenAI device code 请求失败：HTTP {} {}",
+            status.as_u16(),
+            body.chars().take(240).collect::<String>()
+        ));
+    }
+    let value: Value = serde_json::from_str(&body)
+        .map_err(|error| format!("OpenAI device code JSON 解析失败：{error}"))?;
+    let device_auth_id = value
+        .get("device_auth_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let user_code = value
+        .get("user_code")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let interval = value
+        .get("interval")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            value
+                .get("interval")
+                .and_then(Value::as_str)
+                .and_then(|value| value.parse::<u64>().ok())
+        })
+        .unwrap_or(5)
+        .max(3);
+    if device_auth_id.is_empty() || user_code.is_empty() {
+        return Err("OpenAI device code 响应缺少 device_auth_id 或 user_code。".to_string());
+    }
+    let session_id = random_urlsafe(24);
+    let session = StoredOpenAiDeviceSession {
+        device_auth_id,
+        user_code: user_code.clone(),
+        interval,
+        created_at: unix_timestamp(),
+    };
+    let session_key = openai_oauth_session_key(&session_id);
+    let content = serde_json::to_string(&session).map_err(|error| error.to_string())?;
+    store_provider_api_key(&session_key, &content)?;
+    open_browser_url(OPENAI_DEVICE_VERIFY_URL)?;
+    Ok(OpenAiOauthStartResponse {
+        session_id,
+        auth_url: OPENAI_DEVICE_VERIFY_URL.to_string(),
+        user_code,
     })
-    .await
-    .map_err(|error| format!("OpenAI OAuth 回调任务失败：{error}"))??;
-    let token_response =
-        exchange_openai_oauth_code(&captured, OPENAI_OAUTH_REDIRECT_URI, &verifier).await?;
+}
+
+#[tauri::command]
+pub(crate) async fn wridian_openai_oauth_complete(
+    input: OpenAiOauthCompleteInput,
+) -> Result<ProviderOauthResponse, String> {
+    let data_dir = wridian_data_dir()?;
+    ensure_workspace(&data_dir)?;
+    let session_key = openai_oauth_session_key(&input.session_id);
+    let content = read_provider_api_key(&session_key)?;
+    if content.trim().is_empty() {
+        return Err("OpenAI OAuth 会话不存在或已过期，请重新登录。".to_string());
+    }
+    let session: StoredOpenAiDeviceSession = serde_json::from_str(&content)
+        .map_err(|error| format!("OpenAI OAuth 会话格式损坏：{error}"))?;
+    if session.created_at + 15 * 60 < unix_timestamp() {
+        let _ = delete_provider_api_key(&session_key);
+        return Err("OpenAI OAuth 会话已过期，请重新登录。".to_string());
+    }
+    let (authorization_code, code_verifier) = poll_openai_device_authorization(&session).await?;
+    let token_response = exchange_openai_oauth_code(
+        &authorization_code,
+        OPENAI_DEVICE_REDIRECT_URI,
+        &code_verifier,
+    )
+    .await?;
+    let response = finish_openai_oauth_login(&data_dir, token_response)?;
+    let _ = delete_provider_api_key(&session_key);
+    Ok(response)
+}
+
+fn finish_openai_oauth_login(
+    data_dir: &Path,
+    token_response: Value,
+) -> Result<ProviderOauthResponse, String> {
     let access_token = token_response
         .get("access_token")
         .and_then(Value::as_str)
@@ -652,7 +779,7 @@ pub(crate) async fn wridian_openai_oauth_login() -> Result<ProviderOauthResponse
     };
     store_openai_oauth_credentials(&credentials)?;
     upsert_oauth_provider(
-        &data_dir,
+        data_dir,
         StoredModelProviderFile {
             id: OPENAI_OAUTH_PROVIDER_ID.to_string(),
             preset_key: Some(OPENAI_OAUTH_PROVIDER_ID.to_string()),
@@ -661,13 +788,7 @@ pub(crate) async fn wridian_openai_oauth_login() -> Result<ProviderOauthResponse
             protocol: "openai-compatible".to_string(),
             auth_style: "oauth_external".to_string(),
             base_url: "https://chatgpt.com/backend-api/codex".to_string(),
-            models: vec![
-                "gpt-5.5".to_string(),
-                "gpt-5.4".to_string(),
-                "gpt-5.4-mini".to_string(),
-                "gpt-5.3-codex".to_string(),
-                "gpt-5.3-codex-spark".to_string(),
-            ],
+            models: openai_oauth_provider_models(),
             extra_env: std::collections::BTreeMap::new(),
             key_stored: true,
             api_key: None,
@@ -675,7 +796,7 @@ pub(crate) async fn wridian_openai_oauth_login() -> Result<ProviderOauthResponse
     )?;
     Ok(ProviderOauthResponse {
         email,
-        status: model_accounts_status(&data_dir)?,
+        status: model_accounts_status(data_dir)?,
     })
 }
 
@@ -734,6 +855,7 @@ pub(crate) async fn wridian_google_gemini_oauth_login() -> Result<GoogleGeminiOa
         .and_then(Value::as_u64)
         .unwrap_or(3600);
     let email = fetch_google_oauth_email(&access_token).await.ok();
+    let project = resolve_google_code_assist_project(&access_token, "").await?;
     let credentials = StoredGoogleOauthCredentials {
         client_id: oauth_client.client_id,
         client_secret: oauth_client.client_secret,
@@ -741,6 +863,12 @@ pub(crate) async fn wridian_google_gemini_oauth_login() -> Result<GoogleGeminiOa
         access_token,
         expires_at: unix_timestamp() + expires_in,
         email: email.clone(),
+        project_id: project.cloudaicompanion_project.clone(),
+        managed_project_id: if project.current_tier_id == GOOGLE_CODE_ASSIST_FREE_TIER_ID {
+            project.cloudaicompanion_project
+        } else {
+            String::new()
+        },
     };
     store_google_oauth_credentials(&credentials)?;
     upsert_google_gemini_oauth_provider(&data_dir)?;
@@ -1244,58 +1372,100 @@ fn get_valid_google_oauth_access_token() -> Result<String, String> {
     if credentials.expires_at > unix_timestamp() + GOOGLE_OAUTH_REFRESH_SKEW_SECONDS {
         return Ok(credentials.access_token);
     }
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(20))
-        .build()
-        .map_err(|error| format!("Gemini OAuth 刷新客户端创建失败：{error}"))?;
-    let response = client
-        .post(GOOGLE_OAUTH_TOKEN_ENDPOINT)
-        .form(&[
-            ("client_id", credentials.client_id.as_str()),
-            ("client_secret", credentials.client_secret.as_str()),
-            ("refresh_token", credentials.refresh_token.as_str()),
-            ("grant_type", "refresh_token"),
-        ])
-        .send()
-        .map_err(|error| format!("Gemini OAuth token 刷新失败：{error}"))?;
-    let status = response.status();
-    let body = response
-        .text()
-        .map_err(|error| format!("Gemini OAuth token 刷新响应读取失败：{error}"))?;
-    if !status.is_success() {
-        return Err(format!(
-            "Gemini OAuth token 刷新失败：HTTP {} {}",
-            status.as_u16(),
-            body.chars().take(240).collect::<String>()
-        ));
+    if credentials.expires_at <= unix_timestamp() + GOOGLE_OAUTH_REFRESH_SKEW_SECONDS {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(20))
+            .build()
+            .map_err(|error| format!("Gemini OAuth 刷新客户端创建失败：{error}"))?;
+        let response = client
+            .post(GOOGLE_OAUTH_TOKEN_ENDPOINT)
+            .form(&[
+                ("client_id", credentials.client_id.as_str()),
+                ("client_secret", credentials.client_secret.as_str()),
+                ("refresh_token", credentials.refresh_token.as_str()),
+                ("grant_type", "refresh_token"),
+            ])
+            .send()
+            .map_err(|error| format!("Gemini OAuth token 刷新失败：{error}"))?;
+        let status = response.status();
+        let body = response
+            .text()
+            .map_err(|error| format!("Gemini OAuth token 刷新响应读取失败：{error}"))?;
+        if !status.is_success() {
+            return Err(format!(
+                "Gemini OAuth token 刷新失败：HTTP {} {}",
+                status.as_u16(),
+                body.chars().take(240).collect::<String>()
+            ));
+        }
+        let value: Value = serde_json::from_str(&body)
+            .map_err(|error| format!("Gemini OAuth token 刷新 JSON 解析失败：{error}"))?;
+        let access_token = value
+            .get("access_token")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if access_token.is_empty() {
+            return Err("Gemini OAuth token 刷新响应缺少 access_token。".to_string());
+        }
+        let expires_in = value
+            .get("expires_in")
+            .and_then(Value::as_u64)
+            .unwrap_or(3600);
+        credentials.access_token = access_token;
+        credentials.expires_at = unix_timestamp() + expires_in;
+        if let Some(refresh_token) = value
+            .get("refresh_token")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+        {
+            credentials.refresh_token = refresh_token.to_string();
+        }
     }
-    let value: Value = serde_json::from_str(&body)
-        .map_err(|error| format!("Gemini OAuth token 刷新 JSON 解析失败：{error}"))?;
-    let access_token = value
-        .get("access_token")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    if access_token.is_empty() {
-        return Err("Gemini OAuth token 刷新响应缺少 access_token。".to_string());
-    }
-    let expires_in = value
-        .get("expires_in")
-        .and_then(Value::as_u64)
-        .unwrap_or(3600);
-    credentials.access_token = access_token.clone();
-    credentials.expires_at = unix_timestamp() + expires_in;
-    if let Some(refresh_token) = value
-        .get("refresh_token")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|token| !token.is_empty())
-    {
-        credentials.refresh_token = refresh_token.to_string();
-    }
+    let access_token = credentials.access_token.clone();
     store_google_oauth_credentials(&credentials)?;
     Ok(access_token)
+}
+
+pub(crate) fn is_google_gemini_oauth_settings(settings: &ActiveModelSettings) -> bool {
+    settings.provider_id == GOOGLE_GEMINI_OAUTH_PROVIDER_ID
+        && normalize_auth_style(&settings.auth_style) == "oauth_external"
+}
+
+pub(crate) fn google_gemini_oauth_project_id() -> Result<Option<String>, String> {
+    Ok(read_google_oauth_credentials()?.and_then(|credentials| {
+        let project_id = credentials.project_id.trim().to_string();
+        (!project_id.is_empty()).then_some(project_id)
+    }))
+}
+
+pub(crate) async fn ensure_google_gemini_oauth_project_id(
+    access_token: &str,
+    model: &str,
+) -> Result<String, String> {
+    if let Some(project_id) = google_gemini_oauth_project_id()? {
+        return Ok(project_id);
+    }
+    let mut credentials = read_google_oauth_credentials()?
+        .ok_or_else(|| "Gemini OAuth 凭据不存在，请重新登录。".to_string())?;
+    let project = resolve_google_code_assist_project(access_token, model).await?;
+    let project_id = project.cloudaicompanion_project.trim().to_string();
+    if project_id.is_empty() {
+        return Err(
+            "Gemini OAuth 未能解析 Code Assist project，请重新登录或换用 Gemini API Key。"
+                .to_string(),
+        );
+    }
+    credentials.project_id = project_id.clone();
+    credentials.managed_project_id = if project.current_tier_id == GOOGLE_CODE_ASSIST_FREE_TIER_ID {
+        project_id.clone()
+    } else {
+        String::new()
+    };
+    store_google_oauth_credentials(&credentials)?;
+    Ok(project_id)
 }
 
 fn read_legacy_custom_api_key() -> Result<String, String> {
@@ -1334,8 +1504,8 @@ fn upsert_google_gemini_oauth_provider(data_dir: &Path) -> Result<(), String> {
         provider_type: Some(GOOGLE_GEMINI_OAUTH_PROVIDER_ID.to_string()),
         protocol: "google".to_string(),
         auth_style: "oauth_external".to_string(),
-        base_url: "https://generativelanguage.googleapis.com/v1beta".to_string(),
-        models: vec!["gemini-2.5-pro".to_string(), "gemini-2.5-flash".to_string()],
+        base_url: GOOGLE_GEMINI_CLOUDCODE_BASE_URL.to_string(),
+        models: gemini_oauth_provider_models(),
         extra_env: std::collections::BTreeMap::new(),
         key_stored: true,
         api_key: None,
@@ -1361,6 +1531,47 @@ fn anthropic_oauth_session_key(session_id: &str) -> String {
     )
 }
 
+fn openai_oauth_session_key(session_id: &str) -> String {
+    format!("oauth-session:openai:{}", sanitize_provider_id(session_id))
+}
+
+fn anthropic_oauth_provider_models() -> Vec<String> {
+    [
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5-20251001",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn openai_oauth_provider_models() -> Vec<String> {
+    [
+        "gpt-5.5",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.3-codex",
+        "gpt-5.3-codex-spark",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn gemini_oauth_provider_models() -> Vec<String> {
+    [
+        "gemini-3.5-flash",
+        "gemini-3.1-pro-preview",
+        "gemini-2.5-pro",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
 fn anthropic_oauth_auth_url(verifier: &str, challenge: &str) -> String {
     let params = [
         ("code", "true"),
@@ -1378,26 +1589,6 @@ fn anthropic_oauth_auth_url(verifier: &str, challenge: &str) -> String {
         .collect::<Vec<_>>()
         .join("&");
     format!("{ANTHROPIC_OAUTH_AUTH_ENDPOINT}?{query}")
-}
-
-fn openai_oauth_auth_url(redirect_uri: &str, state: &str, challenge: &str) -> String {
-    let params = [
-        ("client_id", OPENAI_OAUTH_CLIENT_ID),
-        ("response_type", "code"),
-        ("redirect_uri", redirect_uri),
-        ("scope", "openid profile email offline_access"),
-        ("code_challenge", challenge),
-        ("code_challenge_method", "S256"),
-        ("state", state),
-        ("codex_cli_simplified_flow", "true"),
-        ("id_token_add_organizations", "true"),
-    ];
-    let query = params
-        .iter()
-        .map(|(key, value)| format!("{key}={}", urlencoding::encode(value)))
-        .collect::<Vec<_>>()
-        .join("&");
-    format!("{OPENAI_OAUTH_AUTH_ENDPOINT}?{query}")
 }
 
 fn google_oauth_auth_url(
@@ -1436,7 +1627,7 @@ fn google_oauth_client_config() -> Result<GoogleOauthClientConfig, String> {
         .to_string();
     if client_id.is_empty() || client_secret.is_empty() {
         return Err(format!(
-            "Google Gemini OAuth 需要先配置环境变量 {GOOGLE_OAUTH_CLIENT_ID_ENV} 和 {GOOGLE_OAUTH_CLIENT_SECRET_ENV}。"
+            "Gemini OAuth 需要先配置环境变量 {GOOGLE_OAUTH_CLIENT_ID_ENV} 和 {GOOGLE_OAUTH_CLIENT_SECRET_ENV}。"
         ));
     }
     Ok(GoogleOauthClientConfig {
@@ -1451,60 +1642,6 @@ fn open_browser_url(url: &str) -> Result<(), String> {
         .spawn()
         .map_err(|error| format!("打开浏览器失败：{error}"))?;
     Ok(())
-}
-
-fn capture_oauth_code(
-    listener: TcpListener,
-    expected_path: &str,
-    expected_state: &str,
-    label: &str,
-) -> Result<String, String> {
-    let (mut stream, _) = listener
-        .accept()
-        .map_err(|error| format!("{label} OAuth 回调接收失败：{error}"))?;
-    let mut buffer = [0u8; 4096];
-    let read = stream
-        .read(&mut buffer)
-        .map_err(|error| format!("{label} OAuth 回调读取失败：{error}"))?;
-    let request = String::from_utf8_lossy(&buffer[..read]);
-    let first_line = request.lines().next().unwrap_or("");
-    let target = first_line
-        .split_whitespace()
-        .nth(1)
-        .ok_or_else(|| format!("{label} OAuth 回调请求格式无效。"))?;
-    let (path, query) = target.split_once('?').unwrap_or((target, ""));
-    if path != expected_path {
-        let _ = write_oauth_callback_page(
-            &mut stream,
-            404,
-            &format!("Wridian {label} OAuth callback path mismatch."),
-        );
-        return Err(format!("{label} OAuth 回调路径不匹配。"));
-    }
-    let params = parse_query(query);
-    if let Some(error) = params.get("error") {
-        let _ = write_oauth_callback_page(&mut stream, 400, &format!("{label} OAuth denied."));
-        return Err(format!("{label} OAuth 登录失败：{error}"));
-    }
-    if params.get("state").map(String::as_str) != Some(expected_state) {
-        let _ = write_oauth_callback_page(
-            &mut stream,
-            400,
-            &format!("Wridian {label} OAuth state mismatch."),
-        );
-        return Err(format!("{label} OAuth state 校验失败。"));
-    }
-    let code = params
-        .get("code")
-        .map(String::to_string)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| format!("{label} OAuth 回调缺少 code。"))?;
-    let _ = write_oauth_callback_page(
-        &mut stream,
-        200,
-        &format!("Wridian {label} OAuth login complete. You can return to Wridian."),
-    );
-    Ok(code)
 }
 
 fn capture_google_oauth_code(
@@ -1585,6 +1722,66 @@ fn write_oauth_callback_page(
         html.as_bytes().len(),
         html
     )
+}
+
+async fn poll_openai_device_authorization(
+    session: &StoredOpenAiDeviceSession,
+) -> Result<(String, String), String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|error| format!("OpenAI device auth 客户端创建失败：{error}"))?;
+    let started = std::time::Instant::now();
+    let max_wait = Duration::from_secs(180);
+    loop {
+        let response = client
+            .post(OPENAI_DEVICE_TOKEN_ENDPOINT)
+            .json(&json!({
+                "device_auth_id": session.device_auth_id,
+                "user_code": session.user_code,
+            }))
+            .send()
+            .await
+            .map_err(|error| format!("OpenAI device auth 轮询失败：{error}"))?;
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|error| format!("OpenAI device auth 响应读取失败：{error}"))?;
+        if status.is_success() {
+            let value: Value = serde_json::from_str(&body)
+                .map_err(|error| format!("OpenAI device auth JSON 解析失败：{error}"))?;
+            let authorization_code = value
+                .get("authorization_code")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let code_verifier = value
+                .get("code_verifier")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if authorization_code.is_empty() || code_verifier.is_empty() {
+                return Err(
+                    "OpenAI device auth 响应缺少 authorization_code 或 code_verifier。".to_string(),
+                );
+            }
+            return Ok((authorization_code, code_verifier));
+        }
+        if status.as_u16() != 403 && status.as_u16() != 404 {
+            return Err(format!(
+                "OpenAI device auth 轮询失败：HTTP {} {}",
+                status.as_u16(),
+                body.chars().take(240).collect::<String>()
+            ));
+        }
+        if started.elapsed() >= max_wait {
+            return Err("OpenAI device auth 等待超时，请重新登录。".to_string());
+        }
+        tokio::time::sleep(Duration::from_secs(session.interval.max(3))).await;
+    }
 }
 
 async fn exchange_anthropic_oauth_code(
@@ -1726,6 +1923,190 @@ async fn fetch_google_oauth_email(access_token: &str) -> Result<String, String> 
         .ok_or_else(|| "Google userinfo 响应缺少 email。".to_string())
 }
 
+async fn resolve_google_code_assist_project(
+    access_token: &str,
+    model: &str,
+) -> Result<GoogleCodeAssistProjectInfo, String> {
+    let info = load_google_code_assist(access_token, "", model).await?;
+    if !info.current_tier_id.trim().is_empty() {
+        return Ok(info);
+    }
+    let onboard =
+        onboard_google_code_assist_user(access_token, GOOGLE_CODE_ASSIST_FREE_TIER_ID, "", model)
+            .await?;
+    let response = onboard
+        .get("response")
+        .filter(|value| value.is_object())
+        .unwrap_or(&onboard);
+    Ok(GoogleCodeAssistProjectInfo {
+        current_tier_id: GOOGLE_CODE_ASSIST_FREE_TIER_ID.to_string(),
+        cloudaicompanion_project: response
+            .get("cloudaicompanionProject")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string(),
+    })
+}
+
+async fn load_google_code_assist(
+    access_token: &str,
+    project_id: &str,
+    model: &str,
+) -> Result<GoogleCodeAssistProjectInfo, String> {
+    let mut metadata = google_code_assist_client_metadata();
+    metadata.insert(
+        "duetProject".to_string(),
+        Value::String(project_id.trim().to_string()),
+    );
+    let mut body = json!({ "metadata": metadata });
+    if !project_id.trim().is_empty() {
+        body["cloudaicompanionProject"] = json!(project_id.trim());
+    }
+    let mut endpoints = Vec::with_capacity(1 + GOOGLE_CODE_ASSIST_FALLBACK_ENDPOINTS.len());
+    endpoints.push(GOOGLE_CODE_ASSIST_ENDPOINT);
+    endpoints.extend_from_slice(GOOGLE_CODE_ASSIST_FALLBACK_ENDPOINTS);
+    let mut last_error = None;
+    for endpoint in endpoints {
+        let url = format!("{endpoint}/v1internal:loadCodeAssist");
+        match post_google_code_assist_json(&url, &body, access_token, model).await {
+            Ok(value) => return Ok(parse_google_code_assist_project_info(&value)),
+            Err(error) if error.contains("SECURITY_POLICY_VIOLATED") => {
+                return Ok(GoogleCodeAssistProjectInfo {
+                    current_tier_id: GOOGLE_CODE_ASSIST_STANDARD_TIER_ID.to_string(),
+                    cloudaicompanion_project: project_id.trim().to_string(),
+                });
+            }
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| "Gemini Code Assist project 发现失败。".to_string()))
+}
+
+async fn onboard_google_code_assist_user(
+    access_token: &str,
+    tier_id: &str,
+    project_id: &str,
+    model: &str,
+) -> Result<Value, String> {
+    if !matches!(
+        tier_id,
+        GOOGLE_CODE_ASSIST_FREE_TIER_ID | GOOGLE_CODE_ASSIST_LEGACY_TIER_ID
+    ) && project_id.trim().is_empty()
+    {
+        return Err("Gemini Code Assist 付费层级需要配置 GCP project id。".to_string());
+    }
+    let mut body = json!({
+        "tierId": tier_id,
+        "metadata": google_code_assist_client_metadata()
+    });
+    if !project_id.trim().is_empty() {
+        body["cloudaicompanionProject"] = json!(project_id.trim());
+    }
+    let url = format!("{GOOGLE_CODE_ASSIST_ENDPOINT}/v1internal:onboardUser");
+    let response = post_google_code_assist_json(&url, &body, access_token, model).await?;
+    if response
+        .get("done")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Ok(response);
+    }
+    let Some(operation_name) = response.get("name").and_then(Value::as_str) else {
+        return Ok(response);
+    };
+    let poll_url = format!("{GOOGLE_CODE_ASSIST_ENDPOINT}/v1internal/{operation_name}");
+    for _ in 0..12 {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        let poll = post_google_code_assist_json(&poll_url, &json!({}), access_token, model).await?;
+        if poll.get("done").and_then(Value::as_bool).unwrap_or(false) {
+            return Ok(poll);
+        }
+    }
+    Ok(response)
+}
+
+fn parse_google_code_assist_project_info(value: &Value) -> GoogleCodeAssistProjectInfo {
+    GoogleCodeAssistProjectInfo {
+        current_tier_id: value
+            .get("currentTier")
+            .and_then(|tier| tier.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string(),
+        cloudaicompanion_project: value
+            .get("cloudaicompanionProject")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string(),
+    }
+}
+
+fn google_code_assist_client_metadata() -> Map<String, Value> {
+    let mut metadata = Map::new();
+    metadata.insert(
+        "ideType".to_string(),
+        Value::String("IDE_UNSPECIFIED".to_string()),
+    );
+    metadata.insert(
+        "platform".to_string(),
+        Value::String("PLATFORM_UNSPECIFIED".to_string()),
+    );
+    metadata.insert(
+        "pluginType".to_string(),
+        Value::String("GEMINI".to_string()),
+    );
+    metadata
+}
+
+pub(crate) async fn post_google_code_assist_json(
+    url: &str,
+    body: &Value,
+    access_token: &str,
+    model: &str,
+) -> Result<Value, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(90))
+        .build()
+        .map_err(|error| format!("Gemini Code Assist 客户端创建失败：{error}"))?;
+    let mut user_agent = GOOGLE_CODE_ASSIST_USER_AGENT.to_string();
+    if !model.trim().is_empty() {
+        user_agent.push_str(" model/");
+        user_agent.push_str(model.trim());
+    }
+    let response = client
+        .post(url)
+        .bearer_auth(access_token)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .header("User-Agent", user_agent)
+        .header("X-Goog-Api-Client", GOOGLE_CODE_ASSIST_API_CLIENT)
+        .header("x-activity-request-id", random_urlsafe(16))
+        .json(body)
+        .send()
+        .await
+        .map_err(|error| format!("Gemini Code Assist 请求失败：{error}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("Gemini Code Assist 响应读取失败：{error}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "Gemini Code Assist 请求失败：HTTP {} {}",
+            status.as_u16(),
+            response_body_summary(&body)
+        ));
+    }
+    if body.trim().is_empty() {
+        return Ok(json!({}));
+    }
+    serde_json::from_str(&body)
+        .map_err(|error| format!("Gemini Code Assist JSON 解析失败：{error}"))
+}
+
 fn parse_jwt_claims(token: &str) -> Option<Value> {
     let payload = token.split('.').nth(1)?;
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -1824,7 +2205,7 @@ fn resolve_provider_model(provider: &StoredModelProviderFile, model: &str) -> St
     }
     if model.eq_ignore_ascii_case("opus") {
         if is_first_party_anthropic_provider(provider) {
-            return "claude-opus-4-7".to_string();
+            return "claude-opus-4-8".to_string();
         }
         if let Some(mapped) = provider.extra_env.get("ANTHROPIC_DEFAULT_OPUS_MODEL") {
             return mapped.trim().to_string();
@@ -1845,6 +2226,9 @@ fn is_first_party_anthropic_provider(provider: &StoredModelProviderFile) -> bool
 }
 
 fn validate_base_url(base_url: &str) -> Result<(), String> {
+    if base_url == GOOGLE_GEMINI_CLOUDCODE_BASE_URL {
+        return Ok(());
+    }
     if base_url.contains('?') || base_url.contains('#') {
         return Err(
             "Base URL 不能包含查询参数或片段，请只填写服务根地址或完整 endpoint 路径。".to_string(),
@@ -1974,13 +2358,13 @@ async fn test_openai_compatible_chat(
         .post(url)
         .bearer_auth(&settings.api_key)
         .json(&json!({
-        "model": settings.model,
-        "messages": [
-            { "role": "user", "content": "Reply with OK." }
-        ],
-        "max_tokens": 8,
-        "temperature": 0
-    }))
+            "model": settings.model,
+            "messages": [
+                { "role": "user", "content": "Reply with OK." }
+            ],
+            "max_tokens": 8,
+            "temperature": 0
+        }))
         .send()
         .await
         .map_err(|error| format!("模型连接失败：{error}"))?;
@@ -2032,6 +2416,9 @@ async fn send_anthropic_test_request(
 async fn test_gemini_chat(
     settings: &ActiveModelSettings,
 ) -> Result<TestModelProviderResponse, String> {
+    if is_google_gemini_oauth_settings(settings) {
+        return test_google_gemini_cloudcode_chat(settings).await;
+    }
     let url = gemini_generate_content_url(&settings.base_url, &settings.model);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
@@ -2059,12 +2446,68 @@ async fn test_gemini_chat(
     read_gemini_test_response(response).await
 }
 
+async fn test_google_gemini_cloudcode_chat(
+    settings: &ActiveModelSettings,
+) -> Result<TestModelProviderResponse, String> {
+    let project_id =
+        ensure_google_gemini_oauth_project_id(&settings.api_key, &settings.model).await?;
+    let body = google_gemini_cloudcode_request_body(
+        &project_id,
+        &settings.model,
+        json!({
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{ "text": "请只回复：OK" }]
+                }
+            ],
+            "generationConfig": {
+                "maxOutputTokens": 32,
+                "temperature": 0.0
+            }
+        }),
+    );
+    let response = post_google_code_assist_json(
+        &google_gemini_cloudcode_generate_content_url(),
+        &body,
+        &settings.api_key,
+        &settings.model,
+    )
+    .await?;
+    let body = serde_json::to_string(&response).map_err(|error| error.to_string())?;
+    if read_gemini_response_text(&body)?.trim().is_empty() {
+        return Err("Gemini OAuth 返回了空文本，无法用于 Wridian 对话。".to_string());
+    }
+    Ok(TestModelProviderResponse {
+        ok: true,
+        message: "连接成功，且 Gemini OAuth / Code Assist 响应格式可用于 Wridian 对话。"
+            .to_string(),
+    })
+}
+
 pub(crate) fn gemini_generate_content_url(base_url: &str, model: &str) -> String {
     format!(
         "{}/models/{}:generateContent",
         base_url.trim().trim_end_matches('/'),
         model.trim()
     )
+}
+
+pub(crate) fn google_gemini_cloudcode_generate_content_url() -> String {
+    format!("{GOOGLE_CODE_ASSIST_ENDPOINT}/v1internal:generateContent")
+}
+
+pub(crate) fn google_gemini_cloudcode_request_body(
+    project_id: &str,
+    model: &str,
+    inner_request: Value,
+) -> Value {
+    json!({
+        "project": project_id.trim(),
+        "model": model.trim(),
+        "user_prompt_id": random_urlsafe(16),
+        "request": inner_request,
+    })
 }
 
 async fn read_text_test_response(
@@ -2156,8 +2599,7 @@ pub(crate) fn read_anthropic_response_text(body: &str) -> Result<String, String>
     if let Some(text) = read_anthropic_value_text(&value) {
         Ok(text)
     } else {
-        read_model_response_text(body)
-            .map_err(|_| "Anthropic 响应中没有可用文本。".to_string())
+        read_model_response_text(body).map_err(|_| "Anthropic 响应中没有可用文本。".to_string())
     }
 }
 
@@ -2221,7 +2663,10 @@ fn collect_anthropic_text(value: &Value, parts: &mut Vec<String>) {
 }
 
 fn read_sse_response_text(body: &str) -> Option<String> {
-    if !body.lines().any(|line| line.trim_start().starts_with("data:")) {
+    if !body
+        .lines()
+        .any(|line| line.trim_start().starts_with("data:"))
+    {
         return None;
     }
     let mut parts = Vec::new();
@@ -2283,7 +2728,11 @@ fn read_sse_event_text(value: &Value) -> Option<String> {
 pub(crate) fn read_gemini_response_text(body: &str) -> Result<String, String> {
     let value: Value = serde_json::from_str(body)
         .map_err(|error| format!("Gemini 响应 JSON 解析失败：{error}"))?;
-    let text = value
+    let inner = value
+        .get("response")
+        .filter(|response| response.is_object())
+        .unwrap_or(&value);
+    let text = inner
         .get("candidates")
         .and_then(Value::as_array)
         .into_iter()
@@ -2309,6 +2758,13 @@ pub(crate) fn read_gemini_response_text(body: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_data_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("wridian-{name}-{}", random_urlsafe(8)));
+        fs::create_dir_all(&dir).expect("create test data dir");
+        fs::create_dir_all(crate::runtime::runtime_root(&dir)).expect("create runtime dir");
+        dir
+    }
 
     #[test]
     fn base_url_requires_https_except_localhost() {
@@ -2397,6 +2853,86 @@ mod tests {
     }
 
     #[test]
+    fn google_gemini_cloudcode_request_body_matches_code_assist_envelope() {
+        let inner = json!({ "contents": [], "generationConfig": {} });
+        let body =
+            google_gemini_cloudcode_request_body("project-123", "gemini-2.5-pro", inner.clone());
+
+        assert_eq!(body["project"], "project-123");
+        assert_eq!(body["model"], "gemini-2.5-pro");
+        assert_eq!(body["request"], inner);
+        assert!(body["user_prompt_id"].as_str().unwrap_or("").len() > 10);
+    }
+
+    #[test]
+    fn google_gemini_oauth_provider_uses_cloudcode_marker_url() {
+        let data_dir = test_data_dir("google-gemini-cloudcode-provider");
+        upsert_google_gemini_oauth_provider(&data_dir).expect("upsert provider");
+        let file = read_model_accounts_file(&data_dir).expect("accounts file");
+        let provider = file
+            .providers
+            .iter()
+            .find(|provider| provider.id == GOOGLE_GEMINI_OAUTH_PROVIDER_ID)
+            .expect("google oauth provider");
+
+        assert_eq!(provider.base_url, GOOGLE_GEMINI_CLOUDCODE_BASE_URL);
+        assert_eq!(provider.auth_style, "oauth_external");
+        assert!(validate_base_url(&provider.base_url).is_ok());
+    }
+
+    #[test]
+    fn oauth_provider_model_defaults_match_settings_catalog() {
+        assert_eq!(
+            anthropic_oauth_provider_models(),
+            vec![
+                "claude-opus-4-8",
+                "claude-opus-4-7",
+                "claude-opus-4-6",
+                "claude-sonnet-4-6",
+                "claude-haiku-4-5-20251001",
+            ]
+        );
+        assert_eq!(
+            gemini_oauth_provider_models(),
+            vec![
+                "gemini-3.5-flash",
+                "gemini-3.1-pro-preview",
+                "gemini-2.5-pro",
+            ]
+        );
+        assert_eq!(
+            openai_oauth_provider_models(),
+            vec![
+                "gpt-5.5",
+                "gpt-5.4",
+                "gpt-5.4-mini",
+                "gpt-5.3-codex",
+                "gpt-5.3-codex-spark",
+            ]
+        );
+    }
+
+    #[test]
+    fn openai_oauth_uses_codex_device_flow_endpoints() {
+        assert_eq!(
+            OPENAI_DEVICE_USERCODE_ENDPOINT,
+            "https://auth.openai.com/api/accounts/deviceauth/usercode"
+        );
+        assert_eq!(
+            OPENAI_DEVICE_TOKEN_ENDPOINT,
+            "https://auth.openai.com/api/accounts/deviceauth/token"
+        );
+        assert_eq!(
+            OPENAI_DEVICE_VERIFY_URL,
+            "https://auth.openai.com/codex/device"
+        );
+        assert_eq!(
+            OPENAI_DEVICE_REDIRECT_URI,
+            "https://auth.openai.com/deviceauth/callback"
+        );
+    }
+
+    #[test]
     fn gemini_default_output_limit_matches_native_api_ceiling() {
         assert_eq!(GEMINI_DEFAULT_MAX_OUTPUT_TOKENS, 65535);
     }
@@ -2469,7 +3005,7 @@ mod tests {
             resolve_provider_model(&provider, "sonnet"),
             "claude-sonnet-4-6"
         );
-        assert_eq!(resolve_provider_model(&provider, "opus"), "claude-opus-4-7");
+        assert_eq!(resolve_provider_model(&provider, "opus"), "claude-opus-4-8");
         assert_eq!(
             resolve_provider_model(&provider, "haiku"),
             "claude-haiku-4-5-20251001"
@@ -2558,6 +3094,12 @@ mod tests {
     #[test]
     fn gemini_response_text_reads_candidate_parts() {
         let body = r#"{"candidates":[{"content":{"parts":[{"text":"OK"}]}}]}"#;
+        assert_eq!(read_gemini_response_text(body).expect("text"), "OK");
+    }
+
+    #[test]
+    fn gemini_response_text_reads_code_assist_wrapped_response() {
+        let body = r#"{"response":{"candidates":[{"content":{"parts":[{"text":"OK"}]}}]}}"#;
         assert_eq!(read_gemini_response_text(body).expect("text"), "OK");
     }
 }

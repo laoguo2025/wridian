@@ -32,14 +32,16 @@ export type VendorPreset = {
 
 const ANTHROPIC_DEFAULT_MODELS: CatalogModel[] = [
   { modelId: "sonnet", displayName: "Sonnet 4.6", role: "sonnet" },
-  { modelId: "opus", displayName: "Opus 4.7", role: "opus" },
+  { modelId: "opus", displayName: "Opus 4.8", role: "opus" },
   { modelId: "haiku", displayName: "Haiku 4.5", role: "haiku" },
 ];
 
 const ANTHROPIC_FIRST_PARTY_MODELS: CatalogModel[] = [
-  { modelId: "sonnet", upstreamModelId: "claude-sonnet-4-6", displayName: "Sonnet 4.6", role: "sonnet" },
-  { modelId: "opus", upstreamModelId: "claude-opus-4-7", displayName: "Opus 4.7", role: "opus" },
-  { modelId: "haiku", upstreamModelId: "claude-haiku-4-5-20251001", displayName: "Haiku 4.5", role: "haiku" },
+  { modelId: "claude-opus-4-8", displayName: "Claude Opus 4.8", role: "opus" },
+  { modelId: "claude-opus-4-7", displayName: "Claude Opus 4.7", role: "opus" },
+  { modelId: "claude-opus-4-6", displayName: "Claude Opus 4.6", role: "opus" },
+  { modelId: "claude-sonnet-4-6", displayName: "Claude Sonnet 4.6", role: "sonnet" },
+  { modelId: "claude-haiku-4-5-20251001", displayName: "Claude Haiku 4.5", role: "haiku" },
 ];
 
 export const VENDOR_PRESETS: VendorPreset[] = [
@@ -83,11 +85,12 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     fields: ["model_names"],
     bucket: "official",
     meta: {
-      apiKeyUrl: "https://auth.openai.com/oauth/authorize",
+      apiKeyUrl: "https://auth.openai.com/codex/device",
       docsUrl: "https://platform.openai.com/docs",
       billingModel: "oauth",
       notes: [
-        "授权地址：auth.openai.com/oauth/authorize",
+        "授权地址：auth.openai.com/codex/device",
+        "Device Code URL: https://auth.openai.com/api/accounts/deviceauth/usercode",
         "Token URL: https://auth.openai.com/oauth/token",
         "Runtime URL: https://chatgpt.com/backend-api/codex/responses",
       ],
@@ -102,9 +105,9 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     baseUrl: "https://generativelanguage.googleapis.com/v1beta",
     defaultEnvOverrides: {},
     defaultModels: [
-      { modelId: "gemini-2.5-pro", displayName: "Gemini 2.5 Pro", role: "default" },
-      { modelId: "gemini-2.5-flash", displayName: "Gemini 2.5 Flash", role: "haiku" },
-      { modelId: "gemini-2.0-flash", displayName: "Gemini 2.0 Flash" },
+      { modelId: "gemini-3.5-flash", displayName: "Gemini 3.5 Flash", role: "haiku" },
+      { modelId: "gemini-3.1-pro-preview", displayName: "Gemini 3.1 Pro Preview", role: "default" },
+      { modelId: "gemini-2.5-pro", displayName: "Gemini 2.5 Pro" },
     ],
     fields: ["api_key", "model_names"],
     bucket: "official",
@@ -120,11 +123,12 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     descriptionZh: "Google 账号 OAuth 登录",
     protocol: "google",
     authStyle: "oauth_external",
-    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    baseUrl: "cloudcode-pa://google",
     defaultEnvOverrides: {},
     defaultModels: [
-      { modelId: "gemini-2.5-pro", displayName: "Gemini 2.5 Pro", role: "default" },
-      { modelId: "gemini-2.5-flash", displayName: "Gemini 2.5 Flash", role: "haiku" },
+      { modelId: "gemini-3.5-flash", displayName: "Gemini 3.5 Flash", role: "haiku" },
+      { modelId: "gemini-3.1-pro-preview", displayName: "Gemini 3.1 Pro Preview", role: "default" },
+      { modelId: "gemini-2.5-pro", displayName: "Gemini 2.5 Pro" },
     ],
     fields: ["model_names"],
     bucket: "official",
@@ -135,8 +139,9 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       notes: [
         "OAuth URL: https://accounts.google.com/o/oauth2/v2/auth",
         "Token URL: https://oauth2.googleapis.com/token",
+        "Runtime: https://cloudcode-pa.googleapis.com/v1internal:generateContent",
         "Redirect: http://localhost:8085/oauth2callback",
-        "Scopes: cloud-platform, userinfo.email",
+        "Scopes: cloud-platform, userinfo.email, userinfo.profile",
       ],
     },
   },

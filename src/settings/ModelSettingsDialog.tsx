@@ -37,6 +37,12 @@ type AnthropicOauthStartResponse = {
   authUrl: string;
 };
 
+type OpenAiOauthStartResponse = {
+  sessionId: string;
+  authUrl: string;
+  userCode: string;
+};
+
 const ADD_SERVICE_SECTIONS = [
   {
     title: "授权登录",
@@ -240,7 +246,17 @@ export function ModelSettingsDialog({
                     input: { sessionId: start.sessionId, code },
                   });
                 } else if (preset.key === "openai-official") {
-                  response = await invoke<ProviderOauthResponse>("wridian_openai_oauth_login");
+                  const start = await invoke<OpenAiOauthStartResponse>("wridian_openai_oauth_start");
+                  const confirmed = window.confirm(
+                    `浏览器已打开 OpenAI Codex 登录页。\n\n验证码：${start.userCode}\n\n请在网页中输入验证码并完成登录，然后点击“确定”。\n如果浏览器没有打开，请手动访问：${start.authUrl}`,
+                  );
+                  if (!confirmed) {
+                    setMessage("已取消 OpenAI OAuth 登录。");
+                    return;
+                  }
+                  response = await invoke<ProviderOauthResponse>("wridian_openai_oauth_complete", {
+                    input: { sessionId: start.sessionId },
+                  });
                 } else {
                   response = await invoke<GoogleGeminiOauthResponse>("wridian_google_gemini_oauth_login");
                 }
@@ -477,7 +493,7 @@ function oauthDescription(presetKey: string) {
     return "使用 Anthropic 官方账号授权。浏览器授权后，把网页显示的 code 粘贴回 Wridian。";
   }
   if (presetKey === "openai-official") {
-    return "使用 OpenAI / ChatGPT 官方账号授权。本机会监听回调并自动保存登录状态。";
+    return "使用 OpenAI / ChatGPT 官方账号授权。浏览器中输入验证码后，Wridian 会自动保存登录状态。";
   }
-  return "使用 Google 账号授权 Gemini。本机会监听回调并自动保存登录状态。";
+  return "使用 Google 账号授权 Gemini CLI / Code Assist。本机会监听回调并自动保存登录状态。";
 }
