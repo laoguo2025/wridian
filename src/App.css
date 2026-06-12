@@ -1034,6 +1034,22 @@ button {
   color: var(--text-muted);
 }
 
+.draft-suggestion-summary,
+.draft-suggestion-action-buttons {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.draft-suggestion-summary {
+  flex: 1 1 auto;
+}
+
+.draft-suggestion-action-buttons {
+  flex: 0 0 auto;
+}
+
 .draft-suggestion-actions .draft-guard-note {
   color: var(--accent);
 }

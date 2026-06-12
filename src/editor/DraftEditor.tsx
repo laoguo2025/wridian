@@ -69,7 +69,7 @@ export function DraftEditor({
         return (
           <span className="inline-edit" key={chunk.edit.id}>
             <span className="inline-diff">
-              <del>{chunk.edit.target}</del>
+              {chunk.edit.target ? <del>{chunk.edit.target}</del> : null}
               <ins>{chunk.edit.replacement}</ins>
             </span>
             {chunk.edit.rationale ? <small>{chunk.edit.rationale}</small> : null}

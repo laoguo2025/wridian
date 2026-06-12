@@ -36,7 +36,11 @@ export function createDraftReplaceGuardReport<TEdit extends DraftReplaceEdit>(
   for (const edit of edits) {
     const target = edit.target;
     if (!target) {
-      skipped.push({ edit, reason: "empty_target" });
+      if (!content) {
+        matches.push({ edit, index: 0 });
+      } else {
+        skipped.push({ edit, reason: "empty_target" });
+      }
       continue;
     }
 

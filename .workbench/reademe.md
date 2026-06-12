@@ -72,3 +72,4 @@
   - `.workbench/governance/2026-06-13-preview-asset-limit-20mb.md`
   - `.workbench/governance/2026-06-13-system-trash-file-tree.md`
   - `.workbench/governance/2026-06-13-model-provider-detail-ui-removal.md`
+  - `.workbench/governance/2026-06-13-inline-diff-chat-editing-fixes.md`

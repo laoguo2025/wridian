@@ -92,6 +92,11 @@ type WorkspaceLibrary = "works" | "knowledge";
 type DraftEdit = ChatDraftEdit;
 type FilePreviewState = FilePreviewViewModel;
 
+type AcceptedEditUndo = {
+  content: string;
+  path: string;
+};
+
 type SendPromptSnapshotInput = {
   content: string;
   contextPills: PromptContextPill[];
@@ -281,6 +286,7 @@ function App() {
   const [editorTitle, setEditorTitle] = useState("");
   const [editorContent, setEditorContent] = useState("");
   const [lastSavedContent, setLastSavedContent] = useState("");
+  const [acceptedEditUndo, setAcceptedEditUndo] = useState<AcceptedEditUndo | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [saveError, setSaveError] = useState("");
   const [bridgeStatus, setBridgeStatus] = useState("");
@@ -314,6 +320,7 @@ function App() {
 
   useEffect(() => {
     selectedPathRef.current = selectedPath;
+    setAcceptedEditUndo(null);
   }, [selectedPath]);
 
   useEffect(() => {
@@ -402,9 +409,12 @@ function App() {
     });
     const userInput = snapshot.text || (snapshot.contextPills.length ? "请按已选择的技能执行。" : "");
     if (!userInput || chatManager.pending) return;
-    if (!override) setPrompt("");
+    if (!override) {
+      setPrompt("");
+      updatePromptPills([]);
+    }
     setMemoryOpen(false);
-    const sent = await chatManager.sendPrompt({
+    await chatManager.sendPrompt({
       content: snapshot.content,
       contextPills: snapshot.contextPills,
       draftKind,
@@ -415,9 +425,6 @@ function App() {
       text: userInput,
       title: editorTitle,
     });
-    if (sent && !override) {
-      updatePromptPills([]);
-    }
   };
 
   const updateDraftSelection = useCallback(() => {
@@ -1007,6 +1014,11 @@ function App() {
     }
   };
 
+  const handleEditorContentChange = useCallback((content: string) => {
+    setAcceptedEditUndo(null);
+    setEditorContent(content);
+  }, []);
+
   const applyTextToDraft = useCallback((text: string, selection: TextSelection) => {
     const start = Math.max(0, Math.min(selection.start, editorContent.length));
     const end = Math.max(start, Math.min(selection.end, editorContent.length));
@@ -1019,6 +1031,15 @@ function App() {
       setContentEditableCaret(draftEditorRef.current, nextCursor);
     });
   }, [editorContent]);
+
+  const undoAcceptedEdit = () => {
+    if (!acceptedEditUndo || acceptedEditUndo.path !== selectedPath) return;
+    setEditorContent(acceptedEditUndo.content);
+    setAcceptedEditUndo(null);
+    draftSelectionRef.current = { start: 0, end: 0 };
+    setSelectionActionPosition(null);
+    chatManager.setError("");
+  };
 
   const copyText = async (text: string) => {
     const reply = text.trim();
@@ -1063,6 +1084,7 @@ function App() {
       return;
     }
     chatManager.setError("");
+    setAcceptedEditUndo({ path: selectedPath, content: editorContent });
     applyTextToDraft(edit.replacement, { start: match.index, end: match.index + edit.target.length });
     setPendingEdits((edits) => edits.map((item) => (item.id === id ? { ...item, status: "accepted" } : item)));
   };
@@ -1088,6 +1110,7 @@ function App() {
       return `${content.slice(0, start)}${match.edit.replacement}${content.slice(end)}`;
     }, editorContent);
 
+    setAcceptedEditUndo({ path: selectedPath, content: editorContent });
     setEditorContent(nextContent);
     setPendingEdits((edits) => edits.map((edit) => (appliedIds.has(edit.id) ? { ...edit, status: "accepted" } : edit)));
     chatManager.setError(guardReport.skipped.length ? `${guardReport.skipped.length} 处修改需要重新定位。` : "");
@@ -1388,23 +1411,32 @@ function App() {
                         ))}
                       </div>
                     ) : null}
+                    {acceptedEditUndo?.path === selectedPath ? (
+                      <button type="button" className="paper-action" onClick={undoAcceptedEdit}>
+                        撤销修改
+                      </button>
+                    ) : null}
                     <div className={`save-state ${saveStatus}`} title={saveError || bridgeStatus || undefined}>
                       {bridgeStatus || statusLabel}
                     </div>
                   </div>
                 </div>
                 <div className="draft-suggestion-actions" aria-label="待确认修改操作" hidden={!pendingDraftEdits.length}>
+                  <div className="draft-suggestion-summary">
                     <span>{pendingDraftEdits.length} 处待确认修改</span>
                     {blockedDraftEditCount ? <span className="draft-guard-note">{blockedDraftEditCount} 处需重新定位</span> : null}
+                  </div>
+                  <div className="draft-suggestion-action-buttons">
                     <button type="button" onClick={acceptAllEdits}>全部确认</button>
                     <button type="button" className="secondary" onClick={rejectAllEdits}>全部取消</button>
+                  </div>
                 </div>
                 <DraftEditor
                   content={editorContent}
                   edits={pendingDraftEdits}
                   editorRef={draftEditorRef}
                   onAcceptEdit={acceptEdit}
-                  onChange={setEditorContent}
+                  onChange={handleEditorContentChange}
                   onKeyDown={handleDraftKeyDown}
                   onRejectEdit={rejectEdit}
                   onSelectionActionDismiss={() => setSelectionActionPosition(null)}

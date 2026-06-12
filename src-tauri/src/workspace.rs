@@ -329,6 +329,11 @@ pub(crate) fn apply_workspace_write_file(
         return Err("只能写入 md、txt、docx 文件。".to_string());
     }
     ensure_safe_workspace_parent(&root, &path, "写入文件")?;
+    if path.exists() {
+        return Err(
+            "writeFile 只用于新建文件；修改已有文件内容请返回 edits 并由前端内联确认。".to_string(),
+        );
+    }
     ensure_safe_workspace_write_target(&root, &path, "写入文件")?;
     write_editable_file_content(&path, content)?;
     Ok(path)

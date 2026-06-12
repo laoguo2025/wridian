@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { abortCocreation, requestCocreation, type CoCreateEdit, type CoCreateFileOperation } from "./cocreationClient";
+import { abortCocreation, requestCocreation, type CoCreateEdit } from "./cocreationClient";
 import {
   createChatSessionId,
   loadChatContinuity,
@@ -162,7 +162,7 @@ export function useChatManager({
       const messagesWithContextStatus = messagesWithUser.map((message) =>
         message.id === userMessage.id ? attachContextLoadStatus(message, response.contextLoadStatus) : message,
       );
-      const assistantReply = appendFileOperationSummary(response.reply, response.fileOperations);
+      const assistantReply = response.reply;
       const messagesWithAssistant = [...messagesWithContextStatus, createAssistantChatMessage(assistantReply)];
       messagesRef.current = messagesWithAssistant;
       setMessages(messagesWithAssistant);
@@ -400,14 +400,6 @@ function createPendingDraftEdits(edits: CoCreateEdit[], contextPills: PromptCont
     sourceRange: selectedRangePill?.value.trim() === edit.target.trim() ? selectedRangePill.range : undefined,
     status: "pending" as const,
   }));
-}
-
-function appendFileOperationSummary(reply: string, operations: CoCreateFileOperation[]) {
-  if (!operations.length) return reply;
-  const summary = operations
-    .map((operation) => `${operation.ok ? "已执行" : "未执行"} ${operation.library}/${operation.path}：${operation.message}`)
-    .join("\n");
-  return `${reply.trim()}\n\n文件树操作：\n${summary}`.trim();
 }
 
 function isAbortError(error: unknown) {
