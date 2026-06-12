@@ -1901,7 +1901,9 @@ fn extract_json_payload(output: &str) -> Option<String> {
     if trimmed.starts_with('{') || trimmed.starts_with('[') {
         return Some(trimmed.to_string());
     }
-    extract_fenced_json_payload(trimmed).or_else(|| extract_balanced_json_payload(trimmed))
+    extract_fenced_json_payload(trimmed)
+        .or_else(|| extract_loose_fenced_json_payload(trimmed))
+        .or_else(|| extract_balanced_json_payload(trimmed))
 }
 
 fn extract_fenced_json_payload(output: &str) -> Option<String> {
@@ -1919,6 +1921,16 @@ fn extract_fenced_json_payload(output: &str) -> Option<String> {
         rest = &after_start[end + 3..];
     }
     None
+}
+
+fn extract_loose_fenced_json_payload(output: &str) -> Option<String> {
+    let trimmed = output.trim_start();
+    let lower = trimmed.to_ascii_lowercase();
+    let after_fence = lower
+        .strip_prefix("```json")
+        .map(|_| &trimmed["```json".len()..])
+        .or_else(|| lower.strip_prefix("``` json").map(|_| &trimmed["``` json".len()..]))?;
+    extract_balanced_json_payload(after_fence)
 }
 
 fn strip_fence_language(block: &str) -> &str {
@@ -2708,6 +2720,19 @@ mod tests {
 
         assert_eq!(parsed.reply, "现在的年月日时间是 2026-06-11。");
         assert!(parsed.edits.is_empty());
+        assert!(parsed.memories.is_empty());
+    }
+
+    #[test]
+    fn parse_cocreation_model_output_extracts_loose_fenced_json() {
+        let parsed = parse_cocreation_model_output(
+            "```json\n{\"reply\":\"这个替换涉及面比较大，我建议先逐处确认。\",\"edits\":[],\"fileOperations\":[],\"memories\":[]}\n",
+        )
+        .expect("loose fenced json reply");
+
+        assert_eq!(parsed.reply, "这个替换涉及面比较大，我建议先逐处确认。");
+        assert!(parsed.edits.is_empty());
+        assert!(parsed.file_operations.is_empty());
         assert!(parsed.memories.is_empty());
     }
 
