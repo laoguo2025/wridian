@@ -29,6 +29,24 @@ export function CreativeSkillsDrawer({
               <div className="creative-skill-main">
                 <div className="creative-skill-title">{skill.title}</div>
                 <div className="creative-skill-meta">{skill.status}</div>
+                <div className="creative-skill-workflow" aria-label={`${skill.title}工作流`}>
+                  <div>
+                    <span>输入</span>
+                    {skill.workflow.inputs.join(" / ")}
+                  </div>
+                  <div>
+                    <span>产物</span>
+                    {skill.workflow.outputs.join(" / ")}
+                  </div>
+                  <div>
+                    <span>质检</span>
+                    {skill.workflow.qualityGates.join(" / ")}
+                  </div>
+                  <div>
+                    <span>回滚</span>
+                    {skill.workflow.rollback}
+                  </div>
+                </div>
               </div>
               <button
                 type="button"

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { abortCocreation, requestCocreation, type CoCreateEdit } from "./cocreationClient";
+import { abortCocreation, requestCocreation, type CoCreateEdit, type CoCreateFileOperation } from "./cocreationClient";
 import {
   createChatSessionId,
   loadChatContinuity,
@@ -39,7 +39,13 @@ export type ChatContinuitySnapshot = {
   title: string;
 };
 
-export function useChatManager({ onDraftEdits }: { onDraftEdits: (edits: ChatDraftEdit[]) => void }) {
+export function useChatManager({
+  onDraftEdits,
+  onWorkspaceChanged,
+}: {
+  onDraftEdits: (edits: ChatDraftEdit[]) => void;
+  onWorkspaceChanged?: () => void;
+}) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
@@ -92,10 +98,10 @@ export function useChatManager({ onDraftEdits }: { onDraftEdits: (edits: ChatDra
       forkedFromMessageIdRef.current = continuity.forkedFromMessageId ?? undefined;
       messagesRef.current = continuity.messages;
       setMessages(continuity.messages);
-    } catch {
+    } catch (error) {
       if (loadSeqRef.current === loadSeq) {
         resetChatSession();
-        setError("");
+        setError(`对话续接读取失败：${error instanceof Error ? error.message : String(error)}`);
       }
     }
   }, [resetChatSession, stopActivePrompt]);
@@ -156,7 +162,8 @@ export function useChatManager({ onDraftEdits }: { onDraftEdits: (edits: ChatDra
       const messagesWithContextStatus = messagesWithUser.map((message) =>
         message.id === userMessage.id ? attachContextLoadStatus(message, response.contextLoadStatus) : message,
       );
-      const messagesWithAssistant = [...messagesWithContextStatus, createAssistantChatMessage(response.reply)];
+      const assistantReply = appendFileOperationSummary(response.reply, response.fileOperations);
+      const messagesWithAssistant = [...messagesWithContextStatus, createAssistantChatMessage(assistantReply)];
       messagesRef.current = messagesWithAssistant;
       setMessages(messagesWithAssistant);
       void persistChat(
@@ -168,13 +175,16 @@ export function useChatManager({ onDraftEdits }: { onDraftEdits: (edits: ChatDra
         forkedFromMessageIdRef.current,
         setError,
         buildActiveContext({
-          assistantReply: response.reply,
+          assistantReply,
           input,
           messages: messagesWithAssistant,
           sessionId: sessionIdRef.current,
         }),
       );
       onDraftEdits(createPendingDraftEdits(response.edits, input.contextPills));
+      if (response.fileOperations.some((operation) => operation.ok)) {
+        onWorkspaceChanged?.();
+      }
       return true;
     } catch (requestError) {
       if (activeRequestIdRef.current !== requestId || isAbortError(requestError)) {
@@ -189,7 +199,7 @@ export function useChatManager({ onDraftEdits }: { onDraftEdits: (edits: ChatDra
         setPending(false);
       }
     }
-  }, [onDraftEdits]);
+  }, [onDraftEdits, onWorkspaceChanged]);
 
   const updateMessageText = useCallback((messageId: string, text: string, snapshot: ChatContinuitySnapshot) => {
     const nextText = text.trim();
@@ -390,6 +400,14 @@ function createPendingDraftEdits(edits: CoCreateEdit[], contextPills: PromptCont
     sourceRange: selectedRangePill?.value.trim() === edit.target.trim() ? selectedRangePill.range : undefined,
     status: "pending" as const,
   }));
+}
+
+function appendFileOperationSummary(reply: string, operations: CoCreateFileOperation[]) {
+  if (!operations.length) return reply;
+  const summary = operations
+    .map((operation) => `${operation.ok ? "已执行" : "未执行"} ${operation.library}/${operation.path}：${operation.message}`)
+    .join("\n");
+  return `${reply.trim()}\n\n文件树操作：\n${summary}`.trim();
 }
 
 function isAbortError(error: unknown) {

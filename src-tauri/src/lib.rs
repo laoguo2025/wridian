@@ -1,12 +1,16 @@
+mod bridge;
 mod chat_persistence;
 mod cocreation;
 mod creative_skills;
 mod knowledge_graph;
+mod knowledge_ops;
 mod memory;
+mod metadata_index;
 mod model_accounts;
 mod opener;
 mod path_safety;
 mod projects;
+mod rule_router;
 mod runtime;
 mod workspace;
 
@@ -20,6 +24,8 @@ pub fn run() {
             workspace::wridian_set_work_root,
             workspace::wridian_set_knowledge_root,
             workspace::wridian_open_file,
+            workspace::wridian_preview_file,
+            workspace::wridian_preview_asset,
             workspace::wridian_save_file,
             workspace::wridian_create_work_file,
             workspace::wridian_create_work_folder,
@@ -43,7 +49,16 @@ pub fn run() {
             projects::wridian_save_project,
             projects::wridian_select_project,
             projects::wridian_find_relevant_notes,
+            metadata_index::wridian_get_metadata_index,
             knowledge_graph::wridian_get_knowledge_graph,
+            knowledge_ops::wridian_refresh_knowledge_cache,
+            knowledge_ops::wridian_search_knowledge_bm25,
+            knowledge_ops::wridian_update_knowledge_hot_cache,
+            knowledge_ops::wridian_fold_knowledge_cache,
+            knowledge_ops::wridian_audit_knowledge_health,
+            knowledge_ops::wridian_run_knowledge_health_check,
+            knowledge_ops::wridian_fix_knowledge_health_low_risk,
+            bridge::wridian_apply_bridge_relation,
             cocreation::wridian_cocreate,
             cocreation::wridian_abort_cocreate,
             chat_persistence::wridian_load_chat_continuity,

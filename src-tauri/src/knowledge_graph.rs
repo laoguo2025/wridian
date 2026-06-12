@@ -1,14 +1,10 @@
-use crate::path_safety::safe_child_path;
+use crate::metadata_index::{read_library_metadata_index, MetadataFile, MetadataLibraryIndex};
 use crate::runtime::{ensure_workspace, wridian_data_dir};
 use crate::workspace::resolved_knowledge_root;
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
-use std::fs;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
-const MAX_GRAPH_FILES: usize = 800;
-const MAX_GRAPH_DEPTH: usize = 8;
-const MAX_GRAPH_FILE_BYTES: u64 = 512 * 1024;
 const MAX_GRAPH_WARNINGS: usize = 20;
 
 #[derive(Debug, Serialize)]
@@ -26,8 +22,16 @@ pub(crate) struct KnowledgeGraphNode {
     label: String,
     kind: String,
     path: Option<String>,
+    relative_path: Option<String>,
     group: String,
     size: usize,
+    aliases: Vec<String>,
+    tags: Vec<String>,
+    source_refs: Vec<String>,
+    outgoing_count: usize,
+    backlink_count: usize,
+    unresolved_count: usize,
+    backlink_sources: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -54,329 +58,262 @@ pub(crate) fn wridian_get_knowledge_graph() -> Result<KnowledgeGraphResponse, St
 }
 
 fn read_knowledge_graph(root: &Path) -> Result<KnowledgeGraphResponse, String> {
-    let root = root
-        .canonicalize()
-        .map_err(|error| format!("知识库目录解析失败：{error}"))?;
+    let index = read_library_metadata_index("knowledge", root)?;
+    Ok(graph_from_metadata_index(&index))
+}
+
+fn graph_from_metadata_index(index: &MetadataLibraryIndex) -> KnowledgeGraphResponse {
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
     let mut warnings = Vec::new();
-    let mut card_by_stem = HashMap::new();
-    let mut card_paths = Vec::new();
+    let mut seen_nodes = HashSet::new();
+    let generated_paths = generated_relative_paths(index);
+    let unresolved_nodes = unresolved_graph_nodes(index, &generated_paths);
 
-    collect_graph_nodes(
-        &root,
-        &root,
-        0,
-        &mut nodes,
-        &mut edges,
-        &mut card_by_stem,
-        &mut card_paths,
-        &mut warnings,
-    )?;
-    collect_wikilink_edges(&card_paths, &card_by_stem, &mut edges, &mut warnings);
-    collect_frontmatter_relation_edges(&card_paths, &card_by_stem, &mut edges, &mut warnings);
+    for folder in folder_paths(index, &generated_paths) {
+        let id = format!("folder:{folder}");
+        if seen_nodes.insert(id.clone()) {
+            nodes.push(KnowledgeGraphNode {
+                id: id.clone(),
+                label: folder
+                    .rsplit('/')
+                    .next()
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("知识库")
+                    .to_string(),
+                kind: "folder".to_string(),
+                path: index.root_path.as_deref().map(|root| {
+                    PathBuf::from(root)
+                        .join(&folder)
+                        .to_string_lossy()
+                        .into_owned()
+                }),
+                relative_path: Some(folder.clone()),
+                group: parent_group(&folder),
+                size: 10,
+                aliases: Vec::new(),
+                tags: Vec::new(),
+                source_refs: Vec::new(),
+                outgoing_count: 0,
+                backlink_count: 0,
+                unresolved_count: 0,
+                backlink_sources: Vec::new(),
+            });
+        }
+        if let Some(parent_id) = parent_folder_id(&folder) {
+            edges.push(KnowledgeGraphEdge {
+                source: parent_id,
+                target: id,
+                kind: "contains".to_string(),
+            });
+        }
+    }
+
+    for file in &index.files {
+        if generated_paths.contains(&file.relative_path) {
+            continue;
+        }
+        let id = graph_card_id(&file.relative_path);
+        if seen_nodes.insert(id.clone()) {
+            nodes.push(KnowledgeGraphNode {
+                id: id.clone(),
+                label: file.title.clone(),
+                kind: node_kind(file),
+                path: Some(file.path.clone()),
+                relative_path: Some(file.relative_path.clone()),
+                group: parent_group(&file.relative_path),
+                size: 6 + file.outgoing_links.len().min(10) + file.backlinks.len().min(8),
+                aliases: file.aliases.clone(),
+                tags: file.tags.clone(),
+                source_refs: relation_values(
+                    &file.frontmatter,
+                    &[
+                        "source_refs",
+                        "source_ref",
+                        "sources",
+                        "source",
+                        "origin",
+                        "origins",
+                    ],
+                ),
+                outgoing_count: file
+                    .outgoing_links
+                    .iter()
+                    .filter(|link| link.resolved)
+                    .count(),
+                backlink_count: file.backlinks.len(),
+                unresolved_count: file
+                    .outgoing_links
+                    .iter()
+                    .filter(|link| !link.resolved)
+                    .count(),
+                backlink_sources: backlink_sources(file),
+            });
+        }
+        if let Some(parent_id) = parent_folder_id(&file.relative_path) {
+            edges.push(KnowledgeGraphEdge {
+                source: parent_id,
+                target: id,
+                kind: "contains".to_string(),
+            });
+        }
+    }
+
+    for link in &index.links {
+        if generated_paths.contains(&link.source_relative_path) {
+            continue;
+        }
+        let Some(target_relative_path) = link.target_relative_path.as_deref() else {
+            continue;
+        };
+        if generated_paths.contains(target_relative_path) {
+            continue;
+        }
+        if link.source_relative_path == target_relative_path {
+            continue;
+        }
+        edges.push(KnowledgeGraphEdge {
+            source: graph_card_id(&link.source_relative_path),
+            target: graph_card_id(target_relative_path),
+            kind: link
+                .frontmatter_field
+                .as_deref()
+                .map(|field| format!("frontmatter:{field}"))
+                .unwrap_or_else(|| {
+                    if link.embed {
+                        "embed".to_string()
+                    } else {
+                        "wikilink".to_string()
+                    }
+                }),
+        });
+    }
+
+    for unresolved in unresolved_nodes.values() {
+        let id = unresolved_node_id(&unresolved.normalized_target);
+        if seen_nodes.insert(id.clone()) {
+            nodes.push(KnowledgeGraphNode {
+                id,
+                label: unresolved.label.clone(),
+                kind: "unresolved".to_string(),
+                path: None,
+                relative_path: None,
+                group: "未解析链接".to_string(),
+                size: 5 + unresolved.count.min(12),
+                aliases: Vec::new(),
+                tags: Vec::new(),
+                source_refs: Vec::new(),
+                outgoing_count: 0,
+                backlink_count: unresolved.count,
+                unresolved_count: unresolved.count,
+                backlink_sources: unresolved.sources.iter().take(8).cloned().collect(),
+            });
+        }
+    }
+
+    for link in &index.unresolved_links {
+        if generated_paths.contains(&link.source_relative_path) {
+            continue;
+        }
+        edges.push(KnowledgeGraphEdge {
+            source: graph_card_id(&link.source_relative_path),
+            target: unresolved_node_id(&link.normalized_target),
+            kind: link
+                .frontmatter_field
+                .as_deref()
+                .map(|field| format!("frontmatter:{field}:unresolved"))
+                .unwrap_or_else(|| {
+                    if link.embed {
+                        "embed:unresolved".to_string()
+                    } else {
+                        "unresolved".to_string()
+                    }
+                }),
+        });
+    }
+
     dedupe_edges(&mut edges);
+    push_metadata_warnings(index, &generated_paths, &mut warnings);
 
-    Ok(KnowledgeGraphResponse {
+    KnowledgeGraphResponse {
         nodes,
         edges,
         warnings,
-    })
+    }
 }
 
-fn collect_graph_nodes(
-    root: &Path,
-    current: &Path,
-    depth: usize,
-    nodes: &mut Vec<KnowledgeGraphNode>,
-    edges: &mut Vec<KnowledgeGraphEdge>,
-    card_by_stem: &mut HashMap<String, String>,
-    card_paths: &mut Vec<PathBuf>,
-    warnings: &mut Vec<String>,
-) -> Result<(), String> {
-    if depth > MAX_GRAPH_DEPTH {
-        push_warning(
-            warnings,
-            format!("知识图谱已跳过过深目录：{}", current.to_string_lossy()),
-        );
-        return Ok(());
-    }
-    if card_paths.len() >= MAX_GRAPH_FILES {
-        push_warning(
-            warnings,
-            format!("知识图谱已达到最多 {MAX_GRAPH_FILES} 个 Markdown 文件上限。"),
-        );
-        return Ok(());
-    }
-    let mut entries = Vec::new();
-    for entry in fs::read_dir(current).map_err(|error| format!("知识图谱目录读取失败：{error}"))?
-    {
-        match entry {
-            Ok(entry) => entries.push(entry),
-            Err(error) => push_warning(warnings, format!("知识图谱目录项读取失败：{error}")),
-        }
-    }
-    entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_lowercase());
-
-    for entry in entries {
-        let path = entry.path();
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with('.') {
+fn folder_paths(index: &MetadataLibraryIndex, generated_paths: &HashSet<String>) -> Vec<String> {
+    let mut folders = HashSet::new();
+    for file in &index.files {
+        if generated_paths.contains(&file.relative_path) {
             continue;
         }
-        let Some(safe_path) = safe_child_path(root, &path, "知识图谱")? else {
-            push_warning(
-                warnings,
-                format!(
-                    "知识图谱已跳过越界或符号链接路径：{}",
-                    path.to_string_lossy()
-                ),
-            );
-            continue;
-        };
-        if safe_path.is_dir() {
-            let relative = relative_path(root, &safe_path);
-            let folder_id = format!("folder:{relative}");
-            nodes.push(KnowledgeGraphNode {
-                id: folder_id.clone(),
-                label: name,
-                kind: "folder".to_string(),
-                path: Some(safe_path.to_string_lossy().into_owned()),
-                group: parent_group(&relative),
-                size: 10,
-            });
-            if let Some(parent_id) = parent_folder_id(&relative) {
-                edges.push(KnowledgeGraphEdge {
-                    source: parent_id,
-                    target: folder_id,
-                    kind: "contains".to_string(),
-                });
-            }
-            collect_graph_nodes(
-                root,
-                &safe_path,
-                depth + 1,
-                nodes,
-                edges,
-                card_by_stem,
-                card_paths,
-                warnings,
-            )?;
-        } else if is_markdown(&safe_path) {
-            if card_paths.len() >= MAX_GRAPH_FILES {
-                push_warning(
-                    warnings,
-                    format!("知识图谱已达到最多 {MAX_GRAPH_FILES} 个 Markdown 文件上限。"),
-                );
+        let mut current = file.relative_path.as_str();
+        while let Some((parent, _)) = current.rsplit_once('/') {
+            if parent.is_empty() {
                 break;
             }
-            if let Ok(metadata) = fs::symlink_metadata(&safe_path) {
-                if metadata.len() > MAX_GRAPH_FILE_BYTES {
-                    push_warning(
-                        warnings,
-                        format!("知识图谱已跳过过大文件：{}", safe_path.to_string_lossy()),
-                    );
-                    continue;
-                }
-            }
-            let relative = relative_path(root, &path);
-            let id = format!("card:{relative}");
-            let title = name
-                .trim_end_matches(".markdown")
-                .trim_end_matches(".md")
-                .to_string();
-            let content = match fs::read_to_string(&path) {
-                Ok(content) => content,
-                Err(error) => {
-                    push_warning(
-                        warnings,
-                        format!("知识卡读取失败（{}）：{error}", path.to_string_lossy()),
-                    );
-                    continue;
-                }
-            };
-            let frontmatter = extract_frontmatter_block(&content);
-            let node_kind = frontmatter
-                .and_then(read_frontmatter_node_kind)
-                .unwrap_or_else(|| infer_node_kind_from_path(&relative));
-            nodes.push(KnowledgeGraphNode {
-                id: id.clone(),
-                label: title.clone(),
-                kind: node_kind,
-                path: Some(path.to_string_lossy().into_owned()),
-                group: parent_group(&relative),
-                size: 6 + extract_wikilinks(&content).len().min(10),
+            folders.insert(parent.to_string());
+            current = parent;
+        }
+    }
+    let mut ordered = folders.into_iter().collect::<Vec<_>>();
+    ordered.sort_by(|left, right| {
+        left.matches('/')
+            .count()
+            .cmp(&right.matches('/').count())
+            .then_with(|| left.cmp(right))
+    });
+    ordered
+}
+
+#[derive(Default)]
+struct UnresolvedGraphNode {
+    label: String,
+    normalized_target: String,
+    count: usize,
+    sources: Vec<String>,
+}
+
+fn unresolved_graph_nodes(
+    index: &MetadataLibraryIndex,
+    generated_paths: &HashSet<String>,
+) -> BTreeMap<String, UnresolvedGraphNode> {
+    let mut nodes = BTreeMap::<String, UnresolvedGraphNode>::new();
+    for link in &index.unresolved_links {
+        if generated_paths.contains(&link.source_relative_path) {
+            continue;
+        }
+        let key = if link.normalized_target.trim().is_empty() {
+            link.raw_target.to_lowercase()
+        } else {
+            link.normalized_target.clone()
+        };
+        let node = nodes
+            .entry(key.clone())
+            .or_insert_with(|| UnresolvedGraphNode {
+                label: link.raw_target.clone(),
+                normalized_target: key,
+                count: 0,
+                sources: Vec::new(),
             });
-            card_by_stem.insert(title.to_lowercase(), id.clone());
-            card_by_stem.insert(relative.to_lowercase(), id.clone());
-            if let Some(parent_id) = parent_folder_id(&relative) {
-                edges.push(KnowledgeGraphEdge {
-                    source: parent_id,
-                    target: id,
-                    kind: "contains".to_string(),
-                });
-            }
-            card_paths.push(path);
+        node.count += 1;
+        if !node.sources.contains(&link.source_relative_path) {
+            node.sources.push(link.source_relative_path.clone());
         }
     }
-    Ok(())
+    nodes
 }
 
-fn collect_wikilink_edges(
-    card_paths: &[PathBuf],
-    card_by_stem: &HashMap<String, String>,
-    edges: &mut Vec<KnowledgeGraphEdge>,
-    warnings: &mut Vec<String>,
-) {
-    for path in card_paths {
-        let content = match fs::read_to_string(path) {
-            Ok(content) => content,
-            Err(error) => {
-                push_warning(
-                    warnings,
-                    format!("知识卡读取失败（{}）：{error}", path.to_string_lossy()),
-                );
-                continue;
-            }
-        };
-        let Some(source_id) = path
-            .file_stem()
-            .map(|stem| stem.to_string_lossy().to_lowercase())
-            .and_then(|stem| card_by_stem.get(&stem).cloned())
-        else {
-            continue;
-        };
-        for link in extract_wikilinks(&content) {
-            if let Some(target_id) = card_by_stem.get(&link) {
-                if *target_id != source_id {
-                    edges.push(KnowledgeGraphEdge {
-                        source: source_id.clone(),
-                        target: target_id.clone(),
-                        kind: "wikilink".to_string(),
-                    });
-                }
+fn node_kind(file: &MetadataFile) -> String {
+    for field in ["type", "kind", "card_type", "wridian_type"] {
+        if let Some(values) = file.frontmatter.get(field) {
+            if let Some(value) = values.iter().find(|value| !value.trim().is_empty()) {
+                return normalize_node_kind_value(value);
             }
         }
     }
-}
-
-fn collect_frontmatter_relation_edges(
-    card_paths: &[PathBuf],
-    card_by_stem: &HashMap<String, String>,
-    edges: &mut Vec<KnowledgeGraphEdge>,
-    warnings: &mut Vec<String>,
-) {
-    for path in card_paths {
-        let content = match fs::read_to_string(path) {
-            Ok(content) => content,
-            Err(error) => {
-                push_warning(
-                    warnings,
-                    format!("知识卡读取失败（{}）：{error}", path.to_string_lossy()),
-                );
-                continue;
-            }
-        };
-        let Some(source_id) = path
-            .file_stem()
-            .map(|stem| stem.to_string_lossy().to_lowercase())
-            .and_then(|stem| card_by_stem.get(&stem).cloned())
-        else {
-            continue;
-        };
-        for (field, link) in extract_frontmatter_relation_links(&content) {
-            if let Some(target_id) = card_by_stem.get(&link) {
-                if *target_id != source_id {
-                    edges.push(KnowledgeGraphEdge {
-                        source: source_id.clone(),
-                        target: target_id.clone(),
-                        kind: format!("frontmatter:{field}"),
-                    });
-                }
-            }
-        }
-    }
-}
-
-fn extract_frontmatter_relation_links(text: &str) -> Vec<(String, String)> {
-    let Some(frontmatter) = extract_frontmatter_block(text) else {
-        return Vec::new();
-    };
-    let mut relations = Vec::new();
-    let mut current_key = String::new();
-    for line in frontmatter.lines() {
-        if let Some((key, value)) = frontmatter_key_value(line) {
-            current_key = normalize_frontmatter_field(key);
-            if is_system_frontmatter_field(&current_key) {
-                current_key.clear();
-                continue;
-            }
-            for link in extract_wikilinks(value) {
-                relations.push((current_key.clone(), link));
-            }
-            continue;
-        }
-        if current_key.is_empty() || !frontmatter_list_item(line) {
-            continue;
-        }
-        for link in extract_wikilinks(line) {
-            relations.push((current_key.clone(), link));
-        }
-    }
-    relations
-}
-
-fn extract_frontmatter_block(text: &str) -> Option<&str> {
-    let rest = text.strip_prefix("---")?;
-    let rest = rest
-        .strip_prefix("\r\n")
-        .or_else(|| rest.strip_prefix('\n'))?;
-    rest.split_once("\n---")
-        .or_else(|| rest.split_once("\r\n---"))
-        .map(|(frontmatter, _)| frontmatter)
-}
-
-fn frontmatter_key_value(line: &str) -> Option<(&str, &str)> {
-    let trimmed = line.trim_start();
-    if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('-') {
-        return None;
-    }
-    let (key, value) = trimmed.split_once(':')?;
-    let key = key.trim();
-    if key.is_empty() {
-        return None;
-    }
-    Some((key, value.trim()))
-}
-
-fn frontmatter_list_item(line: &str) -> bool {
-    line.trim_start().starts_with('-')
-}
-
-fn normalize_frontmatter_field(field: &str) -> String {
-    field.trim().replace(' ', "_").to_lowercase()
-}
-
-fn is_system_frontmatter_field(field: &str) -> bool {
-    field.starts_with('_') || matches!(field, "type" | "kind" | "category" | "status" | "tags")
-}
-
-fn read_frontmatter_node_kind(frontmatter: &str) -> Option<String> {
-    for line in frontmatter.lines() {
-        let (key, value) = frontmatter_key_value(line)?;
-        let field = normalize_frontmatter_field(key);
-        if !matches!(
-            field.as_str(),
-            "type" | "kind" | "card_type" | "wridian_type"
-        ) {
-            continue;
-        }
-        let normalized = normalize_node_kind_value(value);
-        if !normalized.is_empty() {
-            return Some(normalized);
-        }
-    }
-    None
+    infer_node_kind_from_path(&file.relative_path)
 }
 
 fn normalize_node_kind_value(value: &str) -> String {
@@ -410,33 +347,100 @@ fn infer_node_kind_from_path(relative: &str) -> String {
     "card".to_string()
 }
 
-fn extract_wikilinks(text: &str) -> HashSet<String> {
-    let mut links = HashSet::new();
-    let mut rest = text;
-    while let Some(start) = rest.find("[[") {
-        rest = &rest[start + 2..];
-        let Some(end) = rest.find("]]") else {
-            break;
-        };
-        let link = rest[..end]
-            .split('|')
-            .next()
-            .unwrap_or("")
-            .trim()
-            .trim_end_matches(".md")
-            .trim_end_matches(".markdown")
-            .to_lowercase();
-        if !link.is_empty() {
-            links.insert(link);
-        }
-        rest = &rest[end + 2..];
-    }
-    links
+fn relation_values(frontmatter: &BTreeMap<String, Vec<String>>, fields: &[&str]) -> Vec<String> {
+    let mut values = fields
+        .iter()
+        .flat_map(|field| frontmatter.get(*field).into_iter().flatten())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    values.sort();
+    values.dedup();
+    values
 }
 
-fn dedupe_edges(edges: &mut Vec<KnowledgeGraphEdge>) {
-    let mut seen = HashSet::new();
-    edges.retain(|edge| seen.insert(format!("{}>{}>{}", edge.source, edge.target, edge.kind)));
+fn generated_relative_paths(index: &MetadataLibraryIndex) -> HashSet<String> {
+    index
+        .files
+        .iter()
+        .filter(|file| is_generated_knowledge_file(file))
+        .map(|file| file.relative_path.clone())
+        .collect()
+}
+
+fn is_generated_knowledge_file(file: &MetadataFile) -> bool {
+    has_frontmatter_value(file, "wridian_generated", &["true", "yes", "1"])
+        || has_frontmatter_value(
+            file,
+            "wridian_type",
+            &["knowledge_hot_cache", "knowledge_fold"],
+        )
+}
+
+fn has_frontmatter_value(file: &MetadataFile, field: &str, expected: &[&str]) -> bool {
+    file.frontmatter.get(field).is_some_and(|values| {
+        values.iter().any(|value| {
+            let normalized = value.trim().to_lowercase();
+            expected
+                .iter()
+                .any(|expected| normalized == *expected || normalized.contains(expected))
+        })
+    })
+}
+
+fn backlink_sources(file: &MetadataFile) -> Vec<String> {
+    let mut sources = file
+        .backlinks
+        .iter()
+        .map(|backlink| backlink.source_relative_path.clone())
+        .collect::<Vec<_>>();
+    sources.sort();
+    sources.dedup();
+    sources.truncate(8);
+    sources
+}
+
+fn push_metadata_warnings(
+    index: &MetadataLibraryIndex,
+    generated_paths: &HashSet<String>,
+    warnings: &mut Vec<String>,
+) {
+    let unresolved_count = index
+        .unresolved_links
+        .iter()
+        .filter(|link| !generated_paths.contains(&link.source_relative_path))
+        .count();
+    if unresolved_count > 0 {
+        push_warning(
+            warnings,
+            format!(
+                "知识图谱发现 {} 条未解析链接，可在知识库体检中修复。",
+                unresolved_count
+            ),
+        );
+    }
+    for link in index
+        .unresolved_links
+        .iter()
+        .filter(|link| !generated_paths.contains(&link.source_relative_path))
+        .take(MAX_GRAPH_WARNINGS.saturating_sub(warnings.len()))
+    {
+        push_warning(
+            warnings,
+            format!(
+                "未解析链接：{} -> [[{}]]（{}）",
+                link.source_relative_path, link.raw_target, link.reason
+            ),
+        );
+    }
+}
+
+fn graph_card_id(relative_path: &str) -> String {
+    format!("card:{relative_path}")
+}
+
+fn unresolved_node_id(normalized_target: &str) -> String {
+    format!("unresolved:{normalized_target}")
 }
 
 fn parent_folder_id(relative: &str) -> Option<String> {
@@ -455,18 +459,9 @@ fn parent_group(relative: &str) -> String {
         .to_string()
 }
 
-fn relative_path(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/")
-}
-
-fn is_markdown(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| matches!(extension.to_ascii_lowercase().as_str(), "md" | "markdown"))
-        .unwrap_or(false)
+fn dedupe_edges(edges: &mut Vec<KnowledgeGraphEdge>) {
+    let mut seen = HashSet::new();
+    edges.retain(|edge| seen.insert(format!("{}>{}>{}", edge.source, edge.target, edge.kind)));
 }
 
 fn push_warning(warnings: &mut Vec<String>, warning: String) {
@@ -478,17 +473,35 @@ fn push_warning(warnings: &mut Vec<String>, warning: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metadata_index::read_metadata_index_for_roots;
+    use std::fs;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "wridian-knowledge-graph-test-{}-{}",
+            name,
+            crate::runtime::unique_test_suffix()
+        ));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).expect("create temp dir");
+        path
+    }
 
     #[test]
-    fn graph_links_folders_cards_and_wikilinks() {
-        let root = std::env::temp_dir().join(format!(
-            "wridian-knowledge-graph-test-{}",
-            crate::runtime::iso_timestamp()
-        ));
-        let _ = fs::remove_dir_all(&root);
+    fn graph_links_folders_cards_aliases_and_wikilinks() {
+        let root = temp_dir("links");
         fs::create_dir_all(root.join("人物")).expect("create folder");
-        fs::write(root.join("人物").join("阿宁.md"), "关联 [[城市]]").expect("write card");
-        fs::write(root.join("城市.md"), "地点").expect("write target");
+        fs::write(root.join("人物").join("阿宁.md"), "关联 [[城]]").expect("write card");
+        fs::write(
+            root.join("城市.md"),
+            "---\naliases: [城]\ntags: [place, setting]\nsource_refs: [\"[[设定集]]\"]\n---\n地点",
+        )
+        .expect("write target");
+        fs::write(
+            root.join("设定集.md"),
+            "---\ntype: knowledge_source\n---\n来源",
+        )
+        .expect("write source ref");
 
         let graph = read_knowledge_graph(&root).expect("graph");
 
@@ -501,16 +514,22 @@ mod tests {
             .edges
             .iter()
             .any(|edge| edge.source == "card:人物/阿宁.md" && edge.target == "card:城市.md"));
+        let city = graph
+            .nodes
+            .iter()
+            .find(|node| node.id == "card:城市.md")
+            .expect("city node");
+        assert_eq!(city.aliases, vec!["城"]);
+        assert_eq!(city.tags, vec!["place", "setting"]);
+        assert_eq!(city.source_refs, vec!["[[设定集]]"]);
+        assert_eq!(city.backlink_count, 1);
+        assert_eq!(city.backlink_sources, vec!["人物/阿宁.md"]);
         assert!(graph.warnings.is_empty());
     }
 
     #[test]
-    fn graph_reads_frontmatter_relations_and_node_kinds() {
-        let root = std::env::temp_dir().join(format!(
-            "wridian-knowledge-graph-frontmatter-test-{}",
-            crate::runtime::unique_test_suffix()
-        ));
-        let _ = fs::remove_dir_all(&root);
+    fn graph_reads_frontmatter_relations_and_node_kinds_from_metadata_index() {
+        let root = temp_dir("frontmatter");
         fs::create_dir_all(root.join("03故事模型")).expect("create knowledge folder");
         fs::create_dir_all(root.join("08大神蒸馏")).expect("create skill folder");
         fs::write(
@@ -548,27 +567,69 @@ mod tests {
     }
 
     #[test]
-    fn graph_skips_oversized_cards_with_warning() {
-        let root = std::env::temp_dir().join(format!(
-            "wridian-knowledge-graph-large-test-{}",
-            crate::runtime::unique_test_suffix()
-        ));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).expect("create root");
-        fs::write(root.join("small.md"), "关联 [[large]]").expect("write small");
-        fs::write(
-            root.join("large.md"),
-            "x".repeat((MAX_GRAPH_FILE_BYTES as usize) + 1),
-        )
-        .expect("write large");
+    fn graph_surfaces_unresolved_links_from_metadata_index() {
+        let root = temp_dir("unresolved");
+        fs::write(root.join("来源.md"), "缺失 [[不存在]]").expect("write source");
 
         let graph = read_knowledge_graph(&root).expect("graph");
 
-        assert!(graph.nodes.iter().any(|node| node.id == "card:small.md"));
-        assert!(!graph.nodes.iter().any(|node| node.id == "card:large.md"));
+        assert!(graph.nodes.iter().any(|node| node.id == "card:来源.md"));
+        assert!(graph
+            .nodes
+            .iter()
+            .any(|node| node.id == "unresolved:不存在" && node.kind == "unresolved"));
+        assert!(graph.edges.iter().any(|edge| {
+            edge.source == "card:来源.md"
+                && edge.target == "unresolved:不存在"
+                && edge.kind == "unresolved"
+        }));
         assert!(graph
             .warnings
             .iter()
-            .any(|warning| warning.contains("过大文件")));
+            .any(|warning| warning.contains("未解析链接")));
+    }
+
+    #[test]
+    fn graph_excludes_generated_hot_and_fold_files() {
+        let root = temp_dir("generated");
+        fs::create_dir_all(root.join("00知识库治理").join("folds")).expect("create folds");
+        fs::write(root.join("方法.md"), "方法").expect("write card");
+        fs::write(
+            root.join("hot.md"),
+            "---\nwridian_generated: true\nwridian_type: knowledge_hot_cache\n---\n[[不存在]]",
+        )
+        .expect("write hot");
+        fs::write(
+            root.join("00知识库治理")
+                .join("folds")
+                .join("knowledge-fold.md"),
+            "---\nwridian_generated: true\nwridian_type: knowledge_fold\n---\n[[方法]]",
+        )
+        .expect("write fold");
+
+        let graph = read_knowledge_graph(&root).expect("graph");
+
+        assert!(graph.nodes.iter().any(|node| node.id == "card:方法.md"));
+        assert!(!graph.nodes.iter().any(|node| node.id == "card:hot.md"));
+        assert!(!graph
+            .nodes
+            .iter()
+            .any(|node| node.id == "card:00知识库治理/folds/knowledge-fold.md"));
+        assert!(!graph.nodes.iter().any(|node| node.kind == "unresolved"));
+        assert!(graph.warnings.is_empty());
+    }
+
+    #[test]
+    fn graph_keeps_response_shape_when_built_from_index() {
+        let root = temp_dir("shape");
+        fs::write(root.join("A.md"), "[[B]]").expect("write A");
+        fs::write(root.join("B.md"), "B").expect("write B");
+        let index = read_metadata_index_for_roots(vec![("knowledge", root)]).expect("index");
+        let knowledge = index.libraries.first().expect("knowledge index");
+
+        let graph = graph_from_metadata_index(knowledge);
+
+        assert_eq!(graph.nodes.len(), 2);
+        assert_eq!(graph.edges.len(), 1);
     }
 }

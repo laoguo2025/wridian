@@ -1,22 +1,49 @@
-import { type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type WheelEvent as ReactWheelEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { KnowledgeGraphNode, KnowledgeGraphState, OpenFileResponse } from "../appTypes";
+import {
+  forceCenter,
+  forceCollide,
+  forceLink,
+  forceManyBody,
+  forceSimulation,
+  type SimulationLinkDatum,
+  type SimulationNodeDatum,
+} from "d3-force";
+import type {
+  KnowledgeGraphNode,
+  KnowledgeGraphState,
+  KnowledgeHealthFixResponse,
+  KnowledgeHealthWorkflowResponse,
+  KnowledgeSearchHit,
+} from "../appTypes";
 import { clamp } from "../numberUtils";
 
 export function KnowledgeGraphDrawer({
   graph,
   graphError,
+  healthResult,
   knowledgeRootConfigured,
   onClose,
   onOpenFile,
   onRefresh,
+  onHealthResult,
 }: {
   graph: KnowledgeGraphState;
   graphError: string;
+  healthResult: KnowledgeHealthWorkflowResponse | KnowledgeHealthFixResponse | null;
   knowledgeRootConfigured: boolean;
   onClose: () => void;
   onOpenFile: (path: string) => void;
-  onRefresh: () => void;
+  onRefresh: () => void | Promise<void>;
+  onHealthResult: (result: KnowledgeHealthWorkflowResponse | KnowledgeHealthFixResponse | null) => void;
 }) {
   const layout = useMemo(() => buildKnowledgeGraphLayout(graph), [graph]);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -25,9 +52,12 @@ export function KnowledgeGraphDrawer({
   const defaultCamera = useMemo(() => fitKnowledgeGraphCamera(layout.nodes, stageSize), [layout.nodes, stageSize]);
   const [camera, setCamera] = useState(defaultCamera);
   const [hoveredNode, setHoveredNode] = useState<KnowledgeGraphLayoutNode | null>(null);
-  const [nodePreview, setNodePreview] = useState<{ path: string; content: string; error: string } | null>(null);
   const [graphRenderTick, forceGraphRender] = useState(0);
   const [dragging, setDragging] = useState(false);
+  const [opsBusy, setOpsBusy] = useState<"health" | "fix" | "search" | "">("");
+  const [opsMessage, setOpsMessage] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchHits, setSearchHits] = useState<KnowledgeSearchHit[]>([]);
   const safeCamera = sanitizeKnowledgeGraphCamera(camera, defaultCamera);
   const dragStateRef = useRef<{
     kind: "pan" | "node";
@@ -82,28 +112,6 @@ export function KnowledgeGraphDrawer({
       }
     };
   }, [graph.nodes.length, graphRenderTick, knowledgeRootConfigured, layout, safeCamera, hoveredNode?.id]);
-
-  useEffect(() => {
-    if (!hoveredNode || hoveredNode.kind === "folder" || !hoveredNode.path) {
-      setNodePreview(null);
-      return;
-    }
-    const path = hoveredNode.path;
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      void invoke<OpenFileResponse>("wridian_open_file", { input: { path } })
-        .then((response) => {
-          if (!cancelled) setNodePreview({ path, content: response.content.slice(0, 520), error: "" });
-        })
-        .catch((error) => {
-          if (!cancelled) setNodePreview({ path, content: "", error: error instanceof Error ? error.message : String(error) });
-        });
-    }, 220);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [hoveredNode]);
 
   const clientToCanvasPoint = (event: ReactPointerEvent<HTMLDivElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -174,8 +182,17 @@ export function KnowledgeGraphDrawer({
     if (Math.abs(deltaX) + Math.abs(deltaY) > 4) dragState.moved = true;
     if (dragState.kind === "node" && dragState.node && dragState.startNodeX != null && dragState.startNodeY != null) {
       const graphPoint = clientToGraph(event);
-      dragState.node.x = clamp(dragState.startNodeX + graphPoint.x - dragState.startGraphX, dragState.node.collisionRadius, 100 - dragState.node.collisionRadius);
-      dragState.node.y = clamp(dragState.startNodeY + graphPoint.y - dragState.startGraphY, dragState.node.collisionRadius + 1.8, 100 - dragState.node.collisionRadius);
+      const margin = Math.max(260, dragState.node.collisionRadius * 3);
+      dragState.node.x = clamp(
+        dragState.startNodeX + graphPoint.x - dragState.startGraphX,
+        -margin,
+        KNOWLEDGE_GRAPH_WORLD_WIDTH + margin,
+      );
+      dragState.node.y = clamp(
+        dragState.startNodeY + graphPoint.y - dragState.startGraphY,
+        -margin,
+        KNOWLEDGE_GRAPH_WORLD_HEIGHT + margin,
+      );
       forceGraphRender((tick) => tick + 1);
       return;
     }
@@ -216,15 +233,67 @@ export function KnowledgeGraphDrawer({
       suppressGraphClickRef.current = false;
       return;
     }
-    if (node.kind === "folder" || !node.path) return;
+    if (node.kind === "folder" || node.kind === "unresolved" || !node.path) return;
     onOpenFile(node.path);
   };
 
   const resetGraphView = () => {
     setCamera(fitKnowledgeGraphCamera(layout.nodes, stageSize));
   };
-  const activePreview = hoveredNode?.path && nodePreview?.path === hoveredNode.path ? nodePreview : null;
 
+  const runKnowledgeHealthCheck = async () => {
+    if (!knowledgeRootConfigured || opsBusy) return;
+    setOpsBusy("health");
+    setOpsMessage("知识库体检中，报告即将生成");
+    try {
+      const response = await invoke<KnowledgeHealthWorkflowResponse>("wridian_run_knowledge_health_check");
+      onHealthResult(response);
+      setOpsMessage(`体检完成：主要问题 ${response.issues.length} 个，待确认修复 ${response.pendingFixes.length} 项。`);
+      await onRefresh();
+    } catch (error) {
+      setOpsMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setOpsBusy("");
+    }
+  };
+
+  const runLowRiskFixes = async () => {
+    if (!knowledgeRootConfigured || opsBusy) return;
+    setOpsBusy("fix");
+    setOpsMessage("正在执行低风险修复");
+    try {
+      const response = await invoke<KnowledgeHealthFixResponse>("wridian_fix_knowledge_health_low_risk");
+      onHealthResult(response);
+      setOpsMessage(`修复完成：已执行 ${response.appliedFixes.length} 项，报告已更新。`);
+      await onRefresh();
+    } catch (error) {
+      setOpsMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setOpsBusy("");
+    }
+  };
+
+  const runKnowledgeSearch = async () => {
+    if (!knowledgeRootConfigured || opsBusy) return;
+    const query = searchQuery.trim();
+    if (!query) {
+      setSearchHits([]);
+      return;
+    }
+    setOpsBusy("search");
+    setOpsMessage("");
+    try {
+      const response = await invoke<KnowledgeSearchHit[]>("wridian_search_knowledge_bm25", {
+        input: { query, limit: 8 },
+      });
+      setSearchHits(response);
+      setOpsMessage(response.length ? `命中 ${response.length} 条知识卡。` : "没有命中知识卡。");
+    } catch (error) {
+      setOpsMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setOpsBusy("");
+    }
+  };
   return (
     <div className="drawer-backdrop" onMouseDown={onClose} role="presentation">
       <aside className="memory-drawer knowledge-graph-drawer" role="dialog" aria-modal="true" aria-label="知识图谱" onMouseDown={(event) => event.stopPropagation()}>
@@ -233,6 +302,9 @@ export function KnowledgeGraphDrawer({
             <div className="drawer-title">知识图谱</div>
           </div>
           <div className="drawer-header-actions">
+            <button type="button" className="small-action" onClick={() => void runKnowledgeHealthCheck()} disabled={!knowledgeRootConfigured || Boolean(opsBusy)}>
+              {opsBusy === "health" ? "体检中" : "知识库体检"}
+            </button>
             <button type="button" className="small-action" onClick={resetGraphView}>
               重置视图
             </button>
@@ -255,6 +327,40 @@ export function KnowledgeGraphDrawer({
           </div>
         ) : null}
 
+        <div className="knowledge-ops-panel">
+          <form
+            className="knowledge-search-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void runKnowledgeSearch();
+            }}
+          >
+            <input
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="搜索知识卡"
+              disabled={!knowledgeRootConfigured || Boolean(opsBusy)}
+            />
+            <button type="submit" className="small-action" disabled={!knowledgeRootConfigured || Boolean(opsBusy)}>
+              搜索
+            </button>
+          </form>
+          {opsMessage ? <div className="knowledge-ops-message">{opsMessage}</div> : null}
+          {searchHits.length ? (
+            <div className="knowledge-search-results">
+              {searchHits.map((hit) => (
+                <button key={hit.path} type="button" onClick={() => onOpenFile(hit.path)}>
+                  <span className="knowledge-search-result-title">{hit.title}</span>
+                  <span className="knowledge-search-result-meta">
+                    {hit.relativePath} · {hit.score.toFixed(2)}
+                  </span>
+                  <span className="knowledge-search-result-snippet">{hit.snippet || hit.reasons.join(" / ")}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+
         <div
           className={dragging ? "knowledge-graph-stage dragging" : "knowledge-graph-stage"}
           aria-label="知识库动态图谱"
@@ -269,34 +375,147 @@ export function KnowledgeGraphDrawer({
             <div className="knowledge-graph-legend" aria-hidden="true">
               <span><i className="folder" />分类</span>
               <span><i className="card" />知识卡</span>
+              <span><i className="unresolved" />断链</span>
               <span><b className="solid" />关系</span>
               <span><b className="dashed" />引用</span>
+            </div>
+          ) : null}
+          {knowledgeRootConfigured && graph.nodes.length ? (
+            <div className="knowledge-graph-stats" aria-hidden="true">
+              <span>{layout.nodes.length} 节点</span>
+              <span>{layout.edges.length} 关系</span>
+              {graph.nodes.length > layout.nodes.length ? <span>已显示前 {layout.nodes.length} 个</span> : null}
             </div>
           ) : null}
           {!knowledgeRootConfigured ? (
             <div className="knowledge-graph-empty">先选择知识库文件夹</div>
           ) : graph.nodes.length ? (
-            <canvas ref={canvasRef} className="knowledge-graph-canvas" aria-label="知识库动态图谱" />
+            <canvas
+              ref={canvasRef}
+              className="knowledge-graph-canvas"
+              aria-label="知识库动态图谱"
+              style={{ cursor: dragging ? "grabbing" : hoveredNode ? "pointer" : "grab" }}
+            />
           ) : (
             <div className="knowledge-graph-empty">知识库里还没有 Markdown 知识卡</div>
           )}
           {hoveredNode ? (
             <div className="knowledge-graph-preview">
               <div className="knowledge-graph-preview-title">{hoveredNode.label}</div>
-              <div className="knowledge-graph-preview-path">{hoveredNode.path ?? hoveredNode.group}</div>
+              <div className="knowledge-graph-preview-path">{knowledgeGraphDisplayPath(hoveredNode)}</div>
               {hoveredNode.kind === "folder" ? (
                 <div className="knowledge-graph-preview-body">分类文件夹</div>
-              ) : activePreview?.content ? (
-                <div className="knowledge-graph-preview-body">{activePreview.content}</div>
-              ) : activePreview?.error ? (
-                <div className="knowledge-graph-preview-body">{activePreview.error}</div>
+              ) : hoveredNode.kind === "unresolved" ? (
+                <KnowledgeGraphMetadataPreview node={hoveredNode} />
               ) : (
-                <div className="knowledge-graph-preview-body">读取中...</div>
+                <KnowledgeGraphMetadataPreview node={hoveredNode} />
               )}
             </div>
           ) : null}
+          {opsBusy === "health" || opsBusy === "fix" ? (
+            <div className="knowledge-health-scan-overlay" aria-live="polite">
+              <div className="knowledge-health-scan-radar" />
+              <div>{opsBusy === "fix" ? "知识库修复中，报告即将更新" : "知识库体检中，报告即将生成"}</div>
+            </div>
+          ) : null}
+          {healthResult && !opsBusy ? (
+            <KnowledgeHealthResultPanel
+              result={healthResult}
+              onFix={() => void runLowRiskFixes()}
+              onOpenReport={() => onOpenFile(healthResult.reportPath)}
+            />
+          ) : null}
         </div>
       </aside>
+    </div>
+  );
+}
+
+function KnowledgeGraphMetadataPreview({ node }: { node: KnowledgeGraphLayoutNode }) {
+  const metrics = [
+    node.outgoingCount ? `出链 ${node.outgoingCount}` : "",
+    node.backlinkCount ? `反链 ${node.backlinkCount}` : "",
+    node.unresolvedCount ? `断链 ${node.unresolvedCount}` : "",
+  ].filter(Boolean);
+  const chips = [
+    ...(node.aliases ?? []).map((value) => `别名:${value}`),
+    ...(node.tags ?? []).map((value) => `#${value}`),
+    ...(node.sourceRefs ?? []).map((value) => `来源:${value}`),
+  ];
+  const backlinkSources = node.backlinkSources ?? [];
+  return (
+    <div className="knowledge-graph-preview-meta">
+      {metrics.length ? <div className="knowledge-graph-preview-metrics">{metrics.join(" / ")}</div> : null}
+      {chips.length ? (
+        <div className="knowledge-graph-preview-chips">
+          {chips.slice(0, 8).map((chip) => (
+            <span key={chip}>{chip}</span>
+          ))}
+        </div>
+      ) : null}
+      {backlinkSources.length ? (
+        <div className="knowledge-graph-preview-links">被引用：{backlinkSources.join("、")}</div>
+      ) : null}
+    </div>
+  );
+}
+
+function knowledgeGraphDisplayPath(node: KnowledgeGraphLayoutNode) {
+  return node.relativePath || node.group || node.label;
+}
+
+function KnowledgeHealthResultPanel({
+  onFix,
+  onOpenReport,
+  result,
+}: {
+  onFix: () => void;
+  onOpenReport: () => void;
+  result: KnowledgeHealthWorkflowResponse | KnowledgeHealthFixResponse;
+}) {
+  const appliedCount = "appliedFixes" in result ? result.appliedFixes.length : 0;
+  const stopStagePointer = (event: ReactPointerEvent | ReactMouseEvent) => {
+    event.stopPropagation();
+  };
+  const issueTagCount = [
+    result.summary.unresolvedLinkCount,
+    result.summary.orphanFileCount,
+    Math.max(0, result.summary.fileCount - result.summary.sourceCoverageCount),
+    result.pendingFixes.length,
+  ].filter((count) => count > 0).length;
+  return (
+    <div
+      className="knowledge-health-result-panel"
+      onClick={stopStagePointer}
+      onPointerDown={stopStagePointer}
+      onPointerMove={stopStagePointer}
+      onPointerUp={stopStagePointer}
+    >
+      <div className="knowledge-health-result-header">
+        <div>
+          <div className="knowledge-health-result-title">知识库体检完成</div>
+          <div className="knowledge-health-result-meta">报告：{result.reportRelativePath}</div>
+        </div>
+        <strong>{result.score}</strong>
+      </div>
+      <div className="knowledge-health-result-stats">
+        <span>断链 {result.summary.unresolvedLinkCount}</span>
+        <span>孤岛 {result.summary.orphanFileCount}</span>
+        <span>缺来源 {Math.max(0, result.summary.fileCount - result.summary.sourceCoverageCount)}</span>
+        <span>待确认 {result.pendingFixes.length}</span>
+      </div>
+      <div className="knowledge-health-result-note">
+        主要问题 {result.issues.length} 个，治理标签 {issueTagCount} 类。
+        {appliedCount ? ` 已执行低风险修复 ${appliedCount} 项。` : ""}
+      </div>
+      <div className="knowledge-health-result-actions">
+        <button type="button" className="small-action" onClick={onOpenReport}>
+          打开报告
+        </button>
+        <button type="button" className="small-action" onClick={onFix}>
+          一键修复
+        </button>
+      </div>
     </div>
   );
 }
@@ -305,10 +524,20 @@ type KnowledgeGraphLayoutNode = KnowledgeGraphNode & {
   color: string;
   collisionRadius: number;
   depth: number;
+  fx?: number | null;
+  fy?: number | null;
   radius: number;
   showLabel: boolean;
+  vx?: number;
+  vy?: number;
   x: number;
   y: number;
+} & SimulationNodeDatum;
+
+type KnowledgeGraphLayoutEdge = SimulationLinkDatum<KnowledgeGraphLayoutNode> & {
+  kind: string;
+  source: KnowledgeGraphLayoutNode;
+  target: KnowledgeGraphLayoutNode;
 };
 
 type KnowledgeGraphCamera = {
@@ -317,28 +546,38 @@ type KnowledgeGraphCamera = {
   scale: number;
 };
 
+const KNOWLEDGE_GRAPH_WORLD_WIDTH = 1100;
+const KNOWLEDGE_GRAPH_WORLD_HEIGHT = 640;
+const KNOWLEDGE_GRAPH_CAMERA_MIN_SCALE = 0.05;
+const KNOWLEDGE_GRAPH_CAMERA_MAX_SCALE = 5.2;
+const MAX_KNOWLEDGE_GRAPH_NODES = 1000;
+const MAX_KNOWLEDGE_GRAPH_EDGES = 2400;
+const DEFAULT_KNOWLEDGE_GRAPH_FIT_RATIO = 0.86;
+
 function buildKnowledgeGraphLayout(graph: KnowledgeGraphState) {
-  const limited = graph.nodes.slice(0, 180);
+  const limited = graph.nodes.slice(0, MAX_KNOWLEDGE_GRAPH_NODES);
   const nodes = limited.map((node, index): KnowledgeGraphLayoutNode => {
     const depth = knowledgeGraphNodeDepth(node);
     const depthSiblings = limited.filter((candidate) => knowledgeGraphNodeDepth(candidate) === depth);
     const siblingIndex = depthSiblings.findIndex((candidate) => candidate.id === node.id);
     const siblingCount = Math.max(1, depthSiblings.length);
     const groupHash = stableNumber(`${node.group}:${node.id}`);
-    const depthRing = 9 + Math.min(depth, 5) * 8.4 + (node.kind === "folder" ? 0 : 4.8);
-    const angle = ((siblingIndex / siblingCount) * 360 + (depth % 2) * 23 + (groupHash % 18)) * (Math.PI / 180);
-    const radius = node.kind === "folder" ? 1.46 + Math.min(0.46, node.size / 42) : 0.7 + Math.min(0.3, node.size / 42);
-    const showLabel = node.kind === "folder" || index < 32;
-    const labelRadius = showLabel ? Math.min(10.5, Math.max(3.8, node.label.length * 0.46)) : 0;
+    const depthRing = 120 + Math.min(depth, 7) * 58 + (node.kind === "folder" ? 0 : 28);
+    const angle = ((siblingIndex / siblingCount) * 360 + (depth % 2) * 23 + (groupHash % 22)) * (Math.PI / 180);
+    const radius = knowledgeGraphNodeRadius(node);
+    const showLabel = node.kind === "folder" || index < 80 || (node.backlinkCount ?? 0) + (node.outgoingCount ?? 0) >= 4;
+    const labelRadius = showLabel ? Math.min(92, Math.max(22, node.label.length * 4.2)) : 0;
     return {
       ...node,
-      collisionRadius: radius + labelRadius + 1.25,
+      collisionRadius: radius + labelRadius * 0.42 + 8,
       color: knowledgeGraphTypedNodeColor(node, depth),
       depth,
       radius,
       showLabel,
-      x: clamp(50 + Math.cos(angle) * depthRing, 8, 92),
-      y: clamp(50 + Math.sin(angle) * depthRing, 9, 91),
+      vx: 0,
+      vy: 0,
+      x: KNOWLEDGE_GRAPH_WORLD_WIDTH / 2 + Math.cos(angle) * depthRing,
+      y: KNOWLEDGE_GRAPH_WORLD_HEIGHT / 2 + Math.sin(angle) * depthRing,
     };
   });
   const byId = new Map(nodes.map((node) => [node.id, node]));
@@ -348,66 +587,62 @@ function buildKnowledgeGraphLayout(graph: KnowledgeGraphState) {
       source: byId.get(edge.source),
       target: byId.get(edge.target),
     }))
-    .filter((edge): edge is { kind: string; source: KnowledgeGraphLayoutNode; target: KnowledgeGraphLayoutNode } => Boolean(edge.source && edge.target))
-    .slice(0, 260);
+    .filter((edge): edge is KnowledgeGraphLayoutEdge => Boolean(edge.source && edge.target))
+    .slice(0, MAX_KNOWLEDGE_GRAPH_EDGES);
   relaxKnowledgeGraphLayout(nodes, edges);
   return { edges, nodes };
 }
 
+function knowledgeGraphNodeRadius(node: KnowledgeGraphNode) {
+  if (node.kind === "folder") return Math.min(22, 13 + node.size * 0.18);
+  if (node.kind === "unresolved") return 8.8;
+  const relationScore = (node.backlinkCount ?? 0) + (node.outgoingCount ?? 0) + (node.sourceRefs?.length ?? 0);
+  return Math.min(13.4, 6.6 + Math.sqrt(Math.max(1, node.size + relationScore)) * 0.58);
+}
+
+function knowledgeGraphEdgeDistance(edge: KnowledgeGraphLayoutEdge) {
+  const relationKind = knowledgeGraphRelationKind(edge.kind);
+  if (relationKind === "frontmatter") return 126;
+  if (relationKind === "unresolved") return 112;
+  if (relationKind === "embed") return 104;
+  if (relationKind === "wikilink") return 92;
+  return 78 + Math.min(42, edge.target.depth * 7);
+}
+
+function knowledgeGraphEdgeStrength(edge: KnowledgeGraphLayoutEdge) {
+  const relationKind = knowledgeGraphRelationKind(edge.kind);
+  if (relationKind === "frontmatter") return 0.42;
+  if (relationKind === "embed") return 0.3;
+  if (relationKind === "wikilink") return 0.24;
+  if (relationKind === "unresolved") return 0.18;
+  return 0.32;
+}
+
 function relaxKnowledgeGraphLayout(
   nodes: KnowledgeGraphLayoutNode[],
-  edges: { kind: string; source: KnowledgeGraphLayoutNode; target: KnowledgeGraphLayoutNode }[],
+  edges: KnowledgeGraphLayoutEdge[],
 ) {
-  const centerX = 50;
-  const centerY = 50;
-  for (let iteration = 0; iteration < 90; iteration += 1) {
-    for (const edge of edges) {
-      const targetDistance = edge.kind === "contains" ? 12 + edge.target.depth * 1.6 : 18;
-      const dx = edge.target.x - edge.source.x;
-      const dy = edge.target.y - edge.source.y;
-      const distance = Math.max(0.01, Math.hypot(dx, dy));
-      const pull = (distance - targetDistance) * (edge.kind === "contains" ? 0.012 : 0.006);
-      const moveX = (dx / distance) * pull;
-      const moveY = (dy / distance) * pull;
-      edge.source.x += moveX;
-      edge.source.y += moveY;
-      edge.target.x -= moveX;
-      edge.target.y -= moveY;
-    }
-
-    for (let index = 0; index < nodes.length; index += 1) {
-      const node = nodes[index];
-      for (let otherIndex = index + 1; otherIndex < nodes.length; otherIndex += 1) {
-        const other = nodes[otherIndex];
-        let dx = other.x - node.x;
-        let dy = other.y - node.y;
-        let distance = Math.hypot(dx, dy);
-        if (distance < 0.01) {
-          const angle = ((stableNumber(`${node.id}:${other.id}`) % 360) * Math.PI) / 180;
-          dx = Math.cos(angle) * 0.01;
-          dy = Math.sin(angle) * 0.01;
-          distance = 0.01;
-        }
-        const minimumDistance = node.collisionRadius + other.collisionRadius;
-        if (distance >= minimumDistance) continue;
-        const push = (minimumDistance - distance) * 0.48;
-        const pushX = (dx / distance) * push;
-        const pushY = (dy / distance) * push;
-        node.x -= pushX;
-        node.y -= pushY;
-        other.x += pushX;
-        other.y += pushY;
-      }
-    }
-
-    for (const node of nodes) {
-      const returnForce = node.kind === "folder" ? 0.006 : 0.003;
-      node.x += (centerX - node.x) * returnForce;
-      node.y += (centerY - node.y) * returnForce;
-      node.x = clamp(node.x, node.collisionRadius, 100 - node.collisionRadius);
-      node.y = clamp(node.y, node.collisionRadius + 1.8, 100 - node.collisionRadius);
-    }
-  }
+  if (!nodes.length) return;
+  const simulation = forceSimulation<KnowledgeGraphLayoutNode>(nodes)
+    .force(
+      "charge",
+      forceManyBody<KnowledgeGraphLayoutNode>()
+        .strength((node) => (node.kind === "folder" ? -420 : node.kind === "unresolved" ? -170 : -135))
+        .distanceMax(520),
+    )
+    .force(
+      "link",
+      forceLink<KnowledgeGraphLayoutNode, KnowledgeGraphLayoutEdge>(edges)
+        .id((node) => node.id)
+        .distance((edge) => knowledgeGraphEdgeDistance(edge))
+        .strength((edge) => knowledgeGraphEdgeStrength(edge)),
+    )
+    .force("center", forceCenter(KNOWLEDGE_GRAPH_WORLD_WIDTH / 2, KNOWLEDGE_GRAPH_WORLD_HEIGHT / 2).strength(0.045))
+    .force("collide", forceCollide<KnowledgeGraphLayoutNode>().radius((node) => node.collisionRadius).iterations(2))
+    .stop();
+  const ticks = nodes.length > 650 ? 150 : nodes.length > 320 ? 190 : 230;
+  simulation.tick(ticks);
+  simulation.stop();
 }
 
 function knowledgeGraphNodeDepth(node: KnowledgeGraphNode) {
@@ -422,6 +657,7 @@ function knowledgeGraphNodeColor(depth: number) {
 
 function knowledgeGraphTypedNodeColor(node: KnowledgeGraphNode, depth: number) {
   if (node.kind === "folder") return knowledgeGraphNodeColor(depth);
+  if (node.kind === "unresolved") return "#9d3d35";
   const normalizedKind = node.kind.toLowerCase();
   if (normalizedKind.includes("source")) return "#5f8f7b";
   if (normalizedKind.includes("analysis") || normalizedKind.includes("report")) return "#8d7cc3";
@@ -430,8 +666,6 @@ function knowledgeGraphTypedNodeColor(node: KnowledgeGraphNode, depth: number) {
   if (normalizedKind.includes("concept") || normalizedKind.includes("entity")) return "#5f79b8";
   return knowledgeGraphNodeColor(depth);
 }
-
-const DEFAULT_KNOWLEDGE_GRAPH_FIT_RATIO = 0.64;
 
 function fitKnowledgeGraphCamera(nodes: KnowledgeGraphLayoutNode[], size = { height: 520, width: 780 }): KnowledgeGraphCamera {
   const width = Math.max(1, size.width);
@@ -452,7 +686,7 @@ function fitKnowledgeGraphCamera(nodes: KnowledgeGraphLayoutNode[], size = { hei
   const graphWidth = Math.max(1, maxX - minX);
   const graphHeight = Math.max(1, maxY - minY);
   const fittedScale = Math.min((width - 52) / graphWidth, (height - 52) / graphHeight);
-  const scale = clamp(fittedScale * DEFAULT_KNOWLEDGE_GRAPH_FIT_RATIO, 2.4, 7.8);
+  const scale = clamp(fittedScale * DEFAULT_KNOWLEDGE_GRAPH_FIT_RATIO, KNOWLEDGE_GRAPH_CAMERA_MIN_SCALE, 1.8);
   const centerX = (minX + maxX) / 2;
   const centerY = (minY + maxY) / 2;
   return {
@@ -464,14 +698,14 @@ function fitKnowledgeGraphCamera(nodes: KnowledgeGraphLayoutNode[], size = { hei
 
 function sanitizeKnowledgeGraphCamera(
   camera: KnowledgeGraphCamera,
-  fallback: KnowledgeGraphCamera = { offsetX: 390, offsetY: 260, scale: 6 },
+  fallback: KnowledgeGraphCamera = { offsetX: 390, offsetY: 260, scale: 0.72 },
 ): KnowledgeGraphCamera {
-  const fallbackScale = Number.isFinite(fallback.scale) && fallback.scale > 0 ? fallback.scale : 6;
+  const fallbackScale = Number.isFinite(fallback.scale) && fallback.scale > 0 ? fallback.scale : 0.72;
   const fallbackOffsetX = Number.isFinite(fallback.offsetX) ? fallback.offsetX : 390;
   const fallbackOffsetY = Number.isFinite(fallback.offsetY) ? fallback.offsetY : 260;
-  const scale = Number.isFinite(camera.scale) && camera.scale > 0 ? clamp(camera.scale, 2.4, 32) : fallbackScale;
-  const offsetX = Number.isFinite(camera.offsetX) ? clamp(camera.offsetX, -6000, 6000) : fallbackOffsetX;
-  const offsetY = Number.isFinite(camera.offsetY) ? clamp(camera.offsetY, -6000, 6000) : fallbackOffsetY;
+  const scale = Number.isFinite(camera.scale) && camera.scale > 0 ? clamp(camera.scale, KNOWLEDGE_GRAPH_CAMERA_MIN_SCALE, KNOWLEDGE_GRAPH_CAMERA_MAX_SCALE) : fallbackScale;
+  const offsetX = Number.isFinite(camera.offsetX) ? clamp(camera.offsetX, -12000, 12000) : fallbackOffsetX;
+  const offsetY = Number.isFinite(camera.offsetY) ? clamp(camera.offsetY, -12000, 12000) : fallbackOffsetY;
   return { offsetX, offsetY, scale };
 }
 
@@ -485,7 +719,7 @@ function zoomKnowledgeGraphCamera(
   const anchorX = Number.isFinite(anchor.x) ? anchor.x : 390;
   const anchorY = Number.isFinite(anchor.y) ? anchor.y : 260;
   const graphPoint = canvasPointToKnowledgeGraph({ x: anchorX, y: anchorY }, base);
-  const scale = clamp(base.scale * safeFactor, 2.4, 32);
+  const scale = clamp(base.scale * safeFactor, KNOWLEDGE_GRAPH_CAMERA_MIN_SCALE, KNOWLEDGE_GRAPH_CAMERA_MAX_SCALE);
   return sanitizeKnowledgeGraphCamera({
     offsetX: anchorX - graphPoint.x * scale,
     offsetY: anchorY - graphPoint.y * scale,
@@ -512,7 +746,7 @@ function pickKnowledgeGraphNode(nodes: KnowledgeGraphLayoutNode[], point: { x: n
   let best: KnowledgeGraphLayoutNode | undefined;
   let bestDistance = Infinity;
   for (const node of nodes) {
-    const radius = node.radius + 1.8;
+    const radius = node.radius + 8;
     const dx = node.x - point.x;
     const dy = node.y - point.y;
     const distance = dx * dx + dy * dy;
@@ -604,8 +838,8 @@ function drawKnowledgeGraphCanvas(
     const labelTop = point.y + radius + Math.max(4, labelFontSize * 0.42);
     const label = ellipsizeCanvasLabel(node.label, hoveredNodeId === node.id ? 22 : 14);
     context.font = `${labelFontSize}px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif`;
-    context.lineWidth = Math.max(2, labelFontSize * 0.28);
-    context.strokeStyle = "rgba(249, 246, 239, 0.92)";
+    context.lineWidth = Math.max(1, labelFontSize * 0.14);
+    context.strokeStyle = "rgba(249, 246, 239, 0.72)";
     context.strokeText(label, point.x, labelTop);
     context.fillStyle = node.kind === "folder" ? "rgba(62, 55, 48, 0.9)" : "rgba(96, 86, 76, 0.78)";
     context.fillText(label, point.x, labelTop);
@@ -614,8 +848,8 @@ function drawKnowledgeGraphCanvas(
 }
 
 function knowledgeGraphLabelFontSize(nodePixelRadius: number, hovered: boolean) {
-  const base = nodePixelRadius * 0.72 + 3.2;
-  return clamp(hovered ? base + 1.2 : base, 7, 12.5);
+  const base = nodePixelRadius * 0.58 + 2.6;
+  return clamp(hovered ? base + 0.8 : base, 6.5, 10.8);
 }
 
 function hexToRgba(hex: string, alpha: number) {
@@ -634,34 +868,44 @@ function ellipsizeCanvasLabel(label: string, maxLength: number) {
 }
 
 function knowledgeGraphRelationKind(kind: string) {
+  if (kind.includes("unresolved")) return "unresolved";
+  if (kind === "embed" || kind.startsWith("embed:")) return "embed";
   if (kind.startsWith("frontmatter:")) return "frontmatter";
   if (kind === "wikilink") return "wikilink";
   return "contains";
 }
 
 function knowledgeGraphRelationLabel(kind: string) {
-  return kind.replace(/^frontmatter:/, "").replace(/_/g, " ").slice(0, 22);
+  return kind.replace(/^frontmatter:/, "").replace(/:unresolved$/, "").replace(/_/g, " ").slice(0, 22);
 }
 
 function knowledgeGraphEdgeColor(kind: string) {
+  if (kind === "unresolved") return "rgba(157, 61, 53, 0.72)";
+  if (kind === "embed") return "rgba(95, 143, 123, 0.68)";
   if (kind === "frontmatter") return "rgba(160, 91, 66, 0.82)";
   if (kind === "wikilink") return "rgba(116, 107, 94, 0.58)";
   return "rgba(116, 107, 94, 0.34)";
 }
 
 function knowledgeGraphEdgeWidth(kind: string) {
+  if (kind === "unresolved") return 1.55;
+  if (kind === "embed") return 1.45;
   if (kind === "frontmatter") return 2.15;
   if (kind === "wikilink") return 1.2;
   return 0.9;
 }
 
 function knowledgeGraphEdgeAlpha(kind: string) {
+  if (kind === "unresolved") return 0.86;
+  if (kind === "embed") return 0.74;
   if (kind === "frontmatter") return 0.92;
   if (kind === "wikilink") return 0.72;
   return 0.54;
 }
 
 function knowledgeGraphEdgeDash(kind: string) {
+  if (kind === "unresolved") return [2, 5];
+  if (kind === "embed") return [7, 3, 2, 3];
   if (kind === "frontmatter") return [];
   if (kind === "wikilink") return [5, 4];
   return [4, 5];

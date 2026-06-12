@@ -1,5 +1,5 @@
 import { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import {
   restorePromptPillsFromMessage,
   type ChatMessage,
@@ -7,10 +7,8 @@ import {
 import { useChatManager, type ChatDraftEdit } from "./chat/chatManager";
 import { ChatPanel } from "./chat/ChatPanel";
 import {
-  findRelevantNotes,
   getProjectState,
   selectProject,
-  type RelevantNote,
   type ProjectState,
 } from "./chat/projectContext";
 import {
@@ -41,6 +39,7 @@ import { KnowledgeGraphDrawer } from "./knowledge/KnowledgeGraphDrawer";
 import { buildKnowledgeSuggestionIndex } from "./knowledge/knowledgeSuggestions";
 import { ModelSettingsDialog } from "./settings/ModelSettingsDialog";
 import { CreativeSkillsDrawer } from "./skills/CreativeSkillsDrawer";
+import { FilePreviewViewer, type FilePreviewViewModel } from "./viewer/FilePreviewViewer";
 import { FileContextMenuView, FileNodeView, type FileContextMenu } from "./files/FileTree";
 import {
   DarkThemeIcon,
@@ -62,17 +61,24 @@ import {
   duplicateWorkNode,
   initWorkspace,
   openWorkFile,
+  previewWorkAsset,
+  previewWorkFile,
   renameWorkNode,
   saveWorkFile,
   setLibraryRoot,
   trashWorkNode,
 } from "./workspace/workspaceClient";
 import type {
+  BridgeRelationAction,
+  BridgeRelationResponse,
   CreativeSkillSources,
   ConfiguredModelStatus,
   KnowledgeGraphState,
+  KnowledgeHealthFixResponse,
+  KnowledgeHealthWorkflowResponse,
   MemoryTreeState,
   ModelAccountsStatus,
+  RelevantNote,
   WorkFileNode,
   WorkspaceInfo,
 } from "./appTypes";
@@ -81,14 +87,10 @@ import "./App.css";
 type Theme = "light" | "dark";
 type FontSizeMode = "default" | "large" | "max";
 type SaveStatus = "idle" | "dirty" | "saving" | "saved" | "error";
+type WorkspaceLibrary = "works" | "knowledge";
 
 type DraftEdit = ChatDraftEdit;
-type FilePreviewState = {
-  extension: string;
-  name: string;
-  path: string;
-  type: "image" | "pdf" | "external";
-};
+type FilePreviewState = FilePreviewViewModel;
 
 type SendPromptSnapshotInput = {
   content: string;
@@ -97,6 +99,22 @@ type SendPromptSnapshotInput = {
   overrideSelectedText?: string;
   prompt: string;
   text?: string;
+};
+
+type SelectionActionPosition = {
+  left: number;
+  top: number;
+};
+
+type BridgeCandidate = {
+  action: BridgeRelationAction;
+  label: string;
+  sourceLibrary: "works" | "knowledge" | "creative_memory";
+  sourcePath: string;
+  sourceRelativePath: string;
+  sourceTitle: string;
+  targetLibrary: WorkspaceLibrary;
+  targetPath: string;
 };
 
 const DEFAULT_LEFT_PANE_WIDTH = 218;
@@ -109,11 +127,6 @@ const MIN_WRITING_PANE_WIDTH = 360;
 const WORKSPACE_RESIZER_WIDTH = 12;
 const WORKSPACE_RESIZER_COUNT = 2;
 const BUILTIN_CREATIVE_SKILL_SOURCES: CreativeSkillSources = {
-  knowledgeOps: {
-    available: true,
-    source: "builtin-resource",
-    label: "知识库运维",
-  },
   workDecompose: {
     available: true,
     source: "builtin-resource",
@@ -135,6 +148,25 @@ const FONT_SIZE_SCALE: Record<FontSizeMode, number> = {
   large: 1.12,
   max: 1.25,
 };
+const THEME_STORAGE_KEY = "wridian.theme";
+const FONT_SIZE_STORAGE_KEY = "wridian.fontSizeMode";
+
+function storedTheme(): Theme {
+  try {
+    return window.localStorage.getItem(THEME_STORAGE_KEY) === "dark" ? "dark" : "light";
+  } catch {
+    return "light";
+  }
+}
+
+function storedFontSizeMode(): FontSizeMode {
+  try {
+    const value = window.localStorage.getItem(FONT_SIZE_STORAGE_KEY);
+    return value === "large" || value === "max" ? value : "default";
+  } catch {
+    return "default";
+  }
+}
 
 function fileExtension(path: string) {
   const match = /\.([^.\\/]+)$/.exec(path);
@@ -142,14 +174,47 @@ function fileExtension(path: string) {
 }
 
 function isEditableWorkspaceFile(path: string) {
-  return ["md", "markdown", "txt"].includes(fileExtension(path));
+  return ["md", "markdown", "txt", "docx"].includes(fileExtension(path));
+}
+
+function isMarkdownWorkspaceFile(path: string) {
+  return ["md", "markdown"].includes(fileExtension(path));
+}
+
+function isTextContextFile(path: string) {
+  return ["md", "markdown", "txt", "docx", "csv", "json", "yaml", "yml"].includes(fileExtension(path));
 }
 
 function filePreviewType(path: string): FilePreviewState["type"] {
   const extension = fileExtension(path);
   if (["png", "jpg", "jpeg", "webp", "gif", "svg", "bmp"].includes(extension)) return "image";
   if (extension === "pdf") return "pdf";
+  if (["csv", "json", "yaml", "yml"].includes(extension)) return "text";
+  if (["doc", "wps"].includes(extension)) return "word-legacy";
   return "external";
+}
+
+function flattenFileNodes(nodes: WorkFileNode[]): WorkFileNode[] {
+  return nodes.flatMap((node) => [node, ...flattenFileNodes(node.children)]);
+}
+
+function findFileNodeByPath(nodes: WorkFileNode[], path: string) {
+  return flattenFileNodes(nodes).find((node) => !node.folder && node.path === path);
+}
+
+function flattenMemoryNodes(nodes: MemoryTreeState["roots"]): MemoryTreeState["roots"] {
+  return nodes.flatMap((node) => [node, ...flattenMemoryNodes(node.children)]);
+}
+
+function findMemoryNodeByPath(nodes: MemoryTreeState["roots"], path: string) {
+  return flattenMemoryNodes(nodes).find((node) => node.path === path);
+}
+
+function memoryRelativePath(path: string) {
+  const normalized = path.replace(/\\/g, "/");
+  const marker = "/memory-tree/";
+  const index = normalized.toLowerCase().indexOf(marker);
+  return index >= 0 ? normalized.slice(index + marker.length) : "";
 }
 
 function createCocreationRequestId() {
@@ -181,14 +246,15 @@ function clonePromptContextPill(pill: PromptContextPill): PromptContextPill {
 }
 
 function App() {
-  const [theme, setTheme] = useState<Theme>("light");
-  const [fontSizeMode, setFontSizeMode] = useState<FontSizeMode>("default");
+  const [theme, setTheme] = useState<Theme>(() => storedTheme());
+  const [fontSizeMode, setFontSizeMode] = useState<FontSizeMode>(() => storedFontSizeMode());
   const [fontSizeMenuOpen, setFontSizeMenuOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [knowledgeGraphOpen, setKnowledgeGraphOpen] = useState(false);
   const [creativeSkillsOpen, setCreativeSkillsOpen] = useState(false);
   const [knowledgeGraphState, setKnowledgeGraphState] = useState<KnowledgeGraphState>({ nodes: [], edges: [], warnings: [] });
   const [knowledgeGraphError, setKnowledgeGraphError] = useState("");
+  const [knowledgeHealthResult, setKnowledgeHealthResult] = useState<KnowledgeHealthWorkflowResponse | KnowledgeHealthFixResponse | null>(null);
   const [creativeSkillEnabled, setCreativeSkillEnabled] = useState<Record<CreativeSkillId, boolean>>(DEFAULT_CREATIVE_SKILL_STATE);
   const [creativeSkillSources, setCreativeSkillSources] = useState<CreativeSkillSources>(BUILTIN_CREATIVE_SKILL_SOURCES);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -207,7 +273,8 @@ function App() {
   const [projectError, setProjectError] = useState("");
   const [relevantNotes, setRelevantNotes] = useState<RelevantNote[]>([]);
   const [relevantNotesError, setRelevantNotesError] = useState("");
-  const [hasDraftSelection, setHasDraftSelection] = useState(false);
+  const [relevantNotesLoading, setRelevantNotesLoading] = useState(false);
+  const [selectionActionPosition, setSelectionActionPosition] = useState<SelectionActionPosition | null>(null);
   const [selectedPath, setSelectedPath] = useState("");
   const [filePreview, setFilePreview] = useState<FilePreviewState | null>(null);
   const [loadingPath, setLoadingPath] = useState("");
@@ -216,6 +283,8 @@ function App() {
   const [lastSavedContent, setLastSavedContent] = useState("");
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [saveError, setSaveError] = useState("");
+  const [bridgeStatus, setBridgeStatus] = useState("");
+  const [bridgeApplying, setBridgeApplying] = useState(false);
   const [memoryError, setMemoryError] = useState("");
   const [memoryTreeState, setMemoryTreeState] = useState<MemoryTreeState>({ roots: [] });
   const [savingMemoryTree, setSavingMemoryTree] = useState(false);
@@ -230,6 +299,7 @@ function App() {
   const fontSizeControlRef = useRef<HTMLDivElement | null>(null);
   const draftSelectionRef = useRef<TextSelection>({ start: editorContent.length, end: editorContent.length });
   const openFileRequestSeqRef = useRef(0);
+  const relevantNotesRequestSeqRef = useRef(0);
   const updatePromptPills = useCallback((
     next: PromptContextPill[] | ((current: PromptContextPill[]) => PromptContextPill[]),
   ) => {
@@ -258,7 +328,20 @@ function App() {
       document.removeEventListener("pointerdown", closeFontSizeMenuOnOutsidePointerDown, true);
     };
   }, [fontSizeMenuOpen]);
-  const chatManager = useChatManager({ onDraftEdits: appendDraftEdits });
+  const refreshWorkspaceState = useCallback(async () => {
+    const response = await initWorkspace();
+    setWorkspace(response);
+    setWorkspaceError("");
+    return response;
+  }, []);
+  const chatManager = useChatManager({
+    onDraftEdits: appendDraftEdits,
+    onWorkspaceChanged: () => {
+      void refreshWorkspaceState().catch((error) => {
+        setWorkspaceError(error instanceof Error ? error.message : String(error));
+      });
+    },
+  });
   const draftKind = useMemo(() => detectDraftKind(selectedPath, editorContent), [editorContent, selectedPath]);
 
   const loadMemoryTree = useCallback(async () => {
@@ -281,6 +364,13 @@ function App() {
     }
   }, []);
 
+  const refreshKnowledgeSurfaces = useCallback(async () => {
+    await Promise.all([
+      loadKnowledgeGraph(),
+      refreshWorkspaceState(),
+    ]);
+  }, [loadKnowledgeGraph, refreshWorkspaceState]);
+
   const loadModelAccounts = useCallback(async () => {
     try {
       const status = await invoke<ModelAccountsStatus>("wridian_get_model_accounts");
@@ -288,10 +378,11 @@ function App() {
       setConfiguredModels(status.configuredModels);
       setSelectedModelId(activeId);
       setActiveModelLabel(status.activeModelLabel ?? status.configuredModels.find((model) => model.id === activeId)?.label ?? "未配置模型");
-    } catch {
+    } catch (error) {
       setConfiguredModels([]);
       setSelectedModelId("");
       setActiveModelLabel("未配置模型");
+      setWorkspaceError(`模型账户读取失败：${error instanceof Error ? error.message : String(error)}`);
     }
   }, []);
 
@@ -328,10 +419,23 @@ function App() {
     const editor = draftEditorRef.current;
     if (!editor) return;
     const selection = readContentEditableSelection(editor);
-    if (!selection) return;
+    if (!selection || selection.start === selection.end) {
+      setSelectionActionPosition(null);
+      return;
+    }
+    const browserSelection = window.getSelection();
+    const range = browserSelection?.rangeCount ? browserSelection.getRangeAt(0) : null;
+    const rect = range?.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) {
+      setSelectionActionPosition(null);
+      return;
+    }
     const { start, end } = selection;
     draftSelectionRef.current = { start, end };
-    setHasDraftSelection(end > start);
+    setSelectionActionPosition({
+      left: Math.max(12, rect.left + rect.width / 2),
+      top: Math.max(12, rect.top - 10),
+    });
   }, []);
 
   const attachCurrentSelectionToPrompt = () => {
@@ -342,12 +446,25 @@ function App() {
     const selected = editorContent.slice(selection.start, selection.end).trim();
     if (!selected) return;
     updatePromptPills((current) => upsertPromptContextPill(current, createSelectionPromptPill(selected, selection)));
-    setPrompt((current) => current || "请修改这段。");
+    setSelectionActionPosition(null);
   };
 
   useEffect(() => {
     document.documentElement.classList.toggle("darkTheme", theme === "dark");
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {
+      // localStorage can be unavailable in restricted webviews; theme still applies for this run.
+    }
   }, [theme]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(FONT_SIZE_STORAGE_KEY, fontSizeMode);
+    } catch {
+      // localStorage can be unavailable in restricted webviews; font size still applies for this run.
+    }
+  }, [fontSizeMode]);
 
   useEffect(() => {
     void initWorkspace()
@@ -355,8 +472,15 @@ function App() {
         setWorkspace(response);
         setWorkspaceError("");
       })
-      .catch(() => setWorkspace(null));
+      .catch((error) => {
+        setWorkspace(null);
+        setWorkspaceError(error instanceof Error ? error.message : String(error));
+      });
   }, []);
+
+  useEffect(() => {
+    void loadMemoryTree();
+  }, [loadMemoryTree]);
 
   useEffect(() => {
     if (!memoryOpen) return;
@@ -388,47 +512,142 @@ function App() {
   }, [chatManager.switchProjectChat, workspace?.files.length, workspace?.filesRootPath]);
 
   useEffect(() => {
-    if (!selectedPath || !editorContent.trim()) {
+    const requestSeq = relevantNotesRequestSeqRef.current + 1;
+    relevantNotesRequestSeqRef.current = requestSeq;
+    const content = editorContent.trim();
+    const selectedWorkNode = selectedPath ? findFileNodeByPath(workspace?.files ?? [], selectedPath) : undefined;
+    if (!selectedPath || !selectedWorkNode || !content) {
       setRelevantNotes([]);
       setRelevantNotesError("");
+      setRelevantNotesLoading(false);
       return;
     }
-    let cancelled = false;
+    setRelevantNotesLoading(true);
     const timer = window.setTimeout(() => {
-      void findRelevantNotes({
-        sourcePath: selectedPath,
-        content: editorContent,
-        query: prompt,
-        limit: 6,
+      void invoke<RelevantNote[]>("wridian_find_relevant_notes", {
+        input: {
+          sourcePath: selectedPath,
+          content,
+          library: "works",
+          limit: 8,
+        },
       })
         .then((notes) => {
-          if (cancelled) return;
+          if (relevantNotesRequestSeqRef.current !== requestSeq) return;
           setRelevantNotes(notes);
           setRelevantNotesError("");
         })
         .catch((error) => {
-          if (cancelled) return;
+          if (relevantNotesRequestSeqRef.current !== requestSeq) return;
           setRelevantNotes([]);
           setRelevantNotesError(error instanceof Error ? error.message : String(error));
+        })
+        .finally(() => {
+          if (relevantNotesRequestSeqRef.current === requestSeq) {
+            setRelevantNotesLoading(false);
+          }
         });
-    }, 250);
+    }, 650);
     return () => {
-      cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [editorContent, projectState.activeProjectId, prompt, selectedPath, workspace?.files.length, workspace?.knowledgeFiles.length]);
+  }, [
+    editorContent,
+    projectState.activeProjectId,
+    selectedPath,
+    workspace?.files,
+    workspace?.files.length,
+    workspace?.filesRootPath,
+    workspace?.knowledgeFiles.length,
+    workspace?.knowledgeRootPath,
+  ]);
 
   const files = workspace?.files ?? [];
   const knowledgeFiles = workspace?.knowledgeFiles ?? [];
   const visibleFiles = libraryTab === "works" ? files : knowledgeFiles;
+  const selectedWorkNode = selectedPath ? findFileNodeByPath(files, selectedPath) : undefined;
+  const selectedKnowledgeNode = selectedPath ? findFileNodeByPath(knowledgeFiles, selectedPath) : undefined;
+  const selectedFileNode = selectedWorkNode ?? selectedKnowledgeNode;
+  const selectedFileLibrary: WorkspaceLibrary | null = selectedWorkNode ? "works" : selectedKnowledgeNode ? "knowledge" : null;
   const selectedTreePath = selectedPath || filePreview?.path || "";
   const activeLibraryConfigured = libraryTab === "knowledge"
     ? Boolean(workspace?.knowledgeRootConfigured)
     : Boolean(workspace?.workRootConfigured);
   const isRealFile = Boolean(selectedPath);
   const hasEditorSurface = Boolean(selectedPath || filePreview);
-  const previewUrl = filePreview ? convertFileSrc(filePreview.path) : "";
   const dirty = isRealFile && !loadingPath && editorContent !== lastSavedContent;
+  const bridgeCandidates = useMemo<BridgeCandidate[]>(() => {
+    if (!selectedPath || !selectedFileLibrary || !selectedFileNode || !isMarkdownWorkspaceFile(selectedPath)) {
+      return [];
+    }
+    const candidates: BridgeCandidate[] = [];
+    if (selectedFileLibrary === "works") {
+      const knowledgePill = promptPills.find((pill) => {
+        if (!pill.sourcePath) return false;
+        return Boolean(findFileNodeByPath(knowledgeFiles, pill.sourcePath));
+      });
+      if (!knowledgePill?.sourcePath) return candidates;
+      const sourceNode = findFileNodeByPath(knowledgeFiles, knowledgePill.sourcePath);
+      if (!sourceNode?.relativePath || !isMarkdownWorkspaceFile(sourceNode.path)) return candidates;
+      const base = {
+        sourceLibrary: "knowledge" as const,
+        sourcePath: sourceNode.path,
+        sourceRelativePath: sourceNode.relativePath,
+        sourceTitle: knowledgePill.label || sourceNode.name,
+        targetLibrary: "works" as const,
+        targetPath: selectedPath,
+      };
+      candidates.push(
+        { ...base, action: "referencesKnowledge", label: "引用知识" },
+        { ...base, action: "adoptsKnowledge", label: "采纳为设定" },
+        { ...base, action: "derivedFromKnowledge", label: "改写为规则" },
+      );
+    }
+    if (selectedFileLibrary === "knowledge") {
+      const worksPill = promptPills.find((pill) => {
+        if (!pill.sourcePath) return false;
+        return Boolean(findFileNodeByPath(files, pill.sourcePath));
+      });
+      if (worksPill?.sourcePath) {
+        const sourceNode = findFileNodeByPath(files, worksPill.sourcePath);
+        if (sourceNode?.relativePath && isMarkdownWorkspaceFile(sourceNode.path)) {
+          const base = {
+            sourceLibrary: "works" as const,
+            sourcePath: sourceNode.path,
+            sourceRelativePath: sourceNode.relativePath,
+            sourceTitle: worksPill.label || sourceNode.name,
+            targetLibrary: "knowledge" as const,
+            targetPath: selectedPath,
+          };
+          candidates.push(
+            { ...base, action: "abstractedFromDraft", label: "从作品抽象" },
+            { ...base, action: "excerptedFromProject", label: "摘录到项目" },
+          );
+        }
+      }
+      const memoryPill = promptPills.find((pill) => {
+        if (!pill.sourcePath) return false;
+        return Boolean(findMemoryNodeByPath(memoryTreeState.roots, pill.sourcePath));
+      });
+      if (memoryPill?.sourcePath) {
+        const sourceNode = findMemoryNodeByPath(memoryTreeState.roots, memoryPill.sourcePath);
+        const sourceRelativePath = memoryRelativePath(memoryPill.sourcePath);
+        if (sourceNode?.path && sourceRelativePath && isMarkdownWorkspaceFile(sourceNode.path)) {
+          candidates.push({
+            action: "distilledFromMemory",
+            label: "从记忆蒸馏",
+            sourceLibrary: "creative_memory",
+            sourcePath: sourceNode.path,
+            sourceRelativePath,
+            sourceTitle: memoryPill.label || sourceNode.label,
+            targetLibrary: "knowledge",
+            targetPath: selectedPath,
+          });
+        }
+      }
+    }
+    return candidates;
+  }, [files, knowledgeFiles, memoryTreeState.roots, promptPills, selectedFileLibrary, selectedFileNode, selectedPath]);
 
   const saveCurrentFile = useCallback(async () => {
     if (!isRealFile || loadingPath || !dirty) return true;
@@ -450,6 +669,49 @@ function App() {
       return false;
     }
   }, [dirty, editorContent, isRealFile, loadingPath, selectedPath]);
+
+  const applyBridgeRelation = useCallback(async (candidate: BridgeCandidate) => {
+    if (bridgeApplying) return;
+    setBridgeApplying(true);
+    setBridgeStatus("");
+    const saved = await saveCurrentFile();
+    if (!saved) {
+      setBridgeStatus("当前文件保存失败，未写入桥接关系。");
+      setBridgeApplying(false);
+      return;
+    }
+    try {
+      const response = await invoke<BridgeRelationResponse>("wridian_apply_bridge_relation", {
+        input: {
+          action: candidate.action,
+          targetLibrary: candidate.targetLibrary,
+          targetPath: candidate.targetPath,
+          sourceLibrary: candidate.sourceLibrary,
+          sourceRelativePath: candidate.sourceRelativePath,
+          sourceTitle: candidate.sourceTitle,
+        },
+      });
+      const refreshed = await openWorkFile(candidate.targetPath);
+      setEditorContent(refreshed.content);
+      setLastSavedContent(refreshed.content);
+      setSaveStatus("saved");
+      setBridgeStatus(response.message);
+      if (knowledgeGraphOpen) {
+        void loadKnowledgeGraph();
+      }
+      void refreshWorkspaceState();
+    } catch (error) {
+      setBridgeStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBridgeApplying(false);
+    }
+  }, [
+    bridgeApplying,
+    knowledgeGraphOpen,
+    loadKnowledgeGraph,
+    refreshWorkspaceState,
+    saveCurrentFile,
+  ]);
 
   useEffect(() => {
     if (!isRealFile || loadingPath) return;
@@ -564,9 +826,15 @@ function App() {
   };
 
   const addFileToPrompt = async (name: string, path: string, relativePath = "") => {
+    if (!isTextContextFile(path)) {
+      updatePromptPills((current) => upsertPromptContextPill(current, createFilePromptPill(name, path, relativePath)));
+      return;
+    }
     try {
       const cached = promptFileContentCache[path];
-      const content = cached ?? (await openWorkFile(path)).content;
+      const content = cached ?? (isEditableWorkspaceFile(path)
+        ? (await openWorkFile(path)).content
+        : (await previewWorkFile(path)).content ?? "");
       setPromptFileContentCache((current) => ({ ...current, [path]: content }));
       updatePromptPills((current) => upsertPromptContextPill(
         current,
@@ -574,8 +842,9 @@ function App() {
           ? createReferencedFileContentPromptPill(name, path, relativePath, content)
           : createFileContentPromptPill(name, path, content),
       ));
-    } catch {
+    } catch (error) {
       updatePromptPills((current) => upsertPromptContextPill(current, createFilePromptPill(name, path, relativePath)));
+      chatManager.setError(`文件内容读取失败，已改为文件路径引用：${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -594,35 +863,81 @@ function App() {
     };
   }, [fileMenu]);
 
-  const openFilePath = async (requestedPath: string, fallbackName = "") => {
+  const openFilePath = async (
+    requestedPath: string,
+    fallbackName = "",
+    options: { refreshBeforeOpen?: boolean; targetLibrary?: WorkspaceLibrary } = {},
+  ) => {
     const requestSeq = openFileRequestSeqRef.current + 1;
     openFileRequestSeqRef.current = requestSeq;
     const saved = await saveCurrentFile();
     if (!saved || openFileRequestSeqRef.current !== requestSeq) return;
 
-    if (!isEditableWorkspaceFile(requestedPath)) {
-      const name = fallbackName || requestedPath.split(/[\\/]/).pop() || "未命名文件";
-      setSelectedPath("");
-      setFilePreview({
-        extension: fileExtension(requestedPath).toUpperCase(),
-        name,
-        path: requestedPath,
-        type: filePreviewType(requestedPath),
-      });
-      setEditorTitle(name);
-      setEditorContent("");
-      setLastSavedContent("");
-      updatePromptPills([]);
-      setPendingEdits([]);
-      setSaveError("");
-      setSaveStatus("saved");
-      return;
+    if (options.targetLibrary) {
+      setLibraryTab(options.targetLibrary);
     }
+    if (options.refreshBeforeOpen) {
+      try {
+        await refreshWorkspaceState();
+      } catch (error) {
+        if (openFileRequestSeqRef.current !== requestSeq) return;
+        setWorkspaceError(error instanceof Error ? error.message : String(error));
+        return;
+      }
+    }
+    if (openFileRequestSeqRef.current !== requestSeq) return;
+
     setLoadingPath(requestedPath);
-    setFilePreview(null);
-    setEditorTitle(fallbackName || requestedPath.split(/[\\/]/).pop() || "未命名文件");
     setSaveError("");
     setSaveStatus("idle");
+    if (!isEditableWorkspaceFile(requestedPath)) {
+      try {
+        const response = await previewWorkFile(requestedPath);
+        if (openFileRequestSeqRef.current !== requestSeq) return;
+        const name = response.name || fallbackName || requestedPath.split(/[\\/]/).pop() || "未命名文件";
+        const previewType = response.previewType === "image" || response.previewType === "pdf" || response.previewType === "text"
+          ? response.previewType
+          : filePreviewType(response.path);
+        let assetUrl = "";
+        let previewError = "";
+        if (previewType === "image" || previewType === "pdf") {
+          try {
+            const asset = await previewWorkAsset(response.path);
+            assetUrl = asset.url;
+          } catch (error) {
+            previewError = error instanceof Error ? error.message : String(error);
+          }
+        }
+        if (openFileRequestSeqRef.current !== requestSeq) return;
+        setSelectedPath("");
+        setFilePreview({
+          assetUrl,
+          content: response.content ?? "",
+          extension: fileExtension(response.path).toUpperCase(),
+          name,
+          path: response.path,
+          previewError,
+          type: previewType,
+        });
+        setEditorTitle(name);
+        setEditorContent("");
+        setLastSavedContent("");
+        updatePromptPills([]);
+        setPendingEdits([]);
+        setSelectionActionPosition(null);
+        setSaveStatus("saved");
+      } catch (error) {
+        if (openFileRequestSeqRef.current !== requestSeq) return;
+        setSaveStatus("error");
+        setSaveError(error instanceof Error ? error.message : String(error));
+      } finally {
+        if (openFileRequestSeqRef.current === requestSeq) {
+          setLoadingPath((current) => (current === requestedPath ? "" : current));
+        }
+      }
+      return;
+    }
+    setFilePreview(null);
     try {
       const response = await openWorkFile(requestedPath);
       if (openFileRequestSeqRef.current !== requestSeq) return;
@@ -632,7 +947,7 @@ function App() {
       setLastSavedContent(response.content);
       setPromptFileContentCache((current) => ({ ...current, [response.path]: response.content }));
       draftSelectionRef.current = { start: response.content.length, end: response.content.length };
-      setHasDraftSelection(false);
+      setSelectionActionPosition(null);
       updatePromptPills([]);
       setPendingEdits([]);
       setSaveStatus("saved");
@@ -655,21 +970,20 @@ function App() {
 
   const openFile = async (node: WorkFileNode) => {
     if (node.folder) return;
-    await openFilePath(node.path, node.name);
+    await openFilePath(node.path, node.name, { targetLibrary: node.library });
   };
 
   const openKnowledgeGraphFile = (path: string) => {
     setKnowledgeGraphOpen(false);
-    void openFilePath(path);
+    void openFilePath(path, "", { refreshBeforeOpen: true, targetLibrary: "knowledge" });
   };
 
-  const openPreviewInSystem = async () => {
-    if (!filePreview) return;
-    try {
-      await invoke("wridian_open_local_path", { input: { path: filePreview.path } });
-    } catch (error) {
-      setSaveError(error instanceof Error ? error.message : String(error));
-    }
+  const addRelevantNoteToPrompt = (note: RelevantNote) => {
+    void addFileToPrompt(note.title, note.path, note.relativePath ?? "");
+  };
+
+  const openRelevantNote = (note: RelevantNote) => {
+    void openFilePath(note.path, note.title, { targetLibrary: "works" });
   };
 
   const handleDraftKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
@@ -686,7 +1000,7 @@ function App() {
     const nextCursor = start + text.length;
     setEditorContent(nextContent);
     draftSelectionRef.current = { start: nextCursor, end: nextCursor };
-    setHasDraftSelection(false);
+    setSelectionActionPosition(null);
     window.requestAnimationFrame(() => {
       setContentEditableCaret(draftEditorRef.current, nextCursor);
     });
@@ -697,7 +1011,8 @@ function App() {
     if (!reply) return;
     try {
       await navigator.clipboard.writeText(reply);
-    } catch {
+    } catch (error) {
+      setSaveError(`复制失败：${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -763,7 +1078,7 @@ function App() {
     setPendingEdits((edits) => edits.map((edit) => (appliedIds.has(edit.id) ? { ...edit, status: "accepted" } : edit)));
     chatManager.setError(guardReport.skipped.length ? `${guardReport.skipped.length} 处修改需要重新定位。` : "");
     draftSelectionRef.current = { start: 0, end: 0 };
-    setHasDraftSelection(false);
+    setSelectionActionPosition(null);
 
   };
 
@@ -1038,27 +1353,32 @@ function App() {
         />
 
         <main className="writing-pane">
-          <section className={`paper ${hasEditorSurface ? "" : "paper-empty"}`} aria-label="正文编辑区">
-            {hasEditorSurface ? (
-              <div className="paper-topline">
-                <div className="paper-kicker">{selectedPath ? baseName(selectedPath) : filePreview?.name}</div>
-                <div className="paper-actions">
-                  {selectedPath ? (
-                    <>
-                      <button type="button" className="paper-action" onClick={attachCurrentSelectionToPrompt} disabled={!hasDraftSelection}>
-                        添加选区到输入框
-                      </button>
-                      <div className={`save-state ${saveStatus}`} title={saveError || undefined}>
-                        {statusLabel}
-                      </div>
-                    </>
-                  ) : null}
-                </div>
-              </div>
-            ) : null}
+          <section className={`paper ${filePreview ? "paper-preview" : hasEditorSurface ? "" : "paper-empty"}`} aria-label="正文编辑区">
             {selectedPath ? (
               <>
-                <h1 className="chapter-heading">{editorTitle}</h1>
+                <div className="chapter-heading-row">
+                  <h1 className="chapter-heading">{editorTitle}</h1>
+                  <div className="chapter-heading-actions">
+                    {bridgeCandidates.length ? (
+                      <div className="bridge-actions" aria-label="作品知识桥接">
+                        {bridgeCandidates.map((candidate) => (
+                          <button
+                            key={candidate.action}
+                            type="button"
+                            title={`${candidate.label}：${candidate.sourceTitle}`}
+                            disabled={bridgeApplying}
+                            onClick={() => void applyBridgeRelation(candidate)}
+                          >
+                            {candidate.label}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                    <div className={`save-state ${saveStatus}`} title={saveError || bridgeStatus || undefined}>
+                      {bridgeStatus || statusLabel}
+                    </div>
+                  </div>
+                </div>
                 <div className="draft-suggestion-actions" aria-label="待确认修改操作" hidden={!pendingDraftEdits.length}>
                     <span>{pendingDraftEdits.length} 处待确认修改</span>
                     {blockedDraftEditCount ? <span className="draft-guard-note">{blockedDraftEditCount} 处需重新定位</span> : null}
@@ -1073,37 +1393,26 @@ function App() {
                   onChange={setEditorContent}
                   onKeyDown={handleDraftKeyDown}
                   onRejectEdit={rejectEdit}
+                  onSelectionActionDismiss={() => setSelectionActionPosition(null)}
                   onSelectionChange={updateDraftSelection}
                 />
+                {selectionActionPosition ? (
+                  <button
+                    type="button"
+                    className="selection-chat-action"
+                    style={{
+                      left: `${selectionActionPosition.left}px`,
+                      top: `${selectionActionPosition.top}px`,
+                    }}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={attachCurrentSelectionToPrompt}
+                  >
+                    添加到对话
+                  </button>
+                ) : null}
               </>
             ) : filePreview ? (
-              <div className="file-preview" aria-label="只读文件预览">
-                <div className="file-preview-header">
-                  <div>
-                    <div className="file-preview-kicker">{filePreview.extension || "FILE"}</div>
-                    <h1>{filePreview.name}</h1>
-                  </div>
-                  <button type="button" className="paper-action" onClick={() => void openPreviewInSystem()}>
-                    用本机程序打开
-                  </button>
-                </div>
-                {filePreview.type === "image" ? (
-                  <div className="file-preview-canvas image">
-                    <img src={previewUrl} alt={filePreview.name} />
-                  </div>
-                ) : filePreview.type === "pdf" ? (
-                  <div className="file-preview-canvas document">
-                    <iframe src={previewUrl} title={filePreview.name} />
-                  </div>
-                ) : (
-                  <div className="file-preview-canvas external">
-                    <div className="file-preview-placeholder">
-                      <strong>只读文件</strong>
-                      <span>当前格式不能在文件编辑区直接编辑。请用本机程序查看。</span>
-                    </div>
-                  </div>
-                )}
-              </div>
+              <FilePreviewViewer file={filePreview} />
             ) : (
               <div className="empty-editor" aria-label="空文件编辑区">
                 <div className="empty-brand" aria-label="Wridian">
@@ -1140,15 +1449,13 @@ function App() {
           onCopy={copyText}
           onUpdateMessageText={updateChatMessageText}
           onRetry={retryLastUserMessage}
-          onSelectRelevantNote={(note) => {
-            void addFileToPrompt(note.title, note.path, note.relativePath ?? "");
-          }}
           pending={chatManager.pending}
           prompt={prompt}
           promptPills={promptPills}
           promptSuggestions={promptSuggestions}
           relevantNotes={relevantNotes}
           relevantNotesError={relevantNotesError}
+          relevantNotesLoading={relevantNotesLoading}
           activeModelLabel={activeModelLabel}
           selectedModelId={selectedModelId}
           projectError={projectError}
@@ -1156,6 +1463,8 @@ function App() {
           selectedProjectId={projectState.activeProjectId ?? ""}
           onSelectModel={(id) => void switchModel(id)}
           onSelectProject={(id) => void switchProject(id)}
+          onAddRelevantNote={addRelevantNoteToPrompt}
+          onOpenRelevantNote={openRelevantNote}
           onStop={chatManager.stopPrompt}
           onPromptChange={setPrompt}
           onPromptPillsChange={updatePromptPills}
@@ -1209,10 +1518,12 @@ function App() {
         <KnowledgeGraphDrawer
           graph={knowledgeGraphState}
           graphError={knowledgeGraphError}
+          healthResult={knowledgeHealthResult}
           knowledgeRootConfigured={Boolean(workspace?.knowledgeRootConfigured)}
           onClose={() => setKnowledgeGraphOpen(false)}
+          onHealthResult={setKnowledgeHealthResult}
           onOpenFile={openKnowledgeGraphFile}
-          onRefresh={loadKnowledgeGraph}
+          onRefresh={refreshKnowledgeSurfaces}
         />
       ) : null}
       {creativeSkillsOpen ? (

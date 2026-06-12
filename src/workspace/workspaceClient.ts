@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { OpenFileResponse, SaveFileResponse, WorkspaceInfo } from "../appTypes";
+import type { OpenFileResponse, PreviewAssetResponse, PreviewFileResponse, SaveFileResponse, WorkspaceInfo } from "../appTypes";
 
 export function initWorkspace() {
   return invoke<WorkspaceInfo>("wridian_init_workspace");
@@ -12,6 +12,14 @@ export function setLibraryRoot(path: string, library: "works" | "knowledge") {
 
 export function openWorkFile(path: string) {
   return invoke<OpenFileResponse>("wridian_open_file", { input: { path } });
+}
+
+export function previewWorkFile(path: string) {
+  return invoke<PreviewFileResponse>("wridian_preview_file", { input: { path } });
+}
+
+export function previewWorkAsset(path: string) {
+  return invoke<PreviewAssetResponse>("wridian_preview_asset", { input: { path } });
 }
 
 export function saveWorkFile(path: string, content: string) {

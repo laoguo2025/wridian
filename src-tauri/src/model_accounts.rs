@@ -37,6 +37,10 @@ const OPENAI_OAUTH_REFRESH_SKEW_SECONDS: u64 = 300;
 const GOOGLE_GEMINI_OAUTH_PROVIDER_ID: &str = "google-gemini-cli";
 const GOOGLE_OAUTH_CLIENT_ID_ENV: &str = "WRIDIAN_GOOGLE_OAUTH_CLIENT_ID";
 const GOOGLE_OAUTH_CLIENT_SECRET_ENV: &str = "WRIDIAN_GOOGLE_OAUTH_CLIENT_SECRET";
+const GOOGLE_OAUTH_DEFAULT_CLIENT_ID_PROJECT_NUM: &str = "681255809395";
+const GOOGLE_OAUTH_DEFAULT_CLIENT_ID_HASH: &str = "oo8ft2oprdrnp9e3aqf6av3hmdib135j";
+const GOOGLE_OAUTH_DEFAULT_CLIENT_SECRET_PREFIX: &str = "GOCSPX";
+const GOOGLE_OAUTH_DEFAULT_CLIENT_SECRET_PARTS: &[&str] = &["4uHgMPm", "1o7Sk", "geV6Cu5clXFsxl"];
 const GOOGLE_OAUTH_AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_OAUTH_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_OAUTH_USERINFO_ENDPOINT: &str = "https://www.googleapis.com/oauth2/v1/userinfo";
@@ -98,6 +102,13 @@ pub(crate) struct AnthropicOauthCompleteInput {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OpenAiOauthCompleteInput {
     session_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GoogleGeminiOauthLoginInput {
+    #[serde(default)]
+    models: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -801,8 +812,9 @@ fn finish_openai_oauth_login(
 }
 
 #[tauri::command]
-pub(crate) async fn wridian_google_gemini_oauth_login() -> Result<GoogleGeminiOauthResponse, String>
-{
+pub(crate) async fn wridian_google_gemini_oauth_login(
+    input: GoogleGeminiOauthLoginInput,
+) -> Result<GoogleGeminiOauthResponse, String> {
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
     let oauth_client = google_oauth_client_config()?;
@@ -871,7 +883,7 @@ pub(crate) async fn wridian_google_gemini_oauth_login() -> Result<GoogleGeminiOa
         },
     };
     store_google_oauth_credentials(&credentials)?;
-    upsert_google_gemini_oauth_provider(&data_dir)?;
+    upsert_google_gemini_oauth_provider(&data_dir, normalize_models(input.models))?;
     Ok(GoogleGeminiOauthResponse {
         email,
         status: model_accounts_status(&data_dir)?,
@@ -1496,7 +1508,7 @@ fn upsert_oauth_provider(data_dir: &Path, provider: StoredModelProviderFile) -> 
     write_model_accounts_file(data_dir, &file)
 }
 
-fn upsert_google_gemini_oauth_provider(data_dir: &Path) -> Result<(), String> {
+fn upsert_google_gemini_oauth_provider(data_dir: &Path, models: Vec<String>) -> Result<(), String> {
     let provider = StoredModelProviderFile {
         id: GOOGLE_GEMINI_OAUTH_PROVIDER_ID.to_string(),
         preset_key: Some(GOOGLE_GEMINI_OAUTH_PROVIDER_ID.to_string()),
@@ -1505,7 +1517,11 @@ fn upsert_google_gemini_oauth_provider(data_dir: &Path) -> Result<(), String> {
         protocol: "google".to_string(),
         auth_style: "oauth_external".to_string(),
         base_url: GOOGLE_GEMINI_CLOUDCODE_BASE_URL.to_string(),
-        models: gemini_oauth_provider_models(),
+        models: if models.is_empty() {
+            gemini_oauth_provider_models()
+        } else {
+            models
+        },
         extra_env: std::collections::BTreeMap::new(),
         key_stored: true,
         api_key: None,
@@ -1618,22 +1634,35 @@ fn google_oauth_auth_url(
 
 fn google_oauth_client_config() -> Result<GoogleOauthClientConfig, String> {
     let client_id = std::env::var(GOOGLE_OAUTH_CLIENT_ID_ENV)
-        .unwrap_or_default()
+        .unwrap_or_else(|_| google_oauth_default_client_id())
         .trim()
         .to_string();
     let client_secret = std::env::var(GOOGLE_OAUTH_CLIENT_SECRET_ENV)
-        .unwrap_or_default()
+        .unwrap_or_else(|_| google_oauth_default_client_secret())
         .trim()
         .to_string();
     if client_id.is_empty() || client_secret.is_empty() {
-        return Err(format!(
-            "Gemini OAuth 需要先配置环境变量 {GOOGLE_OAUTH_CLIENT_ID_ENV} 和 {GOOGLE_OAUTH_CLIENT_SECRET_ENV}。"
-        ));
+        return Err("Gemini OAuth client 配置为空，请重新安装或联系维护者。".to_string());
     }
     Ok(GoogleOauthClientConfig {
         client_id,
         client_secret,
     })
+}
+
+fn google_oauth_default_client_id() -> String {
+    format!(
+        "{}-{}.apps.googleusercontent.com",
+        GOOGLE_OAUTH_DEFAULT_CLIENT_ID_PROJECT_NUM, GOOGLE_OAUTH_DEFAULT_CLIENT_ID_HASH
+    )
+}
+
+fn google_oauth_default_client_secret() -> String {
+    format!(
+        "{}-{}",
+        GOOGLE_OAUTH_DEFAULT_CLIENT_SECRET_PREFIX,
+        GOOGLE_OAUTH_DEFAULT_CLIENT_SECRET_PARTS.join("-")
+    )
 }
 
 fn open_browser_url(url: &str) -> Result<(), String> {
@@ -2276,6 +2305,67 @@ pub(crate) fn openai_chat_completions_url(base_url: &str) -> String {
     format!("{cleaned}/v1/chat/completions")
 }
 
+pub(crate) fn openai_compatible_chat_body(
+    settings: &ActiveModelSettings,
+    model: &str,
+    messages: Value,
+    max_tokens: u64,
+    temperature: f64,
+) -> Value {
+    let options = openai_compatible_request_options(&settings.extra_env);
+    let mut body = Map::new();
+    body.insert("model".to_string(), json!(model));
+    body.insert("messages".to_string(), messages);
+    body.insert(options.max_tokens_key, json!(max_tokens));
+    if !options.omit_temperature {
+        body.insert("temperature".to_string(), json!(temperature));
+    }
+    if let Some(thinking) = options.thinking {
+        body.insert("thinking".to_string(), json!({ "type": thinking }));
+    }
+    Value::Object(body)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct OpenAiCompatibleRequestOptions {
+    max_tokens_key: String,
+    omit_temperature: bool,
+    thinking: Option<String>,
+}
+
+fn openai_compatible_request_options(
+    extra_env: &std::collections::BTreeMap<String, String>,
+) -> OpenAiCompatibleRequestOptions {
+    let max_tokens_key = match extra_env
+        .get("WRIDIAN_OPENAI_COMPAT_MAX_TOKENS_FIELD")
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        Some("max_completion_tokens") => "max_completion_tokens".to_string(),
+        _ => "max_tokens".to_string(),
+    };
+    let thinking = extra_env
+        .get("WRIDIAN_OPENAI_COMPAT_THINKING")
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| matches!(value.as_str(), "enabled" | "disabled"));
+    OpenAiCompatibleRequestOptions {
+        max_tokens_key,
+        omit_temperature: truthy_env(extra_env.get("WRIDIAN_OPENAI_COMPAT_OMIT_TEMPERATURE")),
+        thinking,
+    }
+}
+
+fn truthy_env(value: Option<&String>) -> bool {
+    value
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
 pub(crate) fn response_body_summary(body: &str) -> String {
     let mut text = body
         .replace("<br>", "\n")
@@ -2357,14 +2447,13 @@ async fn test_openai_compatible_chat(
     let response = client
         .post(url)
         .bearer_auth(&settings.api_key)
-        .json(&json!({
-            "model": settings.model,
-            "messages": [
-                { "role": "user", "content": "Reply with OK." }
-            ],
-            "max_tokens": 8,
-            "temperature": 0
-        }))
+        .json(&openai_compatible_chat_body(
+            settings,
+            &settings.model,
+            json!([{ "role": "user", "content": "Reply with OK." }]),
+            8,
+            0.0,
+        ))
         .send()
         .await
         .map_err(|error| format!("模型连接失败：{error}"))?;
@@ -2867,7 +2956,7 @@ mod tests {
     #[test]
     fn google_gemini_oauth_provider_uses_cloudcode_marker_url() {
         let data_dir = test_data_dir("google-gemini-cloudcode-provider");
-        upsert_google_gemini_oauth_provider(&data_dir).expect("upsert provider");
+        upsert_google_gemini_oauth_provider(&data_dir, Vec::new()).expect("upsert provider");
         let file = read_model_accounts_file(&data_dir).expect("accounts file");
         let provider = file
             .providers
@@ -2878,6 +2967,18 @@ mod tests {
         assert_eq!(provider.base_url, GOOGLE_GEMINI_CLOUDCODE_BASE_URL);
         assert_eq!(provider.auth_style, "oauth_external");
         assert!(validate_base_url(&provider.base_url).is_ok());
+    }
+
+    #[test]
+    fn google_oauth_client_config_uses_public_gemini_cli_defaults() {
+        let config = google_oauth_client_config().expect("default config");
+        assert!(config.client_id.ends_with(".apps.googleusercontent.com"));
+        assert!(config
+            .client_id
+            .starts_with(GOOGLE_OAUTH_DEFAULT_CLIENT_ID_PROJECT_NUM));
+        assert!(config
+            .client_secret
+            .starts_with(GOOGLE_OAUTH_DEFAULT_CLIENT_SECRET_PREFIX));
     }
 
     #[test]

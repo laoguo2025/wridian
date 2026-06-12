@@ -7,8 +7,8 @@ import {
   type ChatMessage,
 } from "./messageRepository";
 import type { PromptContextLoadStatus, PromptContextPill, PromptSuggestion } from "./promptContext";
-import type { ProjectConfig, RelevantNote } from "./projectContext";
-import type { ConfiguredModelStatus } from "../appTypes";
+import type { ProjectConfig } from "./projectContext";
+import type { ConfiguredModelStatus, RelevantNote } from "../appTypes";
 import {
   ContextIcon,
   CopyIcon,
@@ -32,9 +32,10 @@ export function ChatPanel({
   onPromptChange,
   onPromptPillsChange,
   onImagePaste,
+  onAddRelevantNote,
+  onOpenRelevantNote,
   onRemovePill,
   onRetry,
-  onSelectRelevantNote,
   onSelectModel,
   onSelectSuggestion,
   onSelectProject,
@@ -49,6 +50,7 @@ export function ChatPanel({
   promptSuggestions,
   relevantNotes,
   relevantNotesError,
+  relevantNotesLoading,
   selectedProjectId,
   selectedModelId,
 }: {
@@ -60,9 +62,10 @@ export function ChatPanel({
   onPromptChange: (value: string) => void;
   onPromptPillsChange: (pills: PromptContextPill[]) => void;
   onImagePaste: (files: File[]) => void;
+  onAddRelevantNote: (note: RelevantNote) => void;
+  onOpenRelevantNote: (note: RelevantNote) => void;
   onRemovePill: (id: string) => void;
   onRetry: (message: ChatMessage) => void;
-  onSelectRelevantNote: (note: RelevantNote) => void;
   onSelectModel: (id: string) => void;
   onSelectSuggestion: (suggestion: PromptSuggestion) => void;
   onSelectProject: (id: string) => void;
@@ -77,6 +80,7 @@ export function ChatPanel({
   promptSuggestions: PromptSuggestion[];
   relevantNotes: RelevantNote[];
   relevantNotesError: string;
+  relevantNotesLoading: boolean;
   selectedProjectId: string;
   selectedModelId: string;
 }) {
@@ -180,8 +184,8 @@ export function ChatPanel({
         </button>
         {projectMenu}
       </div>
-      {projectError ? <div className="chat-status error">{projectError}</div> : null}
       <div className="chat-thread" ref={threadRef}>
+        {projectError ? <div className="chat-status error">{projectError}</div> : null}
         {messages.length
           ? messages.map((message, index) => (
               <ChatTimelineItem
@@ -204,28 +208,13 @@ export function ChatPanel({
         {error ? <div className="chat-status error">{error}</div> : null}
       </div>
 
-      {relevantNotes.length || relevantNotesError ? (
-        <section className="relevant-notes" aria-label="相关内容">
-          <div className="relevant-notes-header">相关内容</div>
-          {relevantNotesError ? <div className="relevant-notes-error">{relevantNotesError}</div> : null}
-          {relevantNotes.map((note) => (
-            <button
-              className="relevant-note"
-              key={note.path}
-              onClick={() => onSelectRelevantNote(note)}
-              title={note.reasons.join("；")}
-              type="button"
-            >
-              <span className="relevant-note-title">
-                <span className="relevant-note-kind">{note.kind === "knowledge" ? "知识卡" : "稿件"}</span>
-                {note.title}
-              </span>
-              {note.snippet ? <small>{note.snippet}</small> : null}
-              {note.reasons.length ? <em>{note.reasons.join("；")}</em> : null}
-            </button>
-          ))}
-        </section>
-      ) : null}
+      <RelevantNotesStrip
+        error={relevantNotesError}
+        loading={relevantNotesLoading}
+        notes={relevantNotes}
+        onAdd={onAddRelevantNote}
+        onOpen={onOpenRelevantNote}
+      />
 
       <form
         className="prompt-bar"
@@ -308,6 +297,99 @@ function ChatTimelineItem({
       {children}
     </>
   );
+}
+
+function RelevantNotesStrip({
+  error,
+  loading,
+  notes,
+  onAdd,
+  onOpen,
+}: {
+  error: string;
+  loading: boolean;
+  notes: RelevantNote[];
+  onAdd: (note: RelevantNote) => void;
+  onOpen: (note: RelevantNote) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const knowledgeNotes = notes.filter((note) => note.kind === "knowledge");
+  const draftNotes = notes.filter((note) => note.kind !== "knowledge");
+  const hasContent = notes.length > 0 || loading || Boolean(error);
+
+  useEffect(() => {
+    if (notes.length) setOpen(true);
+  }, [notes.length]);
+
+  if (!hasContent) return null;
+
+  return (
+    <section className="relevant-notes" aria-label="相关内容">
+      <button
+        type="button"
+        className="relevant-notes-trigger"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span>相关内容</span>
+        <small>{loading ? "检索中" : notes.length ? `${notes.length} 项` : "无结果"}</small>
+      </button>
+      {open ? (
+        <div className="relevant-notes-body">
+          {error ? <div className="relevant-notes-error">{error}</div> : null}
+          {knowledgeNotes.length ? (
+            <RelevantNoteGroup label="知识" notes={knowledgeNotes} onAdd={onAdd} onOpen={onOpen} />
+          ) : null}
+          {draftNotes.length ? (
+            <RelevantNoteGroup label="作品" notes={draftNotes} onAdd={onAdd} onOpen={onOpen} />
+          ) : null}
+          {!loading && !error && !notes.length ? <div className="relevant-notes-empty">暂无相关内容</div> : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function RelevantNoteGroup({
+  label,
+  notes,
+  onAdd,
+  onOpen,
+}: {
+  label: string;
+  notes: RelevantNote[];
+  onAdd: (note: RelevantNote) => void;
+  onOpen: (note: RelevantNote) => void;
+}) {
+  return (
+    <div className="relevant-note-group">
+      <div className="relevant-note-group-label">{label}</div>
+      <div className="relevant-note-list">
+        {notes.map((note) => (
+          <div className="relevant-note-row" key={`${note.kind}:${note.path}`}>
+            <button
+              type="button"
+              className="relevant-note-main"
+              onClick={() => onOpen(note)}
+              title={note.relativePath ?? note.path}
+            >
+              <span>{note.title || note.relativePath || "未命名"}</span>
+              <small>{relevantNoteDetail(note)}</small>
+            </button>
+            <button type="button" className="relevant-note-add" onClick={() => onAdd(note)}>
+              加入
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function relevantNoteDetail(note: RelevantNote) {
+  const reason = note.reasons.slice(0, 2).join(" · ");
+  const fallback = note.snippet.trim().replace(/\s+/g, " ").slice(0, 56);
+  return reason || fallback || note.relativePath || "相关文件";
 }
 
 function ChatMessageView({
@@ -562,14 +644,16 @@ function contextStatusLabel(item: PromptContextLoadStatus) {
       return "当前稿件";
     case "project-mode":
       return "项目记忆";
+    case "rule-router":
+      return "规则路由";
     case "active-context":
       return "最近对话现场";
     case "compressed-memory":
       return "压缩记忆";
     case "explicit-knowledge-cards":
       return "已选知识卡";
-    case "relevant-notes":
-      return "相关稿件";
+    case "mentioned-files":
+      return "点名文件";
     case "skill-protocol":
       return "技能规则";
     case "user-request":

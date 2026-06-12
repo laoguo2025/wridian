@@ -2,8 +2,8 @@ use crate::memory::read_project_continuity_memory;
 use crate::path_safety::safe_child_path;
 use crate::runtime::{ensure_workspace, runtime_root, wridian_data_dir};
 use crate::workspace::{
-    allowed_work_roots, is_supported_writing_file, read_active_work_root, resolved_knowledge_root,
-    works_root,
+    is_supported_writing_file, read_active_work_root, read_workspace_text_content,
+    resolved_knowledge_root, works_root,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -60,6 +60,7 @@ pub(crate) struct SelectProjectInput {
 pub(crate) struct RelevantNotesInput {
     source_path: String,
     content: String,
+    library: Option<String>,
     query: Option<String>,
     limit: Option<usize>,
 }
@@ -82,6 +83,11 @@ struct RelevantCandidate {
     kind: &'static str,
     path: PathBuf,
     root: PathBuf,
+}
+
+struct RelevantCandidateContent {
+    candidate: RelevantCandidate,
+    content: String,
 }
 
 #[derive(Default)]
@@ -318,6 +324,9 @@ fn find_relevant_notes(
     active_project: Option<&ProjectConfig>,
 ) -> Result<Vec<RelevantNote>, String> {
     let source_path = PathBuf::from(input.source_path.trim());
+    if input.library.as_deref() != Some("works") {
+        return Ok(Vec::new());
+    }
     let source_text = format!(
         "{}\n{}",
         input.content,
@@ -333,9 +342,11 @@ fn find_relevant_notes(
         input.query.as_deref().unwrap_or_default()
     ));
     let source_links = extract_wikilinks(&input.content);
-    let candidates = collect_relevant_candidates(data_dir)?;
+    let candidates = collect_relevant_candidates(data_dir, false)?;
+    let candidate_contents = read_relevant_candidate_contents(candidates)?;
     let mut scored = Vec::new();
-    for candidate in candidates {
+    for candidate_content in candidate_contents {
+        let candidate = candidate_content.candidate;
         let path = candidate.path;
         if path == source_path {
             continue;
@@ -343,8 +354,7 @@ fn find_relevant_notes(
         if candidate.kind == "draft" && !project_allows_path(active_project, &path) {
             continue;
         }
-        let content = fs::read_to_string(&path)
-            .map_err(|error| format!("相关稿件读取失败（{}）：{error}", path.to_string_lossy()))?;
+        let content = candidate_content.content;
         let path_text = path.to_string_lossy().to_string();
         let candidate_terms = tokenize_mixed(&format!("{path_text}\n{content}"));
         let lexical_score = overlap_score(&source_terms, &candidate_terms);
@@ -411,29 +421,58 @@ fn find_relevant_notes(
     Ok(scored)
 }
 
-fn collect_relevant_candidates(data_dir: &Path) -> Result<Vec<RelevantCandidate>, String> {
-    let mut candidates = Vec::new();
-    let mut seen = HashSet::new();
-    let knowledge_root = resolved_knowledge_root(data_dir)?;
-    if knowledge_root.is_dir() {
-        let root = knowledge_root
-            .canonicalize()
-            .map_err(|error| format!("知识库目录解析失败：{error}"))?;
-        for path in collect_writing_files(std::slice::from_ref(&root))? {
-            let key = normalize_path_text(&path);
-            if seen.insert(key) {
-                candidates.push(RelevantCandidate {
-                    kind: "knowledge",
-                    path,
-                    root: root.clone(),
-                });
+fn read_relevant_candidate_contents(
+    candidates: Vec<RelevantCandidate>,
+) -> Result<Vec<RelevantCandidateContent>, String> {
+    let mut values = Vec::new();
+    let mut warnings = Vec::new();
+    for candidate in candidates {
+        match read_workspace_text_content(&candidate.path) {
+            Ok(content) => values.push(RelevantCandidateContent { candidate, content }),
+            Err(error) => {
+                if warnings.len() < 8 {
+                    warnings.push(format!("{}：{error}", candidate.path.to_string_lossy()));
+                }
             }
         }
     }
-    for root in allowed_work_roots(data_dir)? {
-        let root = root
-            .canonicalize()
-            .map_err(|error| format!("作品库目录解析失败：{error}"))?;
+    if !warnings.is_empty() && values.is_empty() {
+        return Err(format!(
+            "相关内容检索没有可读取的候选文件。已跳过：{}",
+            warnings.join("；")
+        ));
+    }
+    Ok(values)
+}
+
+fn collect_relevant_candidates(
+    data_dir: &Path,
+    include_knowledge: bool,
+) -> Result<Vec<RelevantCandidate>, String> {
+    let mut candidates = Vec::new();
+    let mut seen = HashSet::new();
+    if include_knowledge {
+        let knowledge_root = resolved_knowledge_root(data_dir)?;
+        if knowledge_root.is_dir() {
+            let root = knowledge_root
+                .canonicalize()
+                .map_err(|error| format!("知识库目录解析失败：{error}"))?;
+            for path in collect_writing_files(std::slice::from_ref(&root))? {
+                let key = normalize_path_text(&path);
+                if seen.insert(key) {
+                    candidates.push(RelevantCandidate {
+                        kind: "knowledge",
+                        path,
+                        root: root.clone(),
+                    });
+                }
+            }
+        }
+    }
+    let root = works_root(data_dir)?
+        .canonicalize()
+        .map_err(|error| format!("作品库目录解析失败：{error}"))?;
+    if root.is_dir() {
         for path in collect_writing_files(std::slice::from_ref(&root))? {
             let key = normalize_path_text(&path);
             if seen.insert(key) {
@@ -765,38 +804,43 @@ mod tests {
     }
 
     #[test]
-    fn relevant_notes_reports_candidate_read_errors() {
+    fn relevant_notes_skips_unreadable_candidates() {
         let data_dir = temp_data_dir("read-error");
         crate::runtime::ensure_workspace(&data_dir).expect("ensure workspace");
-        let vault = crate::runtime::vault_root(&data_dir);
-        let source = vault.join("source.md");
-        let candidate = vault.join("candidate.md");
+        let works = crate::runtime::vault_root(&data_dir).join("works");
+        fs::create_dir_all(&works).expect("create works");
+        let source = works.join("source.md");
+        let candidate = works.join("candidate.md");
+        let readable = works.join("readable.md");
         fs::write(&source, "共同线索").expect("write source");
         fs::write(&candidate, [0xff, 0xfe, 0xfd]).expect("write invalid utf8 candidate");
+        fs::write(&readable, "共同线索 可读内容").expect("write readable candidate");
 
-        let error = find_relevant_notes(
+        let notes = find_relevant_notes(
             &data_dir,
             &RelevantNotesInput {
                 source_path: source.to_string_lossy().into_owned(),
                 content: "共同线索".to_string(),
+                library: Some("works".to_string()),
                 query: None,
                 limit: Some(8),
             },
             None,
         )
-        .expect_err("candidate read error should be reported");
+        .expect("find notes");
 
-        assert!(error.contains("相关稿件读取失败"));
-        assert!(error.contains("candidate.md"));
+        assert!(notes.iter().any(|note| note.path.ends_with("readable.md")));
+        assert!(!notes.iter().any(|note| note.path.ends_with("candidate.md")));
     }
 
     #[test]
     fn relevant_notes_skips_oversized_candidates() {
         let data_dir = temp_data_dir("skip-large");
         crate::runtime::ensure_workspace(&data_dir).expect("ensure workspace");
-        let vault = crate::runtime::vault_root(&data_dir);
-        let source = vault.join("source.md");
-        let large = vault.join("large.md");
+        let works = crate::runtime::vault_root(&data_dir).join("works");
+        fs::create_dir_all(&works).expect("create works");
+        let source = works.join("source.md");
+        let large = works.join("large.md");
         fs::write(&source, "共同线索").expect("write source");
         fs::write(
             &large,
@@ -812,6 +856,7 @@ mod tests {
             &RelevantNotesInput {
                 source_path: source.to_string_lossy().into_owned(),
                 content: "共同线索".to_string(),
+                library: Some("works".to_string()),
                 query: None,
                 limit: Some(8),
             },
@@ -823,11 +868,12 @@ mod tests {
     }
 
     #[test]
-    fn relevant_notes_returns_knowledge_cards_with_graph_reasons() {
+    fn relevant_notes_does_not_auto_mix_knowledge_cards() {
         let data_dir = temp_data_dir("knowledge-reasons");
         crate::runtime::ensure_workspace(&data_dir).expect("ensure workspace");
-        let vault = crate::runtime::vault_root(&data_dir);
-        let source = vault.join("source.md");
+        let works = crate::runtime::vault_root(&data_dir).join("works");
+        fs::create_dir_all(&works).expect("create works");
+        let source = works.join("source.md");
         let knowledge_root = crate::runtime::default_knowledge_root(&data_dir);
         let card_dir = knowledge_root.join("03故事模型");
         fs::create_dir_all(&card_dir).expect("create card dir");
@@ -848,6 +894,7 @@ mod tests {
             &RelevantNotesInput {
                 source_path: source.to_string_lossy().into_owned(),
                 content: fs::read_to_string(&source).expect("read source"),
+                library: Some("works".to_string()),
                 query: Some("角色为什么隐瞒身份".to_string()),
                 limit: Some(8),
             },
@@ -855,18 +902,34 @@ mod tests {
         )
         .expect("find notes");
 
-        let card_note = notes
+        assert!(notes
             .iter()
-            .find(|note| note.path.ends_with("流亡结构.md"))
-            .expect("knowledge card note");
-        assert_eq!(card_note.kind, "knowledge");
-        assert!(card_note
-            .reasons
-            .iter()
-            .any(|reason| reason.contains("共同概念") && reason.contains("流亡")));
-        assert!(card_note
-            .reasons
-            .iter()
-            .any(|reason| reason.contains("共同来源") && reason.contains("史料a")));
+            .all(|note| !note.path.ends_with("流亡结构.md") && note.kind != "knowledge"));
+    }
+
+    #[test]
+    fn relevant_notes_are_disabled_for_knowledge_sources() {
+        let data_dir = temp_data_dir("knowledge-source-disabled");
+        crate::runtime::ensure_workspace(&data_dir).expect("ensure workspace");
+        let works = crate::runtime::vault_root(&data_dir).join("works");
+        fs::create_dir_all(&works).expect("create works");
+        let source = crate::runtime::default_knowledge_root(&data_dir).join("知识.md");
+        fs::write(&source, "共同线索").expect("write source");
+        fs::write(works.join("稿件.md"), "共同线索").expect("write draft");
+
+        let notes = find_relevant_notes(
+            &data_dir,
+            &RelevantNotesInput {
+                source_path: source.to_string_lossy().into_owned(),
+                content: "共同线索".to_string(),
+                library: Some("knowledge".to_string()),
+                query: None,
+                limit: Some(8),
+            },
+            None,
+        )
+        .expect("find notes");
+
+        assert!(notes.is_empty());
     }
 }

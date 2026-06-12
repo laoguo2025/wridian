@@ -10,7 +10,7 @@ const DEFAULT_KNOWLEDGE_CATEGORIES: &[(&str, Option<&str>)] = &[
     (
         "00知识库治理",
         Some(
-            "# Wridian 知识库使用说明\n\n这个文件夹用于保存知识库规则、运营记录、体检结果和分类说明。\n\n- `01原始资料`：存放未加工的一手资料。\n- `02拆解报告`：存放作品拆解、案例分析和中间报告。\n- `03故事模型`：存放可复用的故事结构、叙事模型和判断框架。\n- `04人物原型`：存放人物类型、关系模式、角色弧光和人设参考。\n- `05情节方程`：存放冲突、反转、钩子、节奏和情节公式。\n- `06写作技法`：存放对白、场景、风格、爽点、短剧卡点等技法卡。\n- `07综合素材`：存放可复用素材、清单、灵感和跨分类资料。\n- `08大神蒸馏`：存放作者方法论、作者 skill 和版本记录。\n- `09文件归档`：存放废弃、过期或待删除文件。\n\n这些分类只是默认模板。你可以在 Wridian 里新增、改名或移除分类文件夹；知识库运营 skill 体检时应按实际目录修正。\n",
+            "# Wridian 知识库使用说明\n\n这个文件夹用于保存知识库规则、运营记录、体检结果和分类说明。\n\n- `01原始资料`：存放未加工的一手资料。\n- `02拆解报告`：存放作品拆解、案例分析和中间报告。\n- `03故事模型`：存放可复用的故事结构、叙事模型和判断框架。\n- `04人物原型`：存放人物类型、关系模式、角色弧光和人设参考。\n- `05情节方程`：存放冲突、反转、钩子、节奏和情节公式。\n- `06写作技法`：存放对白、场景、风格、爽点、短剧卡点等技法卡。\n- `07综合素材`：存放可复用素材、清单、灵感和跨分类资料。\n- `08大神蒸馏`：存放作者方法论、作者 skill 和版本记录。\n- `09文件归档`：存放废弃、过期或待删除文件。\n\n这些分类只是默认模板。你可以在 Wridian 里新增、改名或移除分类文件夹；知识库体检会按实际目录给出修复建议。\n",
         ),
     ),
     ("01原始资料", None),
@@ -176,12 +176,15 @@ pub(crate) fn ensure_default_knowledge_categories(root: &Path) -> Result<(), Str
 }
 
 pub(crate) fn iso_timestamp() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0);
-    format!("{seconds}")
+    chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
+}
+
+pub(crate) fn filename_timestamp() -> String {
+    chrono::Local::now().format("%Y%m%dT%H%M%S").to_string()
+}
+
+pub(crate) fn unix_timestamp_seconds() -> i64 {
+    chrono::Utc::now().timestamp()
 }
 
 #[cfg(test)]
@@ -237,5 +240,21 @@ mod tests {
         assert!(root.join("00知识库治理").join("使用说明.md").is_file());
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn timestamps_distinguish_iso_filename_and_unix_seconds() {
+        let iso = iso_timestamp();
+        assert!(iso.contains('T'));
+        assert!(iso.contains('-'));
+        assert!(!iso.chars().all(|ch| ch.is_ascii_digit()));
+
+        let filename = filename_timestamp();
+        assert_eq!(filename.len(), "20260612T193001".len());
+        assert!(filename
+            .chars()
+            .all(|ch| ch.is_ascii_digit() || ch == 'T'));
+
+        assert!(unix_timestamp_seconds() > 1_700_000_000);
     }
 }

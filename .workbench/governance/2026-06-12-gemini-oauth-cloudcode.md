@@ -7,7 +7,7 @@
 ## 变更
 
 - Gemini OAuth provider 的 Base URL 改为内部 marker `cloudcode-pa://google`。
-- Google OAuth client 不写入仓库；运行时必须通过 `WRIDIAN_GOOGLE_OAUTH_CLIENT_ID` / `WRIDIAN_GOOGLE_OAUTH_CLIENT_SECRET` 提供。
+- Google OAuth client 默认使用 Gemini CLI 同款公共桌面 OAuth client；`WRIDIAN_GOOGLE_OAUTH_CLIENT_ID` / `WRIDIAN_GOOGLE_OAUTH_CLIENT_SECRET` 只作为高级环境变量覆盖项。
 - 登录、测试和对话请求会解析并保存 Code Assist project。
 - OAuth 版 Gemini 请求改为 `https://cloudcode-pa.googleapis.com/v1internal:generateContent`，请求体包装 `project/model/user_prompt_id/request`。
 - API Key 版 Gemini 保持原有 `generativelanguage.googleapis.com/v1beta` 路径。

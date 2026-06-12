@@ -21,6 +21,7 @@ export function DraftEditor({
   onChange,
   onKeyDown,
   onRejectEdit,
+  onSelectionActionDismiss,
   onSelectionChange,
 }: {
   content: string;
@@ -30,6 +31,7 @@ export function DraftEditor({
   onChange: (content: string) => void;
   onKeyDown: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
   onRejectEdit: (id: string) => void;
+  onSelectionActionDismiss?: () => void;
   onSelectionChange: () => void;
 }) {
   const chunks = buildDraftSuggestionChunks(content, edits);
@@ -51,10 +53,14 @@ export function DraftEditor({
       aria-label="正文"
       spellCheck={false}
       suppressContentEditableWarning
-      onInput={(event) => onChange(event.currentTarget.innerText)}
+      onInput={(event) => {
+        onSelectionActionDismiss?.();
+        onChange(event.currentTarget.innerText);
+      }}
       onKeyDown={onKeyDown}
       onKeyUp={onSelectionChange}
       onMouseUp={onSelectionChange}
+      onScroll={onSelectionActionDismiss}
     >
       {chunks.map((chunk, index) => {
         if (chunk.kind === "text") {

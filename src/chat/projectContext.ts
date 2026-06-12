@@ -17,31 +17,10 @@ export type ProjectState = {
   projects: ProjectConfig[];
 };
 
-export type RelevantNote = {
-  kind: "draft" | "knowledge";
-  path: string;
-  relativePath?: string | null;
-  title: string;
-  snippet: string;
-  score: number;
-  hasOutgoingLinks: boolean;
-  hasBacklinks: boolean;
-  reasons: string[];
-};
-
 export async function getProjectState() {
   return invoke<ProjectState>("wridian_get_project_state");
 }
 
 export async function selectProject(id: string | null) {
   return invoke<ProjectState>("wridian_select_project", { input: { id } });
-}
-
-export async function findRelevantNotes(input: {
-  sourcePath: string;
-  content: string;
-  query?: string;
-  limit?: number;
-}) {
-  return invoke<RelevantNote[]>("wridian_find_relevant_notes", { input });
 }

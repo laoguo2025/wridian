@@ -3,10 +3,13 @@ use crate::runtime::{
     default_knowledge_root, ensure_workspace, iso_timestamp, vault_root, workspace_config_path,
     wridian_data_dir,
 };
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fs;
+use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
+use zip::write::SimpleFileOptions;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -68,6 +71,8 @@ pub(crate) struct OpenFileResponse {
     path: String,
     name: String,
     content: String,
+    editable: bool,
+    preview_type: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -77,15 +82,32 @@ pub(crate) struct SaveFileResponse {
     saved_at: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PreviewFileResponse {
+    path: String,
+    name: String,
+    content: Option<String>,
+    editable: bool,
+    preview_type: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PreviewAssetResponse {
+    url: String,
+    mime_type: String,
+}
+
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WorkFileNode {
-    name: String,
-    path: String,
-    relative_path: String,
-    library: String,
-    folder: bool,
-    children: Vec<WorkFileNode>,
+    pub(crate) name: String,
+    pub(crate) path: String,
+    pub(crate) relative_path: String,
+    pub(crate) library: String,
+    pub(crate) folder: bool,
+    pub(crate) children: Vec<WorkFileNode>,
 }
 
 #[tauri::command]
@@ -135,8 +157,9 @@ pub(crate) fn wridian_set_knowledge_root(
 pub(crate) fn wridian_open_file(input: FilePathInput) -> Result<OpenFileResponse, String> {
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
-    let path = resolve_allowed_writing_file(&data_dir, &input.path)?;
-    let content = fs::read_to_string(&path).map_err(|error| format!("文件读取失败：{error}"))?;
+    let path = resolve_allowed_editable_file(&data_dir, &input.path)?;
+    let content = read_editable_file_content(&path)?;
+    let preview_type = workspace_preview_type(&path);
     Ok(OpenFileResponse {
         name: path
             .file_name()
@@ -144,15 +167,49 @@ pub(crate) fn wridian_open_file(input: FilePathInput) -> Result<OpenFileResponse
             .unwrap_or_else(|| "未命名".to_string()),
         path: path.to_string_lossy().into_owned(),
         content,
+        editable: true,
+        preview_type,
     })
+}
+
+#[tauri::command]
+pub(crate) fn wridian_preview_file(input: FilePathInput) -> Result<PreviewFileResponse, String> {
+    let data_dir = wridian_data_dir()?;
+    ensure_workspace(&data_dir)?;
+    let path = resolve_allowed_workspace_file(&data_dir, &input.path)?;
+    let editable = is_supported_editable_file(&path);
+    let preview_type = workspace_preview_type(&path);
+    let content = if editable || is_supported_text_preview_file(&path) {
+        Some(read_workspace_text_content(&path)?)
+    } else {
+        None
+    };
+    Ok(PreviewFileResponse {
+        name: path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "未命名".to_string()),
+        path: path.to_string_lossy().into_owned(),
+        content,
+        editable,
+        preview_type,
+    })
+}
+
+#[tauri::command]
+pub(crate) fn wridian_preview_asset(input: FilePathInput) -> Result<PreviewAssetResponse, String> {
+    let data_dir = wridian_data_dir()?;
+    ensure_workspace(&data_dir)?;
+    let path = resolve_allowed_workspace_file(&data_dir, &input.path)?;
+    preview_asset_response(&path)
 }
 
 #[tauri::command]
 pub(crate) fn wridian_save_file(input: SaveFileInput) -> Result<SaveFileResponse, String> {
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
-    let path = resolve_allowed_writing_file(&data_dir, &input.path)?;
-    fs::write(&path, input.content).map_err(|error| format!("文件保存失败：{error}"))?;
+    let path = resolve_allowed_editable_file(&data_dir, &input.path)?;
+    write_editable_file_content(&path, &input.content)?;
     Ok(SaveFileResponse {
         ok: true,
         saved_at: iso_timestamp(),
@@ -239,9 +296,107 @@ pub(crate) fn wridian_trash_work_node(input: FilePathInput) -> Result<WorkspaceI
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .ok_or_else(|| "不能移动工作区根目录。".to_string())?;
-    let target = unique_child_path(&trash, &format!("{}-{name}", iso_timestamp()));
+    let target = unique_child_path(
+        &trash,
+        &format!("{}-{name}", crate::runtime::filename_timestamp()),
+    );
     fs::rename(&source, &target).map_err(|error| format!("移到回收站失败：{error}"))?;
     workspace_info(&data_dir)
+}
+
+pub(crate) fn read_workspace_file_trees(data_dir: &Path) -> Result<Vec<WorkFileNode>, String> {
+    let mut nodes = Vec::new();
+    let files_root = files_root(data_dir)?;
+    if read_active_work_root(data_dir)?.is_some() {
+        nodes.extend(read_work_tree(&files_root, &files_root, "works")?);
+    }
+    let knowledge_root = resolved_knowledge_root(data_dir)?;
+    nodes.extend(read_work_tree(
+        &knowledge_root,
+        &knowledge_root,
+        "knowledge",
+    )?);
+    Ok(nodes)
+}
+
+pub(crate) fn apply_workspace_write_file(
+    data_dir: &Path,
+    library: &str,
+    relative_path: &str,
+    content: &str,
+) -> Result<PathBuf, String> {
+    let root = workspace_library_root(data_dir, library)?;
+    let path = resolve_relative_workspace_target(&root, relative_path)?;
+    if !is_supported_editable_file(&path) {
+        return Err("只能写入 md、txt、docx 文件。".to_string());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("文件夹创建失败：{error}"))?;
+    }
+    write_editable_file_content(&path, content)?;
+    Ok(path)
+}
+
+pub(crate) fn apply_workspace_create_folder(
+    data_dir: &Path,
+    library: &str,
+    relative_path: &str,
+) -> Result<PathBuf, String> {
+    let root = workspace_library_root(data_dir, library)?;
+    let path = resolve_relative_workspace_target(&root, relative_path)?;
+    fs::create_dir_all(&path).map_err(|error| format!("文件夹创建失败：{error}"))?;
+    Ok(path)
+}
+
+pub(crate) fn apply_workspace_rename_node(
+    data_dir: &Path,
+    library: &str,
+    relative_path: &str,
+    new_name: &str,
+) -> Result<PathBuf, String> {
+    let root = workspace_library_root(data_dir, library)?;
+    let source = resolve_existing_relative_workspace_node(&root, relative_path)?;
+    let parent = source
+        .parent()
+        .ok_or_else(|| "不能重命名库根目录。".to_string())?;
+    let name = if source.is_file() {
+        normalize_workspace_file_name(new_name)?
+    } else {
+        normalize_node_name(new_name)?
+    };
+    let target = parent.join(name);
+    if !target.starts_with(&root) {
+        return Err("目标路径不在当前库内。".to_string());
+    }
+    if target.exists() {
+        return Err("同名文件或文件夹已存在。".to_string());
+    }
+    fs::rename(&source, &target).map_err(|error| format!("重命名失败：{error}"))?;
+    Ok(target)
+}
+
+pub(crate) fn apply_workspace_trash_node(
+    data_dir: &Path,
+    library: &str,
+    relative_path: &str,
+) -> Result<PathBuf, String> {
+    let root = workspace_library_root(data_dir, library)?;
+    let source = resolve_existing_relative_workspace_node(&root, relative_path)?;
+    if source == root {
+        return Err("不能移动库根目录。".to_string());
+    }
+    let trash = root.join(".wridian-trash");
+    fs::create_dir_all(&trash).map_err(|error| format!("回收站创建失败：{error}"))?;
+    let name = source
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .ok_or_else(|| "不能移动库根目录。".to_string())?;
+    let target = unique_child_path(
+        &trash,
+        &format!("{}-{name}", crate::runtime::filename_timestamp()),
+    );
+    fs::rename(&source, &target).map_err(|error| format!("移到回收站失败：{error}"))?;
+    Ok(target)
 }
 
 fn workspace_info(data_dir: &Path) -> Result<WorkspaceInfo, String> {
@@ -267,6 +422,59 @@ fn workspace_info(data_dir: &Path) -> Result<WorkspaceInfo, String> {
         knowledge_root_configured: true,
         knowledge_files: read_work_tree(&resolved_knowledge, &resolved_knowledge, "knowledge")?,
     })
+}
+
+fn workspace_library_root(data_dir: &Path, library: &str) -> Result<PathBuf, String> {
+    let root = match library.trim() {
+        "works" => files_root(data_dir)?,
+        "knowledge" => resolved_knowledge_root(data_dir)?,
+        _ => return Err("文件操作 library 必须是 works 或 knowledge。".to_string()),
+    };
+    root.canonicalize()
+        .map_err(|error| format!("库目录解析失败：{error}"))
+}
+
+fn resolve_relative_workspace_target(root: &Path, relative_path: &str) -> Result<PathBuf, String> {
+    let relative = normalize_relative_workspace_path(relative_path)?;
+    let target = root.join(relative);
+    if target.starts_with(root) {
+        Ok(target)
+    } else {
+        Err("目标路径不在当前库内。".to_string())
+    }
+}
+
+fn resolve_existing_relative_workspace_node(
+    root: &Path,
+    relative_path: &str,
+) -> Result<PathBuf, String> {
+    let target = resolve_relative_workspace_target(root, relative_path)?;
+    let canonical = target
+        .canonicalize()
+        .map_err(|error| format!("文件树节点不存在：{error}"))?;
+    if !canonical.starts_with(root) {
+        return Err("目标路径不在当前库内。".to_string());
+    }
+    if canonical.is_file() && !is_supported_workspace_file(&canonical) {
+        return Err("只能操作 Wridian 文件树支持显示的常见文件。".to_string());
+    }
+    Ok(canonical)
+}
+
+fn normalize_relative_workspace_path(relative_path: &str) -> Result<PathBuf, String> {
+    let trimmed = relative_path.trim().replace('\\', "/");
+    if trimmed.is_empty() || trimmed.starts_with('/') {
+        return Err("文件操作需要库内相对路径。".to_string());
+    }
+    let path = Path::new(&trimmed);
+    if path.is_absolute()
+        || trimmed
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err("文件操作路径不能包含绝对路径、空段或 ..。".to_string());
+    }
+    Ok(PathBuf::from(trimmed))
 }
 
 fn write_workspace_roots_config(
@@ -351,12 +559,16 @@ fn read_work_tree(root: &Path, base: &Path, library: &str) -> Result<Vec<WorkFil
         if should_skip_entry(&name) {
             continue;
         }
+        let relative = relative_path(base, &path);
+        if should_skip_workspace_tree_node(library, &relative) {
+            continue;
+        }
         if path.is_dir() {
             let children = read_work_tree(&path, base, library)?;
             nodes.push(WorkFileNode {
                 name,
                 path: path.to_string_lossy().into_owned(),
-                relative_path: relative_path(base, &path),
+                relative_path: relative,
                 library: library.to_string(),
                 folder: true,
                 children,
@@ -365,7 +577,7 @@ fn read_work_tree(root: &Path, base: &Path, library: &str) -> Result<Vec<WorkFil
             nodes.push(WorkFileNode {
                 name,
                 path: path.to_string_lossy().into_owned(),
-                relative_path: relative_path(base, &path),
+                relative_path: relative,
                 library: library.to_string(),
                 folder: false,
                 children: Vec::new(),
@@ -387,13 +599,36 @@ fn should_skip_entry(name: &str) -> bool {
     ) || name.starts_with('.')
 }
 
+fn should_skip_workspace_tree_node(library: &str, relative_path: &str) -> bool {
+    library == "knowledge"
+        && matches!(
+            relative_path.replace('\\', "/").as_str(),
+            "hot.md" | "00知识库治理/folds"
+        )
+}
+
 pub(crate) fn is_supported_writing_file(path: &Path) -> bool {
+    is_supported_editable_file(path)
+}
+
+pub(crate) fn is_supported_editable_file(path: &Path) -> bool {
     file_extension(path)
-        .map(|extension| matches!(extension.as_str(), "md" | "markdown" | "txt"))
+        .map(|extension| matches!(extension.as_str(), "md" | "markdown" | "txt" | "docx"))
         .unwrap_or(false)
 }
 
-fn is_supported_workspace_file(path: &Path) -> bool {
+pub(crate) fn is_supported_text_preview_file(path: &Path) -> bool {
+    file_extension(path)
+        .map(|extension| {
+            matches!(
+                extension.as_str(),
+                "md" | "markdown" | "txt" | "docx" | "csv" | "json" | "yaml" | "yml"
+            )
+        })
+        .unwrap_or(false)
+}
+
+pub(crate) fn is_supported_workspace_file(path: &Path) -> bool {
     file_extension(path)
         .map(|extension| {
             matches!(
@@ -432,11 +667,23 @@ fn file_extension(path: &Path) -> Option<String> {
         .map(|extension| extension.to_ascii_lowercase())
 }
 
-fn resolve_allowed_writing_file(data_dir: &Path, raw_path: &str) -> Result<PathBuf, String> {
+fn resolve_allowed_editable_file(data_dir: &Path, raw_path: &str) -> Result<PathBuf, String> {
     let path = PathBuf::from(raw_path.trim());
-    if !path.is_file() || !is_supported_writing_file(&path) {
-        return Err("文件编辑区只能打开和保存 md、txt 文件。".to_string());
+    if !path.is_file() || !is_supported_editable_file(&path) {
+        return Err("文件编辑区只能直接编辑 md、txt、docx 文件。".to_string());
     }
+    resolve_allowed_workspace_file_path(data_dir, &path)
+}
+
+fn resolve_allowed_workspace_file(data_dir: &Path, raw_path: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(raw_path.trim());
+    if !path.is_file() || !is_supported_workspace_file(&path) {
+        return Err("文件不属于 Wridian 支持的常见格式。".to_string());
+    }
+    resolve_allowed_workspace_file_path(data_dir, &path)
+}
+
+fn resolve_allowed_workspace_file_path(data_dir: &Path, path: &Path) -> Result<PathBuf, String> {
     let canonical_path = path
         .canonicalize()
         .map_err(|error| format!("文件路径解析失败：{error}"))?;
@@ -486,37 +733,37 @@ pub(crate) fn allowed_work_roots(data_dir: &Path) -> Result<Vec<PathBuf>, String
     if let Some(root) = read_active_work_root(data_dir)? {
         let path = PathBuf::from(root);
         if path.is_dir() {
-            roots.push(
+            push_unique_root(
+                &mut roots,
                 path.canonicalize()
                     .map_err(|error| format!("作品目录解析失败：{error}"))?,
             );
         }
     }
-    if let Some(root) = read_active_knowledge_root(data_dir)? {
-        let path = PathBuf::from(root);
-        if path.is_dir() {
-            roots.push(
-                path.canonicalize()
-                    .map_err(|error| format!("知识库目录解析失败：{error}"))?,
-            );
-        }
+    let knowledge = resolved_knowledge_root(data_dir)?;
+    if knowledge.is_dir() {
+        push_unique_root(
+            &mut roots,
+            knowledge
+                .canonicalize()
+                .map_err(|error| format!("知识库目录解析失败：{error}"))?,
+        );
     }
     if roots.is_empty() {
-        roots.push(
+        push_unique_root(
+            &mut roots,
             vault_root(data_dir)
                 .canonicalize()
                 .map_err(|error| format!("默认写作目录解析失败：{error}"))?,
         );
-        let knowledge = default_knowledge_root(data_dir);
-        if knowledge.is_dir() {
-            roots.push(
-                knowledge
-                    .canonicalize()
-                    .map_err(|error| format!("知识库目录解析失败：{error}"))?,
-            );
-        }
     }
     Ok(roots)
+}
+
+fn push_unique_root(roots: &mut Vec<PathBuf>, root: PathBuf) {
+    if !roots.iter().any(|existing| existing == &root) {
+        roots.push(root);
+    }
 }
 
 pub(crate) fn works_root(data_dir: &Path) -> Result<PathBuf, String> {
@@ -535,8 +782,8 @@ fn normalize_file_name(name: &str) -> Result<String, String> {
     if path.extension().is_none() {
         normalized.push_str(".md");
     }
-    if !is_supported_writing_file(Path::new(&normalized)) {
-        return Err("文件名只支持 md、markdown 或 txt 后缀。".to_string());
+    if !is_supported_editable_file(Path::new(&normalized)) {
+        return Err("文件名只支持 md、markdown、txt 或 docx 后缀。".to_string());
     }
     Ok(normalized)
 }
@@ -582,7 +829,10 @@ fn unique_child_path(parent: &Path, desired_name: &str) -> PathBuf {
             return candidate;
         }
     }
-    parent.join(format!("{stem} {}{extension}", iso_timestamp()))
+    parent.join(format!(
+        "{stem} {}{extension}",
+        crate::runtime::filename_timestamp()
+    ))
 }
 
 fn relative_path(base: &Path, path: &Path) -> String {
@@ -609,6 +859,223 @@ fn copy_dir_recursive(root: &Path, source: &Path, target: &Path) -> Result<(), S
         }
     }
     Ok(())
+}
+
+pub(crate) fn read_workspace_text_content(path: &Path) -> Result<String, String> {
+    if file_extension(path).as_deref() == Some("docx") {
+        return read_docx_plain_text(path);
+    }
+    fs::read_to_string(path).map_err(|error| format!("文件读取失败：{error}"))
+}
+
+fn read_editable_file_content(path: &Path) -> Result<String, String> {
+    read_workspace_text_content(path)
+}
+
+fn write_editable_file_content(path: &Path, content: &str) -> Result<(), String> {
+    if file_extension(path).as_deref() == Some("docx") {
+        return write_docx_plain_text(path, content);
+    }
+    fs::write(path, content).map_err(|error| format!("文件保存失败：{error}"))
+}
+
+fn workspace_preview_type(path: &Path) -> String {
+    match file_extension(path).as_deref() {
+        Some("png" | "jpg" | "jpeg" | "webp" | "gif" | "svg" | "bmp") => "image",
+        Some("pdf") => "pdf",
+        Some("md" | "markdown" | "txt" | "docx" | "csv" | "json" | "yaml" | "yml") => "text",
+        _ => "external",
+    }
+    .to_string()
+}
+
+fn preview_asset_response(path: &Path) -> Result<PreviewAssetResponse, String> {
+    let mime_type =
+        preview_asset_mime_type(path).ok_or_else(|| "当前格式不能直接预览。".to_string())?;
+    let bytes = fs::read(path).map_err(|error| format!("预览文件读取失败：{error}"))?;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Ok(PreviewAssetResponse {
+        url: format!("data:{mime_type};base64,{encoded}"),
+        mime_type: mime_type.to_string(),
+    })
+}
+
+fn preview_asset_mime_type(path: &Path) -> Option<&'static str> {
+    match file_extension(path).as_deref() {
+        Some("pdf") => Some("application/pdf"),
+        Some("png") => Some("image/png"),
+        Some("jpg" | "jpeg") => Some("image/jpeg"),
+        Some("webp") => Some("image/webp"),
+        Some("gif") => Some("image/gif"),
+        Some("svg") => Some("image/svg+xml"),
+        Some("bmp") => Some("image/bmp"),
+        _ => None,
+    }
+}
+
+fn read_docx_plain_text(path: &Path) -> Result<String, String> {
+    let bytes = fs::read(path).map_err(|error| format!("DOCX 读取失败：{error}"))?;
+    let cursor = Cursor::new(bytes);
+    let mut archive =
+        zip::ZipArchive::new(cursor).map_err(|error| format!("DOCX 格式解析失败：{error}"))?;
+    let mut document = String::new();
+    archive
+        .by_name("word/document.xml")
+        .map_err(|error| format!("DOCX 正文读取失败：{error}"))?
+        .read_to_string(&mut document)
+        .map_err(|error| format!("DOCX 正文解码失败：{error}"))?;
+    Ok(docx_document_xml_to_text(&document))
+}
+
+fn write_docx_plain_text(path: &Path, content: &str) -> Result<(), String> {
+    let bytes = fs::read(path).map_err(|error| format!("DOCX 读取失败：{error}"))?;
+    let cursor = Cursor::new(bytes);
+    let mut archive =
+        zip::ZipArchive::new(cursor).map_err(|error| format!("DOCX 格式解析失败：{error}"))?;
+    let mut files = Vec::new();
+    for index in 0..archive.len() {
+        let mut file = archive
+            .by_index(index)
+            .map_err(|error| format!("DOCX 文件读取失败：{error}"))?;
+        let name = file.name().to_string();
+        let mut data = Vec::new();
+        file.read_to_end(&mut data)
+            .map_err(|error| format!("DOCX 文件读取失败：{error}"))?;
+        files.push((name, data));
+    }
+    drop(archive);
+
+    let document = minimal_docx_document_xml(content);
+    let mut output = Cursor::new(Vec::new());
+    {
+        let mut writer = zip::ZipWriter::new(&mut output);
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let mut replaced_document = false;
+        for (name, data) in files {
+            writer
+                .start_file(&name, options)
+                .map_err(|error| format!("DOCX 写入失败：{error}"))?;
+            if name == "word/document.xml" {
+                writer
+                    .write_all(document.as_bytes())
+                    .map_err(|error| format!("DOCX 正文写入失败：{error}"))?;
+                replaced_document = true;
+            } else {
+                writer
+                    .write_all(&data)
+                    .map_err(|error| format!("DOCX 文件写入失败：{error}"))?;
+            }
+        }
+        if !replaced_document {
+            return Err("DOCX 缺少 word/document.xml。".to_string());
+        }
+        writer
+            .finish()
+            .map_err(|error| format!("DOCX 保存失败：{error}"))?;
+    }
+    fs::write(path, output.into_inner()).map_err(|error| format!("DOCX 保存失败：{error}"))
+}
+
+fn docx_document_xml_to_text(xml: &str) -> String {
+    let mut paragraphs = Vec::new();
+    let mut search = 0;
+    while let Some(start) = xml[search..].find("<w:p") {
+        let paragraph_start = search + start;
+        let Some(start_tag_end) = xml[paragraph_start..].find('>') else {
+            break;
+        };
+        let content_start = paragraph_start + start_tag_end + 1;
+        let Some(end_offset) = xml[content_start..].find("</w:p>") else {
+            break;
+        };
+        let content_end = content_start + end_offset;
+        let text = docx_text_runs_to_text(&xml[content_start..content_end]);
+        paragraphs.push(text);
+        search = content_end + "</w:p>".len();
+    }
+    if !paragraphs.is_empty() {
+        return paragraphs.join("\n").trim().to_string();
+    }
+    let fallback = docx_text_runs_to_text(xml);
+    if fallback.trim().is_empty() {
+        plain_text_from_xml(xml)
+    } else {
+        fallback.trim().to_string()
+    }
+}
+
+fn docx_text_runs_to_text(xml: &str) -> String {
+    let mut output = String::new();
+    let mut cursor = 0;
+    while let Some(start) = xml[cursor..].find("<w:t") {
+        let tag_start = cursor + start;
+        let Some(tag_end_offset) = xml[tag_start..].find('>') else {
+            break;
+        };
+        let text_start = tag_start + tag_end_offset + 1;
+        let Some(text_end_offset) = xml[text_start..].find("</w:t>") else {
+            break;
+        };
+        let text_end = text_start + text_end_offset;
+        output.push_str(&decode_xml_text(&xml[text_start..text_end]));
+        cursor = text_end + "</w:t>".len();
+    }
+    output
+}
+
+fn plain_text_from_xml(xml: &str) -> String {
+    let mut output = String::new();
+    let mut in_tag = false;
+    for ch in xml.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => output.push(ch),
+            _ => {}
+        }
+    }
+    decode_xml_text(&output)
+}
+
+fn minimal_docx_document_xml(content: &str) -> String {
+    let paragraphs = if content.is_empty() {
+        vec![String::new()]
+    } else {
+        content
+            .split('\n')
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>()
+    };
+    let body = paragraphs
+        .iter()
+        .map(|paragraph| {
+            format!(
+                "<w:p><w:r><w:t>{}</w:t></w:r></w:p>",
+                encode_xml_text(paragraph)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{body}<w:sectPr/></w:body></w:document>"#
+    )
+}
+
+fn encode_xml_text(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+fn decode_xml_text(text: &str) -> String {
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
 }
 
 #[cfg(test)]
@@ -658,14 +1125,14 @@ mod tests {
     }
 
     #[test]
-    fn workspace_tree_displays_common_files_but_edits_only_text_notes() {
+    fn workspace_tree_displays_common_files_and_edits_word_notes() {
         let data_dir = temp_data_dir("common-files");
         let work_root = data_dir.join("user-works");
         fs::create_dir_all(&work_root).expect("create work root");
         fs::write(work_root.join("方案.md"), "正文").expect("write md");
         fs::write(work_root.join("资料.txt"), "文本").expect("write txt");
         fs::write(work_root.join("报告.pdf"), b"pdf").expect("write pdf");
-        fs::write(work_root.join("合同.docx"), b"docx").expect("write docx");
+        write_minimal_test_docx(&work_root.join("合同.docx"), "合同正文").expect("write docx");
         fs::write(work_root.join("国产文档.wps"), b"wps").expect("write wps");
         fs::write(work_root.join("图片.png"), b"png").expect("write png");
         fs::write(work_root.join("程序.exe"), b"exe").expect("write exe");
@@ -694,26 +1161,55 @@ mod tests {
         assert!(names.contains(&"国产文档.wps"));
         assert!(names.contains(&"图片.png"));
         assert!(!names.contains(&"程序.exe"));
-        assert!(resolve_allowed_writing_file(
+        assert!(resolve_allowed_editable_file(
             &data_dir,
             &work_root.join("方案.md").to_string_lossy()
         )
         .is_ok());
-        assert!(resolve_allowed_writing_file(
+        assert!(resolve_allowed_editable_file(
             &data_dir,
             &work_root.join("资料.txt").to_string_lossy()
         )
         .is_ok());
-        assert!(resolve_allowed_writing_file(
+        assert!(resolve_allowed_editable_file(
             &data_dir,
             &work_root.join("报告.pdf").to_string_lossy()
         )
         .is_err());
-        assert!(resolve_allowed_writing_file(
+        assert!(resolve_allowed_editable_file(
             &data_dir,
             &work_root.join("合同.docx").to_string_lossy()
         )
-        .is_err());
+        .is_ok());
+
+        let pdf_preview = preview_asset_response(&work_root.join("报告.pdf")).expect("preview pdf");
+        assert_eq!(pdf_preview.mime_type, "application/pdf");
+        assert!(pdf_preview.url.starts_with("data:application/pdf;base64,"));
+
+        let image_preview =
+            preview_asset_response(&work_root.join("图片.png")).expect("preview image");
+        assert_eq!(image_preview.mime_type, "image/png");
+        assert!(image_preview.url.starts_with("data:image/png;base64,"));
+
+        assert!(preview_asset_response(&work_root.join("资料.txt")).is_err());
+    }
+
+    #[test]
+    fn docx_plain_text_can_roundtrip() {
+        let data_dir = temp_data_dir("docx-roundtrip");
+        let path = data_dir.join("剧本.docx");
+        write_minimal_test_docx(&path, "第一场\n对白").expect("write docx");
+
+        assert_eq!(
+            read_docx_plain_text(&path).expect("read docx"),
+            "第一场\n对白"
+        );
+
+        write_docx_plain_text(&path, "第二场\n新对白").expect("save docx");
+        assert_eq!(
+            read_docx_plain_text(&path).expect("read saved docx"),
+            "第二场\n新对白"
+        );
     }
 
     #[test]
@@ -729,5 +1225,135 @@ mod tests {
             .knowledge_files
             .iter()
             .any(|node| node.folder && node.name == "00知识库治理"));
+    }
+
+    #[test]
+    fn workspace_tree_shows_generated_knowledge_health_reports() {
+        let data_dir = temp_data_dir("generated-health-report");
+        let knowledge_root = data_dir.join("user-knowledge");
+        let governance_dir = knowledge_root.join("00知识库治理");
+        let folds_dir = governance_dir.join("folds");
+        fs::create_dir_all(&folds_dir).expect("create folds");
+        fs::write(
+            knowledge_root.join("hot.md"),
+            "---\nwridian_generated: true\nwridian_type: knowledge_hot_cache\n---\n# hot",
+        )
+        .expect("write hot");
+        fs::write(
+            folds_dir.join("knowledge-fold-20260612.md"),
+            "---\nwridian_generated: true\nwridian_type: knowledge_fold\n---\n# fold",
+        )
+        .expect("write fold");
+        fs::write(
+            governance_dir.join("知识库体检-2026-06-12.md"),
+            "---\nwridian_generated: true\nwridian_type: knowledge_health_report\n---\n# 报告",
+        )
+        .expect("write health report");
+        fs::create_dir_all(crate::runtime::runtime_root(&data_dir)).expect("create runtime");
+        fs::write(
+            workspace_config_path(&data_dir),
+            serde_json::json!({
+                "schemaVersion": 1,
+                "knowledgeRoot": knowledge_root.to_string_lossy()
+            })
+            .to_string(),
+        )
+        .expect("write workspace config");
+
+        let info = workspace_info(&data_dir).expect("workspace info");
+        let governance = info
+            .knowledge_files
+            .iter()
+            .find(|node| node.folder && node.name == "00知识库治理")
+            .expect("governance folder");
+
+        assert!(governance
+            .children
+            .iter()
+            .any(|node| node.name == "知识库体检-2026-06-12.md"));
+        assert!(!info
+            .knowledge_files
+            .iter()
+            .any(|node| node.name == "hot.md"));
+        assert!(!governance
+            .children
+            .iter()
+            .any(|node| node.folder && node.name == "folds"));
+    }
+
+    #[test]
+    fn selected_work_root_does_not_block_default_knowledge_files() {
+        let data_dir = temp_data_dir("work-root-with-default-knowledge");
+        crate::runtime::ensure_workspace(&data_dir).expect("ensure workspace");
+        let work_root = data_dir.join("user-works");
+        fs::create_dir_all(&work_root).expect("create work root");
+        fs::write(
+            workspace_config_path(&data_dir),
+            serde_json::json!({
+                "schemaVersion": 1,
+                "activeWorkRoot": work_root.to_string_lossy()
+            })
+            .to_string(),
+        )
+        .expect("write workspace config");
+
+        let knowledge_root = default_knowledge_root(&data_dir);
+        let note = knowledge_root.join("00知识库治理").join("使用说明.md");
+        let text = knowledge_root.join("01原始资料").join("素材.txt");
+        let pdf = knowledge_root.join("01原始资料").join("资料.pdf");
+        fs::create_dir_all(text.parent().unwrap()).expect("create source folder");
+        fs::write(&note, "知识库说明").expect("write knowledge md");
+        fs::write(&text, "原始素材").expect("write knowledge txt");
+        fs::write(&pdf, b"%PDF-1.4").expect("write knowledge pdf");
+
+        assert!(allowed_work_roots(&data_dir)
+            .expect("allowed roots")
+            .iter()
+            .any(|root| knowledge_root.canonicalize().unwrap().starts_with(root)));
+        assert_eq!(
+            read_editable_file_content(
+                &resolve_allowed_editable_file(&data_dir, &note.to_string_lossy())
+                    .expect("knowledge markdown editable")
+            )
+            .expect("read knowledge markdown"),
+            "知识库说明"
+        );
+        assert_eq!(
+            read_workspace_text_content(
+                &resolve_allowed_workspace_file(&data_dir, &text.to_string_lossy())
+                    .expect("knowledge text preview")
+            )
+            .expect("read knowledge text"),
+            "原始素材"
+        );
+        assert!(resolve_allowed_workspace_file(&data_dir, &pdf.to_string_lossy()).is_ok());
+        assert!(resolve_allowed_folder(
+            &data_dir,
+            &knowledge_root.join("01原始资料").to_string_lossy()
+        )
+        .is_ok());
+    }
+
+    fn write_minimal_test_docx(path: &Path, content: &str) -> Result<(), String> {
+        let mut output = Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut output);
+            let options =
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+            writer
+                .start_file("[Content_Types].xml", options)
+                .map_err(|error| error.to_string())?;
+            writer
+                .write_all(br#"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#)
+                .map_err(|error| error.to_string())?;
+            writer
+                .start_file("word/document.xml", options)
+                .map_err(|error| error.to_string())?;
+            writer
+                .write_all(minimal_docx_document_xml(content).as_bytes())
+                .map_err(|error| error.to_string())?;
+            writer.finish().map_err(|error| error.to_string())?;
+        }
+        fs::write(path, output.into_inner()).map_err(|error| error.to_string())
     }
 }

@@ -4,13 +4,22 @@ use crate::model_accounts::{
     ensure_supported_protocol, gemini_generate_content_url,
     google_gemini_cloudcode_generate_content_url, google_gemini_cloudcode_request_body,
     is_anthropic_compatible_parse_error, is_google_gemini_oauth_settings, is_openai_oauth_settings,
-    openai_chat_completions_url, openai_oauth_account_id, post_google_code_assist_json,
-    read_active_model_settings, read_anthropic_response_text, read_gemini_response_text,
-    response_body_summary, ActiveModelSettings, GEMINI_DEFAULT_MAX_OUTPUT_TOKENS,
+    openai_chat_completions_url, openai_compatible_chat_body, openai_oauth_account_id,
+    post_google_code_assist_json, read_active_model_settings, read_anthropic_response_text,
+    read_gemini_response_text, response_body_summary, ActiveModelSettings,
+    GEMINI_DEFAULT_MAX_OUTPUT_TOKENS,
 };
 use crate::projects::{active_project_model, read_active_project_context};
+use crate::rule_router::RuleRouteContext;
 use crate::runtime::{ensure_workspace, runtime_root, wridian_data_dir};
-use crate::workspace::{read_active_work_root, resolved_knowledge_root};
+use crate::workspace::{
+    apply_workspace_create_folder, apply_workspace_rename_node, apply_workspace_trash_node,
+    apply_workspace_write_file, read_workspace_file_trees, WorkFileNode,
+};
+use crate::workspace::{
+    is_supported_text_preview_file, read_active_work_root, read_workspace_text_content,
+    resolved_knowledge_root,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -30,6 +39,10 @@ const BUDGET_PROJECT_CONTEXT_CHARS: usize = 2600;
 const BUDGET_SELECTION_CHARS: usize = 3000;
 const BUDGET_TOOL_ITEM_CHARS: usize = 1800;
 const BUDGET_TOOL_TOTAL_CHARS: usize = 2600;
+const BUDGET_FILE_TREE_CHARS: usize = 2200;
+const BUDGET_MENTIONED_FILE_ITEM_CHARS: usize = 1800;
+const BUDGET_MENTIONED_FILE_TOTAL_CHARS: usize = 5200;
+const BUDGET_RULE_ROUTE_CHARS: usize = 5200;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -74,6 +87,7 @@ pub(crate) struct CoCreateResponse {
     context_load_status: Vec<ContextLoadStatus>,
     reply: String,
     edits: Vec<CoCreateEdit>,
+    file_operations: Vec<AppliedFileOperation>,
     memories_used: Vec<String>,
     memories_written: Vec<String>,
 }
@@ -97,6 +111,28 @@ pub(crate) struct CoCreateEdit {
     target: String,
     replacement: String,
     rationale: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AppliedFileOperation {
+    action: String,
+    library: String,
+    path: String,
+    ok: bool,
+    message: String,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct ModelFileOperation {
+    action: String,
+    library: String,
+    path: String,
+    #[serde(default)]
+    new_name: Option<String>,
+    #[serde(default)]
+    content: Option<String>,
 }
 
 #[tauri::command]
@@ -161,12 +197,19 @@ async fn run_cocreation(
         read_relevant_memory_snippets(&data_dir, &input.source_path, &input.title, 8)?;
     let active_context = read_active_context(&data_dir);
     let active_project_context = read_active_project_context(&data_dir)?;
+    let rule_route_context = crate::rule_router::read_rule_route_context(&data_dir)?;
     let project_model = active_project_model(&data_dir)?;
+    let file_tree = read_workspace_file_trees(&data_dir)?;
+    let file_tree_slot = build_file_tree_slot(&file_tree);
+    let mentioned_files = read_user_mentioned_workspace_files(&input, &file_tree);
     let context_load_status = build_context_load_status(
         &input,
         &memories_used,
         &active_context,
         &active_project_context,
+        &rule_route_context,
+        &file_tree_slot,
+        &mentioned_files,
     );
     let model_output = await_cancellable(
         request_id,
@@ -177,6 +220,9 @@ async fn run_cocreation(
             &memories_used,
             &active_context,
             &active_project_context,
+            &rule_route_context,
+            &file_tree_slot.block,
+            &mentioned_files,
         ),
     )
     .await?;
@@ -186,11 +232,13 @@ async fn run_cocreation(
         .into_iter()
         .map(|path| path.to_string_lossy().into_owned())
         .collect();
+    let file_operations = apply_model_file_operations(&data_dir, &model_output.file_operations);
 
     Ok(CoCreateResponse {
         context_load_status,
         reply: model_output.reply,
         edits: model_output.edits,
+        file_operations,
         memories_used,
         memories_written,
     })
@@ -269,10 +317,13 @@ async fn wait_for_cocreation_cancel(request_id: String) {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ModelCoCreateResponse {
     reply: Option<String>,
     #[serde(default)]
     edits: Vec<CoCreateEdit>,
+    #[serde(default)]
+    file_operations: Vec<ModelFileOperation>,
     #[serde(default)]
     memories: Vec<MemoryLeafDraft>,
 }
@@ -281,6 +332,7 @@ struct ModelCoCreateResponse {
 struct ParsedCoCreateResponse {
     reply: String,
     edits: Vec<CoCreateEdit>,
+    file_operations: Vec<ModelFileOperation>,
     memories: Vec<MemoryLeafDraft>,
 }
 
@@ -291,6 +343,9 @@ async fn cocreate_with_model(
     memories: &[String],
     active_context: &str,
     active_project_context: &str,
+    rule_route_context: &RuleRouteContext,
+    file_tree: &str,
+    mentioned_files: &[DialogueContextItem],
 ) -> Result<ParsedCoCreateResponse, String> {
     ensure_supported_protocol(&settings.protocol)?;
     if is_openai_oauth_settings(settings) {
@@ -301,6 +356,9 @@ async fn cocreate_with_model(
             memories,
             active_context,
             active_project_context,
+            rule_route_context,
+            file_tree,
+            mentioned_files,
         )
         .await;
     }
@@ -313,6 +371,9 @@ async fn cocreate_with_model(
                 memories,
                 active_context,
                 active_project_context,
+                rule_route_context,
+                file_tree,
+                mentioned_files,
             )
             .await
         }
@@ -324,6 +385,9 @@ async fn cocreate_with_model(
                 memories,
                 active_context,
                 active_project_context,
+                rule_route_context,
+                file_tree,
+                mentioned_files,
             )
             .await
         }
@@ -335,6 +399,9 @@ async fn cocreate_with_model(
                 memories,
                 active_context,
                 active_project_context,
+                rule_route_context,
+                file_tree,
+                mentioned_files,
             )
             .await
         }
@@ -349,6 +416,9 @@ async fn cocreate_with_openai_oauth(
     memories: &[String],
     active_context: &str,
     active_project_context: &str,
+    rule_route_context: &RuleRouteContext,
+    file_tree: &str,
+    mentioned_files: &[DialogueContextItem],
 ) -> Result<ParsedCoCreateResponse, String> {
     let url = format!("{}/responses", settings.base_url.trim_end_matches('/'));
     let client = reqwest::Client::builder()
@@ -363,7 +433,7 @@ async fn cocreate_with_openai_oauth(
         .json(&json!({
             "model": project_model.unwrap_or(&settings.model),
             "instructions": cocreation_system_prompt(),
-            "input": build_cocreation_prompt(input, memories, active_context, active_project_context),
+            "input": build_cocreation_prompt(input, memories, active_context, active_project_context, rule_route_context, file_tree, mentioned_files),
             "store": false,
             "temperature": 0.7
         }))
@@ -383,12 +453,7 @@ async fn cocreate_with_openai_oauth(
         ));
     }
     let content = read_model_response_text(&body)?;
-    let parsed = parse_cocreation_model_output(&content)?;
-    if parsed.reply.trim().is_empty() {
-        Err("模型返回了空回复。".to_string())
-    } else {
-        Ok(parsed)
-    }
+    ensure_parsed_cocreation_response(parse_cocreation_model_output(&content)?)
 }
 
 async fn cocreate_with_openai_compatible(
@@ -398,6 +463,9 @@ async fn cocreate_with_openai_compatible(
     memories: &[String],
     active_context: &str,
     active_project_context: &str,
+    rule_route_context: &RuleRouteContext,
+    file_tree: &str,
+    mentioned_files: &[DialogueContextItem],
 ) -> Result<ParsedCoCreateResponse, String> {
     let url = openai_chat_completions_url(&settings.base_url);
     let client = reqwest::Client::builder()
@@ -405,11 +473,21 @@ async fn cocreate_with_openai_compatible(
         .build()
         .map_err(|error| format!("对话客户端创建失败：{error}"))?;
     let model = project_model.unwrap_or(&settings.model);
-    let prompt = build_cocreation_prompt(input, memories, active_context, active_project_context);
+    let prompt = build_cocreation_prompt(
+        input,
+        memories,
+        active_context,
+        active_project_context,
+        rule_route_context,
+        file_tree,
+        mentioned_files,
+    );
     let response = client
         .post(url.clone())
         .bearer_auth(&settings.api_key)
-        .json(&openai_compatible_cocreation_body(model, &prompt, true))
+        .json(&openai_compatible_cocreation_body(
+            settings, model, &prompt, true,
+        ))
         .send()
         .await
         .map_err(|error| format!("对话请求失败：{error}"))?;
@@ -425,7 +503,9 @@ async fn cocreate_with_openai_compatible(
         let retry = client
             .post(url)
             .bearer_auth(&settings.api_key)
-            .json(&openai_compatible_cocreation_body(model, &prompt, false))
+            .json(&openai_compatible_cocreation_body(
+                settings, model, &prompt, false,
+            ))
             .send()
             .await
             .map_err(|error| format!("对话请求重试失败：{error}"))?;
@@ -452,18 +532,19 @@ async fn cocreate_with_openai_compatible(
         body
     };
     let content = read_model_response_text(&body)?;
-    let parsed = parse_cocreation_model_output(&content)?;
-    if parsed.reply.trim().is_empty() {
-        Err("模型返回了空回复。".to_string())
-    } else {
-        Ok(parsed)
-    }
+    ensure_parsed_cocreation_response(parse_cocreation_model_output(&content)?)
 }
 
-fn openai_compatible_cocreation_body(model: &str, prompt: &str, strict_json: bool) -> Value {
-    let mut body = json!({
-        "model": model,
-        "messages": [
+fn openai_compatible_cocreation_body(
+    settings: &ActiveModelSettings,
+    model: &str,
+    prompt: &str,
+    strict_json: bool,
+) -> Value {
+    let mut body = openai_compatible_chat_body(
+        settings,
+        model,
+        json!([
             {
                 "role": "system",
                 "content": cocreation_system_prompt()
@@ -472,9 +553,10 @@ fn openai_compatible_cocreation_body(model: &str, prompt: &str, strict_json: boo
                 "role": "user",
                 "content": prompt
             }
-        ],
-        "temperature": 0.7
-    });
+        ]),
+        2048,
+        0.7,
+    );
     if strict_json {
         body["response_format"] = json!({ "type": "json_object" });
     }
@@ -500,6 +582,9 @@ async fn cocreate_with_anthropic(
     memories: &[String],
     active_context: &str,
     active_project_context: &str,
+    rule_route_context: &RuleRouteContext,
+    file_tree: &str,
+    mentioned_files: &[DialogueContextItem],
 ) -> Result<ParsedCoCreateResponse, String> {
     let body = send_anthropic_cocreation_request(
         settings,
@@ -508,6 +593,9 @@ async fn cocreate_with_anthropic(
         memories,
         active_context,
         active_project_context,
+        rule_route_context,
+        file_tree,
+        mentioned_files,
         false,
     )
     .await?;
@@ -520,6 +608,9 @@ async fn cocreate_with_anthropic(
                 memories,
                 active_context,
                 active_project_context,
+                rule_route_context,
+                file_tree,
+                mentioned_files,
                 true,
             )
             .await?;
@@ -527,12 +618,7 @@ async fn cocreate_with_anthropic(
         }
         result => result?,
     };
-    let parsed = parse_cocreation_model_output(&content)?;
-    if parsed.reply.trim().is_empty() {
-        Err("模型返回了空回复。".to_string())
-    } else {
-        Ok(parsed)
-    }
+    ensure_parsed_cocreation_response(parse_cocreation_model_output(&content)?)
 }
 
 async fn send_anthropic_cocreation_request(
@@ -542,6 +628,9 @@ async fn send_anthropic_cocreation_request(
     memories: &[String],
     active_context: &str,
     active_project_context: &str,
+    rule_route_context: &RuleRouteContext,
+    file_tree: &str,
+    mentioned_files: &[DialogueContextItem],
     stream: bool,
 ) -> Result<String, String> {
     let url = anthropic_messages_url(&settings.base_url);
@@ -563,7 +652,7 @@ async fn send_anthropic_cocreation_request(
                     "content": [
                         {
                             "type": "text",
-                            "text": build_cocreation_prompt(input, memories, active_context, active_project_context)
+                            "text": build_cocreation_prompt(input, memories, active_context, active_project_context, rule_route_context, file_tree, mentioned_files)
                         }
                     ]
                 }
@@ -597,6 +686,9 @@ async fn cocreate_with_gemini(
     memories: &[String],
     active_context: &str,
     active_project_context: &str,
+    rule_route_context: &RuleRouteContext,
+    file_tree: &str,
+    mentioned_files: &[DialogueContextItem],
 ) -> Result<ParsedCoCreateResponse, String> {
     let model = project_model.unwrap_or(&settings.model);
     if is_google_gemini_oauth_settings(settings) {
@@ -607,6 +699,9 @@ async fn cocreate_with_gemini(
             memories,
             active_context,
             active_project_context,
+            rule_route_context,
+            file_tree,
+            mentioned_files,
         )
         .await;
     }
@@ -630,7 +725,7 @@ async fn cocreate_with_gemini(
                 {
                     "role": "user",
                     "parts": [
-                        { "text": build_cocreation_prompt(input, memories, active_context, active_project_context) }
+                        { "text": build_cocreation_prompt(input, memories, active_context, active_project_context, rule_route_context, file_tree, mentioned_files) }
                     ]
                 }
             ],
@@ -656,12 +751,7 @@ async fn cocreate_with_gemini(
         ));
     }
     let content = read_gemini_response_text(&body)?;
-    let parsed = parse_cocreation_model_output(&content)?;
-    if parsed.reply.trim().is_empty() {
-        Err("模型返回了空回复。".to_string())
-    } else {
-        Ok(parsed)
-    }
+    ensure_parsed_cocreation_response(parse_cocreation_model_output(&content)?)
 }
 
 async fn cocreate_with_google_gemini_cloudcode(
@@ -671,6 +761,9 @@ async fn cocreate_with_google_gemini_cloudcode(
     memories: &[String],
     active_context: &str,
     active_project_context: &str,
+    rule_route_context: &RuleRouteContext,
+    file_tree: &str,
+    mentioned_files: &[DialogueContextItem],
 ) -> Result<ParsedCoCreateResponse, String> {
     let project_id = ensure_google_gemini_oauth_project_id(&settings.api_key, model).await?;
     let inner_request = json!({
@@ -681,7 +774,7 @@ async fn cocreate_with_google_gemini_cloudcode(
             {
                 "role": "user",
                 "parts": [
-                    { "text": build_cocreation_prompt(input, memories, active_context, active_project_context) }
+                    { "text": build_cocreation_prompt(input, memories, active_context, active_project_context, rule_route_context, file_tree, mentioned_files) }
                 ]
             }
         ],
@@ -701,12 +794,7 @@ async fn cocreate_with_google_gemini_cloudcode(
     .await?;
     let body = serde_json::to_string(&response).map_err(|error| error.to_string())?;
     let content = read_gemini_response_text(&body)?;
-    let parsed = parse_cocreation_model_output(&content)?;
-    if parsed.reply.trim().is_empty() {
-        Err("模型返回了空回复。".to_string())
-    } else {
-        Ok(parsed)
-    }
+    ensure_parsed_cocreation_response(parse_cocreation_model_output(&content)?)
 }
 
 fn read_active_context(data_dir: &Path) -> String {
@@ -737,8 +825,14 @@ fn expand_context_item(
     };
     let (path, relative_path) =
         resolve_allowed_context_file(data_dir, skill_resource_root, item, &raw_path)?;
-    let content =
-        fs::read_to_string(&path).map_err(|error| format!("上下文文件读取失败：{error}"))?;
+    let content = if crate::workspace::is_supported_text_preview_file(&path) {
+        crate::workspace::read_workspace_text_content(&path)?
+    } else {
+        format!(
+            "文件引用：{}\n当前格式暂不支持抽取为文本上下文，可在中间文件区查看或用本机程序打开。",
+            relative_path
+        )
+    };
     let mut expanded = item.clone();
     expanded.source_path = Some(path.to_string_lossy().into_owned());
     if expanded
@@ -838,6 +932,9 @@ fn build_cocreation_prompt(
     memories: &[String],
     active_context: &str,
     active_project_context: &str,
+    rule_route_context: &RuleRouteContext,
+    file_tree: &str,
+    mentioned_files: &[DialogueContextItem],
 ) -> String {
     let current_draft_slot = build_current_draft_slot(input);
     let project_mode_slot = build_text_slot(
@@ -855,6 +952,23 @@ fn build_cocreation_prompt(
         "暂无当前现场。",
     );
     let memory_slot = build_memory_slot(memories);
+    let file_tree_slot = build_text_slot(
+        "workspace-file-tree",
+        "作品库和知识库文件树",
+        file_tree,
+        BUDGET_FILE_TREE_CHARS,
+        "暂无可读取的文件树。",
+    );
+    let mut rule_route_slot = build_text_slot(
+        "rule-router",
+        "规则路由",
+        &rule_route_context.block,
+        BUDGET_RULE_ROUTE_CHARS,
+        "暂无 WRIDIAN.md / AGENT.md / index.md 规则路由。",
+    );
+    rule_route_slot.status.item_count = rule_route_context.item_count;
+    rule_route_slot.status.truncated =
+        rule_route_slot.status.truncated || rule_route_context.truncated;
     let knowledge_slot = build_context_items_slot(
         "explicit-knowledge-cards",
         "已选知识卡",
@@ -862,12 +976,15 @@ fn build_cocreation_prompt(
         BUDGET_EXPLICIT_ITEM_CHARS,
         BUDGET_EXPLICIT_TOTAL_CHARS,
     );
-    let relevant_slot = build_context_items_slot(
-        "relevant-notes",
-        "相关稿件",
-        &filter_context_items(input, ContextItemSlot::Relevant),
-        BUDGET_EXPLICIT_ITEM_CHARS,
-        BUDGET_EXPLICIT_TOTAL_CHARS,
+    let explicit_file_items = filter_context_items(input, ContextItemSlot::File);
+    let mentioned_file_refs: Vec<&DialogueContextItem> = mentioned_files.iter().collect();
+    let file_context_slot = build_combined_context_items_slot(
+        "mentioned-files",
+        "点名文件",
+        &explicit_file_items,
+        &mentioned_file_refs,
+        BUDGET_MENTIONED_FILE_ITEM_CHARS,
+        BUDGET_MENTIONED_FILE_TOTAL_CHARS,
     );
     let tool_slot = build_context_items_slot(
         "skill-protocol",
@@ -883,16 +1000,18 @@ fn build_cocreation_prompt(
 
     let source_label = prompt_source_label(&input.source_path, &input.title);
     format!(
-        "稿件类型：{}\n当前文件：{}\n来源路径：{}\n\n上下文编译顺序：当前稿件/选区 → 项目记忆 → 最近对话现场 → 压缩记忆 → 已选知识卡 → 相关稿件 → 技能规则 → 用户请求。每个槽位独立预算，超预算时按此优先级裁剪，不把作品记忆、知识卡和技能规则混写。\n\n输出格式：必须返回 json object，字段为 reply、edits、memories。\n\n[1 当前稿件与选区]\n{}\n\n[2 项目记忆]\n{}\n\n[3 最近对话现场]\n{}\n\n[4 压缩记忆]\n{}\n\n[5 已选知识卡]\n{}\n\n[6 相关稿件]\n{}\n\n[7 技能规则]\n{}\n\n[8 用户请求]\n{}",
+        "稿件类型：{}\n当前文件：{}\n来源路径：{}\n\n上下文编译顺序：当前稿件/选区 → 作品库和知识库文件树 → 规则路由 → 项目记忆 → 最近对话现场 → 压缩记忆 → 已选知识卡 → 点名文件 → 技能规则 → 用户请求。每个槽位独立预算，超预算时按此优先级裁剪，不把作品记忆、知识卡、规则路由和技能规则混写。\n\n规则路由协议：WRIDIAN.md、AGENT.md、AGENTS.md 定义当前库内的长期行动规则；index.md 和 hot.md 定义当前库的导航与近期上下文。规则路由只说明如何工作和如何定位资料，不等于把知识卡写入作品记忆。\n\n技能工作流协议：当 [9 技能规则] 非空时，所选技能必须按可执行工作流处理，不得只输出泛泛建议。先确认输入和扫描范围，再给出产物清单；需要落地文件时必须返回 fileOperations；完成后在 reply 中说明质量检查结果和回滚方式。技能产物优先写入当前库内相对路径：作品拆解进入知识库 02拆解报告，知识卡进入知识库 03-07，作者/大神 skill 进入知识库 08大神蒸馏，知识库体检进入 00知识库治理。不能验证来源、关联、frontmatter 或可分发性时，不得声称完成，只能输出待补缺口。\n\n文件树权限协议：用户在对话中提到作品库或知识库文件树内的文件时，Wridian 可以在当前库内读取该文件内容，并可通过 fileOperations 增、改、重命名或移到回收站。无需默认展示文件内容给用户；需要说明时只说明操作结果。\n\n文件树操作协议：如需增、改、删文件树，必须在 fileOperations 数组里返回操作，不要只在 reply 里描述。只允许相对路径，不允许绝对路径或 ..。action 只能是 writeFile、createFolder、rename、trash；library 只能是 works 或 knowledge；writeFile 只能写 md、txt、docx；rename 需要 newName；writeFile 需要 content；trash 表示移到库内 .wridian-trash 回收站。\n\n输出格式：必须返回 json object，字段为 reply、edits、fileOperations、memories。\n\n[1 当前稿件与选区]\n{}\n\n[2 作品库和知识库文件树]\n{}\n\n[3 规则路由]\n{}\n\n[4 项目记忆]\n{}\n\n[5 最近对话现场]\n{}\n\n[6 压缩记忆]\n{}\n\n[7 已选知识卡]\n{}\n\n[8 点名文件]\n{}\n\n[9 技能规则]\n{}\n\n[10 用户请求]\n{}",
         draft_kind,
         input.title,
         source_label,
         current_draft_slot.block,
+        file_tree_slot.block,
+        rule_route_slot.block,
         project_mode_slot.block,
         active_context_slot.block,
         memory_slot.block,
         knowledge_slot.block,
-        relevant_slot.block,
+        file_context_slot.block,
         tool_slot.block,
         input.user_input.trim()
     )
@@ -903,9 +1022,26 @@ fn build_context_load_status(
     memories: &[String],
     active_context: &str,
     active_project_context: &str,
+    rule_route_context: &RuleRouteContext,
+    file_tree_slot: &ContextSlotBuild,
+    mentioned_files: &[DialogueContextItem],
 ) -> Vec<ContextLoadStatus> {
+    let explicit_file_items = filter_context_items(input, ContextItemSlot::File);
+    let mentioned_file_refs: Vec<&DialogueContextItem> = mentioned_files.iter().collect();
+    let mut rule_route_status = build_text_slot(
+        "rule-router",
+        "规则路由",
+        &rule_route_context.block,
+        BUDGET_RULE_ROUTE_CHARS,
+        "暂无 WRIDIAN.md / AGENT.md / index.md 规则路由。",
+    )
+    .status;
+    rule_route_status.item_count = rule_route_context.item_count;
+    rule_route_status.truncated = rule_route_status.truncated || rule_route_context.truncated;
     vec![
         build_current_draft_slot(input).status,
+        file_tree_slot.status.clone(),
+        rule_route_status,
         build_text_slot(
             "project-mode",
             "项目记忆",
@@ -931,12 +1067,13 @@ fn build_context_load_status(
             BUDGET_EXPLICIT_TOTAL_CHARS,
         )
         .status,
-        build_context_items_slot(
-            "relevant-notes",
-            "相关稿件",
-            &filter_context_items(input, ContextItemSlot::Relevant),
-            BUDGET_EXPLICIT_ITEM_CHARS,
-            BUDGET_EXPLICIT_TOTAL_CHARS,
+        build_combined_context_items_slot(
+            "mentioned-files",
+            "点名文件",
+            &explicit_file_items,
+            &mentioned_file_refs,
+            BUDGET_MENTIONED_FILE_ITEM_CHARS,
+            BUDGET_MENTIONED_FILE_TOTAL_CHARS,
         )
         .status,
         build_context_items_slot(
@@ -964,7 +1101,7 @@ fn build_context_load_status(
 #[derive(Debug, Clone, Copy)]
 enum ContextItemSlot {
     Knowledge,
-    Relevant,
+    File,
     Tool,
 }
 
@@ -1098,6 +1235,174 @@ fn build_memory_slot(memories: &[String]) -> ContextSlotBuild {
     }
 }
 
+fn build_file_tree_slot(nodes: &[WorkFileNode]) -> ContextSlotBuild {
+    let mut lines = Vec::new();
+    for node in nodes {
+        render_file_tree_node(node, 0, &mut lines);
+    }
+    build_text_slot(
+        "workspace-file-tree",
+        "作品库和知识库文件树",
+        &lines.join("\n"),
+        BUDGET_FILE_TREE_CHARS,
+        "暂无可读取的文件树。",
+    )
+}
+
+fn render_file_tree_node(node: &WorkFileNode, depth: usize, lines: &mut Vec<String>) {
+    let indent = "  ".repeat(depth);
+    let kind = if node.folder { "folder" } else { "file" };
+    let path = if node.relative_path.trim().is_empty() {
+        node.name.as_str()
+    } else {
+        node.relative_path.as_str()
+    };
+    lines.push(format!(
+        "{indent}- [{}] {}/{}",
+        kind,
+        node.library.trim(),
+        path
+    ));
+    for child in &node.children {
+        render_file_tree_node(child, depth + 1, lines);
+    }
+}
+
+fn read_user_mentioned_workspace_files(
+    input: &CoCreateInput,
+    nodes: &[WorkFileNode],
+) -> Vec<DialogueContextItem> {
+    let query = normalize_match_text(&input.user_input);
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let mut items = Vec::new();
+    collect_user_mentioned_workspace_files(nodes, &query, &mut items);
+    items
+}
+
+fn collect_user_mentioned_workspace_files(
+    nodes: &[WorkFileNode],
+    query: &str,
+    items: &mut Vec<DialogueContextItem>,
+) {
+    for node in nodes {
+        if node.folder {
+            collect_user_mentioned_workspace_files(&node.children, query, items);
+            continue;
+        }
+        if !file_node_is_mentioned(query, node) {
+            continue;
+        }
+        let path = Path::new(&node.path);
+        if !is_supported_text_preview_file(path) {
+            continue;
+        }
+        let Ok(content) = read_workspace_text_content(path) else {
+            continue;
+        };
+        items.push(DialogueContextItem {
+            kind: "file".to_string(),
+            label: node.name.clone(),
+            value: content,
+            source_path: None,
+            relative_path: Some(format!(
+                "{}/{}",
+                node.library.trim(),
+                node.relative_path.trim()
+            )),
+        });
+    }
+}
+
+fn file_node_is_mentioned(query: &str, node: &WorkFileNode) -> bool {
+    let relative = normalize_match_text(&node.relative_path);
+    let library_relative =
+        normalize_match_text(&format!("{}/{}", node.library, node.relative_path));
+    let name = normalize_match_text(&node.name);
+    if (!relative.is_empty() && query.contains(&relative))
+        || (!library_relative.is_empty() && query.contains(&library_relative))
+        || (!name.is_empty() && query.contains(&name))
+    {
+        return true;
+    }
+    let Some(stem) = Path::new(&node.name).file_stem() else {
+        return false;
+    };
+    let stem = normalize_match_text(&stem.to_string_lossy());
+    stem.chars().count() >= 3 && query.contains(&stem)
+}
+
+fn normalize_match_text(text: &str) -> String {
+    text.trim()
+        .replace('\\', "/")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("")
+        .to_lowercase()
+}
+
+fn apply_model_file_operations(
+    data_dir: &Path,
+    operations: &[ModelFileOperation],
+) -> Vec<AppliedFileOperation> {
+    operations
+        .iter()
+        .map(|operation| apply_model_file_operation(data_dir, operation))
+        .collect()
+}
+
+fn apply_model_file_operation(
+    data_dir: &Path,
+    operation: &ModelFileOperation,
+) -> AppliedFileOperation {
+    let action = operation.action.trim().to_string();
+    let library = operation.library.trim().to_string();
+    let path = operation.path.trim().to_string();
+    let result = match action.as_str() {
+        "writeFile" => apply_workspace_write_file(
+            data_dir,
+            &library,
+            &path,
+            operation.content.as_deref().unwrap_or(""),
+        )
+        .map(|path| format!("已写入 {}", path.to_string_lossy())),
+        "createFolder" => apply_workspace_create_folder(data_dir, &library, &path)
+            .map(|path| format!("已创建文件夹 {}", path.to_string_lossy())),
+        "rename" => {
+            let new_name = operation
+                .new_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "rename 操作缺少 newName。".to_string());
+            new_name.and_then(|new_name| {
+                apply_workspace_rename_node(data_dir, &library, &path, new_name)
+                    .map(|path| format!("已重命名为 {}", path.to_string_lossy()))
+            })
+        }
+        "trash" => apply_workspace_trash_node(data_dir, &library, &path)
+            .map(|path| format!("已移到回收站 {}", path.to_string_lossy())),
+        _ => Err("未知文件操作 action。".to_string()),
+    };
+    match result {
+        Ok(message) => AppliedFileOperation {
+            action,
+            library,
+            path,
+            ok: true,
+            message,
+        },
+        Err(error) => AppliedFileOperation {
+            action,
+            library,
+            path,
+            ok: false,
+            message: error,
+        },
+    }
+}
+
 fn filter_context_items<'a>(
     input: &'a CoCreateInput,
     slot: ContextItemSlot,
@@ -1108,9 +1413,8 @@ fn filter_context_items<'a>(
         .filter(|item| match slot {
             ContextItemSlot::Tool => item.kind.trim() == "tool",
             ContextItemSlot::Knowledge => item.kind.trim() == "memory",
-            ContextItemSlot::Relevant => {
-                let kind = item.kind.trim();
-                kind != "tool" && kind != "memory"
+            ContextItemSlot::File => {
+                item.kind.trim() == "file" || item.kind.trim() == "active-file"
             }
         })
         .collect()
@@ -1132,6 +1436,36 @@ fn build_context_items_slot(
     per_item_budget: usize,
     total_budget: usize,
 ) -> ContextSlotBuild {
+    build_combined_context_items_slot(key, label, items, &[], per_item_budget, total_budget)
+}
+
+fn build_combined_context_items_slot(
+    key: &str,
+    label: &str,
+    primary_items: &[&DialogueContextItem],
+    secondary_items: &[&DialogueContextItem],
+    per_item_budget: usize,
+    total_budget: usize,
+) -> ContextSlotBuild {
+    let mut seen = HashSet::new();
+    let mut items = Vec::new();
+    for item in primary_items.iter().chain(secondary_items.iter()) {
+        let source_key = item
+            .relative_path
+            .as_deref()
+            .or(item.source_path.as_deref())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let key = if source_key.is_empty() {
+            format!("{}:{}", item.kind.trim(), item.label.trim())
+        } else {
+            format!("{}:{}", item.kind.trim(), source_key)
+        };
+        if seen.insert(key) {
+            items.push(*item);
+        }
+    }
     if items.is_empty() {
         return ContextSlotBuild {
             block: "无。".to_string(),
@@ -1306,6 +1640,7 @@ fn parse_cocreation_model_output(output: &str) -> Result<ParsedCoCreateResponse,
                 return Ok(ParsedCoCreateResponse {
                     reply: trimmed.to_string(),
                     edits: Vec::new(),
+                    file_operations: Vec::new(),
                     memories: Vec::new(),
                 });
             }
@@ -1340,8 +1675,23 @@ fn parse_cocreation_model_output(output: &str) -> Result<ParsedCoCreateResponse,
     Ok(ParsedCoCreateResponse {
         reply,
         edits,
+        file_operations: parsed.file_operations,
         memories,
     })
+}
+
+fn ensure_parsed_cocreation_response(
+    mut parsed: ParsedCoCreateResponse,
+) -> Result<ParsedCoCreateResponse, String> {
+    if !parsed.reply.trim().is_empty() {
+        return Ok(parsed);
+    }
+    if parsed.file_operations.is_empty() {
+        Err("模型返回了空回复。".to_string())
+    } else {
+        parsed.reply = "已按你的要求处理文件树。".to_string();
+        Ok(parsed)
+    }
 }
 
 fn normalize_model_memory_leaf(mut leaf: MemoryLeafDraft) -> Option<MemoryLeafDraft> {
@@ -1369,9 +1719,10 @@ fn cocreation_system_prompt() -> &'static str {
 你会同时服务小说和短剧/剧本创作：小说关注章节、人物动机、叙述节奏、伏笔和设定一致性；短剧/剧本关注对白、场景冲突、钩子、角色口吻和分集节奏。
 当稿件类型是短剧/剧本时，优先关注场次、对白可表演性、结尾钩子、分集节奏和低成本拍摄约束。
 不要写成通用聊天回复；不要自动声称已经修改正文。
+如果本轮带有技能规则，必须按技能工作流回复：确认输入与扫描范围、说明产物、需要写入时使用 fileOperations、说明质检结果和回滚方式。
 你需要判断本轮是否产生值得长期保留的创作记忆。如果没有，memories 输出空数组；如果有，只提取稳定、可复用、对后续写作有约束或参考价值的事实，不记录一次性闲聊。
 必须输出 JSON 对象（json object）：
-{"reply":"给用户看的正常回复","edits":[{"target":"需要被替换的原文片段，必须从稿件内容或用户选中片段中逐字复制","replacement":"替换后的新文本","rationale":"简短理由"}],"memories":[{"branch":"novel|drama|knowledge|skill|user|relationship|journey|awareness|sense","title":"短标题","summary":"要沉淀的长期记忆正文","reason":"为什么值得沉淀","sourcePath":"当前来源路径或空"}]}
+{"reply":"给用户看的正常回复","edits":[{"target":"需要被替换的原文片段，必须从稿件内容或用户选中片段中逐字复制","replacement":"替换后的新文本","rationale":"简短理由"}],"fileOperations":[{"action":"writeFile|createFolder|rename|trash","library":"works|knowledge","path":"库内相对路径","newName":"rename 时的新名称","content":"writeFile 时的新内容"}],"memories":[{"branch":"novel|drama|knowledge|skill|user|relationship|journey|awareness|sense","title":"短标题","summary":"要沉淀的长期记忆正文","reason":"为什么值得沉淀","sourcePath":"当前来源路径或空"}]}
 如果只是聊天、讨论、解释，edits 输出空数组。
 如果用户要求修改、润色、批量替换角色名、调整对白或重写片段，必须尽量给 edits。
 target 必须是原文中存在的精确片段；不要用行号、摘要或正则；不能确定精确原文时只给 reply，不给 edits。"#
@@ -1392,6 +1743,14 @@ mod tests {
         path
     }
 
+    fn empty_rule_route_context() -> RuleRouteContext {
+        RuleRouteContext {
+            block: String::new(),
+            item_count: 0,
+            truncated: false,
+        }
+    }
+
     #[test]
     fn build_prompt_keeps_draft_memories_and_user_request_separate() {
         let input = CoCreateInput {
@@ -1410,9 +1769,18 @@ mod tests {
             &["【剧情线】雨夜场景不能提前暴露凶手。".to_string()],
             "{\"currentChapter\":\"第三章\"}",
             "项目记忆：短剧项目",
+            &RuleRouteContext {
+                block: "【works｜作品库｜规则路由｜WRIDIAN.md】\n作品规则。".to_string(),
+                item_count: 1,
+                truncated: false,
+            },
+            "works/第一章.md\nknowledge/人物卡.md",
+            &[],
         );
 
         assert!(prompt.contains("稿件内容"));
+        assert!(prompt.contains("作品库和知识库文件树"));
+        assert!(prompt.contains("规则路由"));
         assert!(prompt.contains("压缩记忆"));
         assert!(prompt.contains("强化她进门前的动机"));
         assert!(prompt.contains("json object"));
@@ -1438,10 +1806,11 @@ mod tests {
             }],
         };
 
-        let prompt = build_cocreation_prompt(&input, &[], "", "");
+        let prompt =
+            build_cocreation_prompt(&input, &[], "", "", &empty_rule_route_context(), "", &[]);
 
         assert!(prompt.contains("用户选中的片段：\n她推开门"));
-        assert!(prompt.contains("[5 已选知识卡]"));
+        assert!(prompt.contains("[7 已选知识卡]"));
         assert!(prompt.contains("【memory｜人物卡｜人物卡.md】\n她怕黑，但不承认。"));
     }
 
@@ -1459,8 +1828,8 @@ mod tests {
             context_items: vec![
                 DialogueContextItem {
                     kind: "tool".to_string(),
-                    label: "知识库运维".to_string(),
-                    value: "Wridian 技能协议：知识库运维".to_string(),
+                    label: "作品拆解".to_string(),
+                    value: "Wridian 技能协议：作品拆解".to_string(),
                     source_path: None,
                     relative_path: None,
                 },
@@ -1474,11 +1843,14 @@ mod tests {
             ],
         };
 
-        let prompt = build_cocreation_prompt(&input, &[], "", "");
+        let prompt =
+            build_cocreation_prompt(&input, &[], "", "", &empty_rule_route_context(), "", &[]);
 
         assert!(prompt
-            .contains("[5 已选知识卡]\n【memory｜知识卡｜03故事模型/知识卡.md】\n一条显式知识卡"));
-        assert!(prompt.contains("[7 技能规则]\n【tool｜知识库运维】\nWridian 技能协议：知识库运维"));
+            .contains("[7 已选知识卡]\n【memory｜知识卡｜03故事模型/知识卡.md】\n一条显式知识卡"));
+        assert!(prompt.contains("[9 技能规则]\n【tool｜作品拆解】\nWridian 技能协议：作品拆解"));
+        assert!(prompt.contains("技能工作流协议：当 [9 技能规则] 非空时"));
+        assert!(prompt.contains("需要落地文件时必须返回 fileOperations"));
     }
 
     #[test]
@@ -1515,6 +1887,19 @@ mod tests {
             &["长期记忆：雨夜不能提前暴露凶手。".to_string()],
             "",
             "项目记忆：短剧项目",
+            &RuleRouteContext {
+                block: "【knowledge｜知识库｜索引｜index.md】\n知识索引。".to_string(),
+                item_count: 1,
+                truncated: false,
+            },
+            &build_text_slot(
+                "workspace-file-tree",
+                "作品库和知识库文件树",
+                "works/第一章.md",
+                BUDGET_FILE_TREE_CHARS,
+                "暂无可读取的文件树。",
+            ),
+            &[],
         );
 
         let current = status
@@ -1541,6 +1926,13 @@ mod tests {
             .expect("tool slot");
         assert!(tool.loaded);
         assert_eq!(tool.item_count, 1);
+
+        let rules = status
+            .iter()
+            .find(|item| item.key == "rule-router")
+            .expect("rule router slot");
+        assert!(rules.loaded);
+        assert_eq!(rules.item_count, 1);
     }
 
     #[test]
@@ -1557,10 +1949,159 @@ mod tests {
             context_items: Vec::new(),
         };
 
-        let prompt = build_cocreation_prompt(&input, &[], "", "");
+        let prompt =
+            build_cocreation_prompt(&input, &[], "", "", &empty_rule_route_context(), "", &[]);
 
         assert!(prompt.contains("来源路径：第一章.md"));
         assert!(!prompt.contains("D:/private"));
+    }
+
+    #[test]
+    fn file_tree_slot_lists_libraries_with_relative_paths() {
+        let nodes = vec![WorkFileNode {
+            name: "测试".to_string(),
+            path: "D:/works/测试".to_string(),
+            relative_path: "测试".to_string(),
+            library: "works".to_string(),
+            folder: true,
+            children: vec![WorkFileNode {
+                name: "第一集.docx".to_string(),
+                path: "D:/works/测试/第一集.docx".to_string(),
+                relative_path: "测试/第一集.docx".to_string(),
+                library: "works".to_string(),
+                folder: false,
+                children: Vec::new(),
+            }],
+        }];
+
+        let slot = build_file_tree_slot(&nodes);
+
+        assert!(slot.status.loaded);
+        assert!(slot.block.contains("[folder] works/测试"));
+        assert!(slot.block.contains("[file] works/测试/第一集.docx"));
+        assert!(!slot.block.contains("D:/works"));
+    }
+
+    #[test]
+    fn user_mentioned_file_reads_text_content_from_workspace_tree() {
+        let data_dir = temp_data_dir("mentioned-file-context");
+        let work_root = data_dir.join("works");
+        fs::create_dir_all(work_root.join("测试")).expect("create works");
+        let file_path = work_root.join("测试").join("第1集.txt");
+        fs::write(&file_path, "第一场：雨夜。").expect("write file");
+        let input = CoCreateInput {
+            request_id: None,
+            source_path: String::new(),
+            title: String::new(),
+            content: String::new(),
+            draft_kind: Some("prose".to_string()),
+            user_input: "看看作品库里的第1集.txt，然后改名。".to_string(),
+            selected_text: None,
+            selected_model_id: None,
+            context_items: Vec::new(),
+        };
+        let nodes = vec![WorkFileNode {
+            name: "测试".to_string(),
+            path: work_root.join("测试").to_string_lossy().into_owned(),
+            relative_path: "测试".to_string(),
+            library: "works".to_string(),
+            folder: true,
+            children: vec![WorkFileNode {
+                name: "第1集.txt".to_string(),
+                path: file_path.to_string_lossy().into_owned(),
+                relative_path: "测试/第1集.txt".to_string(),
+                library: "works".to_string(),
+                folder: false,
+                children: Vec::new(),
+            }],
+        }];
+
+        let mentioned = read_user_mentioned_workspace_files(&input, &nodes);
+
+        assert_eq!(mentioned.len(), 1);
+        assert_eq!(mentioned[0].label, "第1集.txt");
+        assert_eq!(
+            mentioned[0].relative_path.as_deref(),
+            Some("works/测试/第1集.txt")
+        );
+        assert_eq!(mentioned[0].value, "第一场：雨夜。");
+    }
+
+    #[test]
+    fn user_mentioned_file_ignores_short_stem_and_non_text_files() {
+        let data_dir = temp_data_dir("mentioned-file-ignore");
+        let work_root = data_dir.join("works");
+        fs::create_dir_all(&work_root).expect("create works");
+        let short_file = work_root.join("人.txt");
+        let image_file = work_root.join("海报.png");
+        fs::write(&short_file, "短文件名不应被泛匹配。").expect("write short file");
+        fs::write(&image_file, [0_u8, 1, 2]).expect("write image");
+        let input = CoCreateInput {
+            request_id: None,
+            source_path: String::new(),
+            title: String::new(),
+            content: String::new(),
+            draft_kind: Some("prose".to_string()),
+            user_input: "人物要更狠，顺便看看海报.png".to_string(),
+            selected_text: None,
+            selected_model_id: None,
+            context_items: Vec::new(),
+        };
+        let nodes = vec![
+            WorkFileNode {
+                name: "人.txt".to_string(),
+                path: short_file.to_string_lossy().into_owned(),
+                relative_path: "人.txt".to_string(),
+                library: "works".to_string(),
+                folder: false,
+                children: Vec::new(),
+            },
+            WorkFileNode {
+                name: "海报.png".to_string(),
+                path: image_file.to_string_lossy().into_owned(),
+                relative_path: "海报.png".to_string(),
+                library: "works".to_string(),
+                folder: false,
+                children: Vec::new(),
+            },
+        ];
+
+        let mentioned = read_user_mentioned_workspace_files(&input, &nodes);
+
+        assert!(mentioned.is_empty());
+    }
+
+    #[test]
+    fn parsed_file_operations_can_write_workspace_files() {
+        let data_dir = temp_data_dir("file-operation-write");
+        let work_root = data_dir.join("works");
+        let knowledge_root = data_dir.join("knowledge");
+        fs::create_dir_all(&work_root).expect("create works");
+        fs::create_dir_all(&knowledge_root).expect("create knowledge");
+        fs::create_dir_all(crate::runtime::runtime_root(&data_dir)).expect("create runtime");
+        fs::write(
+            crate::runtime::workspace_config_path(&data_dir),
+            serde_json::json!({
+                "schemaVersion": 1,
+                "activeWorkRoot": work_root.to_string_lossy(),
+                "knowledgeRoot": knowledge_root.to_string_lossy()
+            })
+            .to_string(),
+        )
+        .expect("write workspace config");
+        let parsed = parse_cocreation_model_output(
+            r#"{"reply":"已创建。","edits":[],"fileOperations":[{"action":"writeFile","library":"works","path":"测试/新场景.md","content":"第一场"}],"memories":[]}"#,
+        )
+        .expect("parse");
+
+        let results = apply_model_file_operations(&data_dir, &parsed.file_operations);
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].ok);
+        assert_eq!(
+            fs::read_to_string(work_root.join("测试").join("新场景.md")).expect("read written"),
+            "第一场"
+        );
     }
 
     #[test]
@@ -1642,14 +2183,14 @@ mod tests {
         let skill_root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("resources")
             .join("skills");
-        let skill_path = skill_root.join("zhishiku-skill").join("SKILL.md");
+        let skill_path = skill_root.join("work-decompose").join("SKILL.md");
 
         let expanded = expand_context_items(
             &data_dir,
             Some(&skill_root),
             &[DialogueContextItem {
                 kind: "tool".to_string(),
-                label: "知识库运维".to_string(),
+                label: "作品拆解".to_string(),
                 value: format!("path:{}", skill_path.to_string_lossy()),
                 source_path: None,
                 relative_path: None,
@@ -1657,10 +2198,10 @@ mod tests {
         )
         .expect("builtin skill context should be accepted");
 
-        assert!(expanded[0].value.contains("# 知识库总控流程"));
+        assert!(expanded[0].value.contains("# 拆解 Skill"));
         assert_eq!(
             expanded[0].relative_path.as_deref(),
-            Some("skills/zhishiku-skill/SKILL.md")
+            Some("skills/work-decompose/SKILL.md")
         );
     }
 
@@ -1698,7 +2239,7 @@ mod tests {
         let body = r#"{
             "output": [
                 { "content": [
-                    { "type": "output_text", "text": "{\"reply\":\"好\",\"edits\":[],\"memories\":[]}" }
+                    { "type": "output_text", "text": "{\"reply\":\"好\",\"edits\":[],\"fileOperations\":[],\"memories\":[]}" }
                 ] }
             ]
         }"#;
@@ -1706,6 +2247,22 @@ mod tests {
         let content = read_model_response_text(body).expect("content exists");
 
         assert!(content.contains("\"reply\":\"好\""));
+    }
+
+    fn openai_compatible_test_settings(
+        extra_env: std::collections::BTreeMap<String, String>,
+    ) -> ActiveModelSettings {
+        ActiveModelSettings {
+            provider_id: "openai-compatible".to_string(),
+            provider_name: "OpenAI-Compatible".to_string(),
+            protocol: "openai-compatible".to_string(),
+            auth_style: "api_key".to_string(),
+            base_url: "https://api.example.com".to_string(),
+            api_key: "secret".to_string(),
+            model: "model-a".to_string(),
+            model_id: "openai-compatible::model-a".to_string(),
+            extra_env,
+        }
     }
 
     #[test]
@@ -1763,7 +2320,8 @@ mod tests {
 
     #[test]
     fn openai_compatible_body_can_omit_response_format_for_legacy_gateways() {
-        let strict = openai_compatible_cocreation_body("model-a", "prompt", true);
+        let settings = openai_compatible_test_settings(std::collections::BTreeMap::new());
+        let strict = openai_compatible_cocreation_body(&settings, "model-a", "prompt", true);
         assert_eq!(
             strict
                 .get("response_format")
@@ -1772,8 +2330,41 @@ mod tests {
             Some("json_object")
         );
 
-        let fallback = openai_compatible_cocreation_body("model-a", "prompt", false);
+        let fallback = openai_compatible_cocreation_body(&settings, "model-a", "prompt", false);
         assert!(fallback.get("response_format").is_none());
+    }
+
+    #[test]
+    fn openai_compatible_body_uses_explicit_env_options_only() {
+        let mut extra_env = std::collections::BTreeMap::new();
+        extra_env.insert(
+            "WRIDIAN_OPENAI_COMPAT_MAX_TOKENS_FIELD".to_string(),
+            "max_completion_tokens".to_string(),
+        );
+        extra_env.insert(
+            "WRIDIAN_OPENAI_COMPAT_OMIT_TEMPERATURE".to_string(),
+            "true".to_string(),
+        );
+        extra_env.insert(
+            "WRIDIAN_OPENAI_COMPAT_THINKING".to_string(),
+            "disabled".to_string(),
+        );
+        let settings = openai_compatible_test_settings(extra_env);
+        let body = openai_compatible_cocreation_body(&settings, "model-a", "prompt", false);
+
+        assert_eq!(
+            body.get("max_completion_tokens")
+                .and_then(serde_json::Value::as_u64),
+            Some(2048)
+        );
+        assert!(body.get("max_tokens").is_none());
+        assert!(body.get("temperature").is_none());
+        assert_eq!(
+            body.get("thinking")
+                .and_then(|value| value.get("type"))
+                .and_then(serde_json::Value::as_str),
+            Some("disabled")
+        );
     }
 
     #[test]

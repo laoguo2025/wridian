@@ -4,6 +4,7 @@
 
 - 项目地图：`.workbench/doc/wridian-project-map.md`
 - Frontmatter 关系协议：`.workbench/doc/wridian-frontmatter-relation-protocol.md`
+- Metadata Index：`.workbench/doc/wridian-metadata-index.md`
 - 长期文档登记：`.workbench/doc/workbench-longterm-doc-registry.md`
 - 近期过程留痕：
   - `.workbench/governance/2026-06-10-high-priority-audit-fixes.md`
@@ -42,3 +43,27 @@
   - `.workbench/governance/2026-06-11-workbench-visual-polish.md`
   - `.workbench/governance/2026-06-11-creative-skills-builtin-source.md`
   - `.workbench/governance/2026-06-11-model-provider-source-fixes.md`
+  - `.workbench/governance/2026-06-11-common-file-view-edit.md`
+  - `.workbench/governance/2026-06-11-review-items-3-7-cleanup.md`
+  - `.workbench/governance/2026-06-11-chat-file-tree-actions-theme.md`
+  - `.workbench/governance/2026-06-11-package-0.0.7.md`
+  - `.workbench/governance/2026-06-12-knowledge-graph-p3-metadata.md`
+  - `.workbench/governance/2026-06-12-creative-skills-p4-workflows.md`
+  - `.workbench/governance/2026-06-12-bridge-relations-p5.md`
+  - `.workbench/governance/2026-06-12-knowledge-p6-cache-retrieval-fold.md`
+  - `.workbench/governance/2026-06-12-knowledge-health-p7.md`
+  - `.workbench/governance/2026-06-12-gemini-oauth-client-config-ui.md`
+  - `.workbench/governance/2026-06-12-native-knowledge-health-workflow.md`
+  - `.workbench/governance/2026-06-12-package-0.0.7-knowledge-health.md`
+  - `.workbench/governance/2026-06-12-knowledge-health-result-actions.md`
+  - `.workbench/governance/2026-06-12-knowledge-health-cache-visibility.md`
+  - `.workbench/governance/2026-06-12-openhuman-knowledge-graph-force-layout.md`
+  - `.workbench/governance/2026-06-12-knowledge-health-report-open-library.md`
+  - `.workbench/governance/2026-06-12-package-0.0.7-openhuman-graph-report-fix.md`
+  - `.workbench/governance/2026-06-12-knowledge-library-file-open-preview-edit.md`
+  - `.workbench/governance/2026-06-12-memory-tree-runtime-file-filter.md`
+  - `.workbench/governance/2026-06-12-package-0.0.7-test-exe-runtime-fixes.md`
+  - `.workbench/governance/2026-06-12-package-0.0.7-installer-runtime-fixes.md`
+  - `.workbench/governance/2026-06-12-project-health-graph-display-boundary.md`
+  - `.workbench/governance/2026-06-12-package-0.0.7-installer-display-boundaries.md`
+  - `.workbench/governance/2026-06-12-health-report-timestamp-uninstall-cleanup.md`

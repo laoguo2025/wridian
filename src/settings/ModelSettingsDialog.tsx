@@ -230,7 +230,7 @@ export function ModelSettingsDialog({
             busy={busyProviderId === connectPreset.key}
             onClose={() => { setConnectPreset(null); setEditingProvider(null); }}
             onExternal={openExternal}
-            onOauthLogin={async (preset) => {
+            onOauthLogin={async (preset, data) => {
               setBusyProviderId(preset.key);
               setMessage("");
               try {
@@ -258,7 +258,11 @@ export function ModelSettingsDialog({
                     input: { sessionId: start.sessionId },
                   });
                 } else {
-                  response = await invoke<GoogleGeminiOauthResponse>("wridian_google_gemini_oauth_login");
+                  response = await invoke<GoogleGeminiOauthResponse>("wridian_google_gemini_oauth_login", {
+                    input: {
+                      models: data.models,
+                    },
+                  });
                 }
                 setStatus(response.status);
                 setConnectPreset(null);
@@ -313,7 +317,7 @@ function PresetConnectDialog({
   busy: boolean;
   onClose: () => void;
   onExternal: (url?: string) => Promise<void>;
-  onOauthLogin: (preset: VendorPreset) => Promise<void>;
+  onOauthLogin: (preset: VendorPreset, data: ProviderFormData) => Promise<void>;
   onSave: (data: ProviderFormData) => Promise<void>;
   preset: VendorPreset;
   provider: ModelProviderStatus | null;
@@ -322,6 +326,7 @@ function PresetConnectDialog({
   const [baseUrl, setBaseUrl] = useState(provider?.baseUrl || preset.baseUrl);
   const [apiKey, setApiKey] = useState("");
   const [modelsText, setModelsText] = useState((provider?.models.length ? provider.models : defaultModelIds(preset)).join("\n"));
+  const [envText, setEnvText] = useState(formatEnvOverrides(provider?.extraEnv ?? preset.defaultEnvOverrides));
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [error, setError] = useState("");
   const [testMessage, setTestMessage] = useState("");
@@ -337,7 +342,7 @@ function PresetConnectDialog({
     baseUrl: baseUrl.trim() || preset.baseUrl,
     apiKey,
     models,
-    extraEnv: preset.defaultEnvOverrides,
+    extraEnv: preset.fields.includes("env_overrides") ? parseEnvOverrides(envText) : preset.defaultEnvOverrides,
   });
 
   const validate = () => {
@@ -361,6 +366,18 @@ function PresetConnectDialog({
       return null;
     }
     return formData(models);
+  };
+
+  const validateOauthLogin = () => {
+    setError("");
+    setTestMessage("");
+    const models = parseModels(modelsText);
+    if (!models.length) {
+      setError("至少需要一个模型。");
+      return null;
+    }
+    const data = formData(models);
+    return data;
   };
 
   const submit = async () => {
@@ -415,7 +432,15 @@ function PresetConnectDialog({
           <div className="provider-oauth-box">
             <strong>{preset.name} OAuth</strong>
             <p>{oauthDescription(preset.key)}</p>
-            <button type="button" className="secondary-action" onClick={() => void onOauthLogin(preset)} disabled={busy}>
+            <button
+              type="button"
+              className="secondary-action"
+              onClick={() => {
+                const data = validateOauthLogin();
+                if (data) void onOauthLogin(preset, data);
+              }}
+              disabled={busy}
+            >
               浏览器 OAuth 登录
             </button>
           </div>
@@ -450,10 +475,21 @@ function PresetConnectDialog({
             <span>模型列表</span>
             <textarea value={modelsText} onChange={(event) => setModelsText(event.currentTarget.value)} rows={5} />
           </label>
+          {preset.fields.includes("env_overrides") ? (
+            <label>
+              <span>连接参数</span>
+              <textarea
+                value={envText}
+                onChange={(event) => setEnvText(event.currentTarget.value)}
+                rows={5}
+                spellCheck={false}
+              />
+            </label>
+          ) : null}
         </div>
 
         <button type="button" className="provider-advanced-toggle" onClick={() => setShowAdvanced((value) => !value)}>
-          {showAdvanced ? "收起连接参数" : "查看连接参数"}
+          {showAdvanced ? "收起接入详情" : "查看接入详情"}
         </button>
         {showAdvanced ? (
           <div className="provider-catalog-details">
@@ -486,6 +522,26 @@ function parseModels(value: string) {
     .split(/\r?\n|,/)
     .map((model) => model.trim())
     .filter(Boolean);
+}
+
+function parseEnvOverrides(value: string) {
+  const entries = value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"))
+    .map((line) => {
+      const separator = line.indexOf("=");
+      if (separator < 0) return [line, ""] as const;
+      return [line.slice(0, separator).trim(), line.slice(separator + 1).trim()] as const;
+    })
+    .filter(([key]) => key);
+  return Object.fromEntries(entries);
+}
+
+function formatEnvOverrides(value: Record<string, string>) {
+  return Object.entries(value)
+    .map(([key, entryValue]) => `${key}=${entryValue}`)
+    .join("\n");
 }
 
 function oauthDescription(presetKey: string) {

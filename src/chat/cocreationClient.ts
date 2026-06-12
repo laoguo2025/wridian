@@ -7,10 +7,19 @@ export type CoCreateEdit = {
   rationale?: string | null;
 };
 
+export type CoCreateFileOperation = {
+  action: string;
+  library: string;
+  message: string;
+  ok: boolean;
+  path: string;
+};
+
 export type CoCreateResponse = {
   contextLoadStatus: PromptContextLoadStatus[];
   reply: string;
   edits: CoCreateEdit[];
+  fileOperations: CoCreateFileOperation[];
   memoriesUsed: string[];
   memoriesWritten: string[];
 };

@@ -16,6 +16,7 @@ const MEMORY_BRANCHES: [(&str, &str, &str); 9] = [
     ("skill", "SKILL.md", "技能生产准则"),
     ("awareness", "AWARENESS.md", "反思机制"),
 ];
+const LEGACY_MEMORY_MIGRATION_MARKER: &str = ".legacy-migration-complete";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -275,7 +276,7 @@ fn read_memory_tree_files(data_dir: &Path) -> Result<MemoryTreeResponse, String>
             description: "叶子才写具体生命记录、作品记忆、知识卡、技能和反思。".to_string(),
             path: None,
             content: None,
-            children: leaf_nodes(data_dir, &root)?,
+            children: leaf_nodes(&root)?,
         },
     ];
     if roots[2].children.is_empty() {
@@ -386,7 +387,7 @@ fn ensure_memory_tree_files(data_dir: &Path) -> Result<(), String> {
     for (relative, content) in default_memory_tree_files() {
         write_memory_tree_file_if_missing(&root.join(relative), content)?;
     }
-    migrate_legacy_memory_files(data_dir, &root)?;
+    run_legacy_memory_migration_once(&root)?;
     for (branch, _, _) in MEMORY_BRANCHES {
         fs::create_dir_all(root.join("leaves").join(branch))
             .map_err(|error| format!("记忆树叶子目录创建失败：{error}"))?;
@@ -511,7 +512,7 @@ fn branch_nodes(root: &Path) -> Result<Vec<MemoryTreeNode>, String> {
         .collect()
 }
 
-fn leaf_nodes(data_dir: &Path, root: &Path) -> Result<Vec<MemoryTreeNode>, String> {
+fn leaf_nodes(root: &Path) -> Result<Vec<MemoryTreeNode>, String> {
     let mut nodes = Vec::new();
     for (branch, file, description) in MEMORY_BRANCHES {
         let mut node = folder_node(
@@ -520,10 +521,9 @@ fn leaf_nodes(data_dir: &Path, root: &Path) -> Result<Vec<MemoryTreeNode>, Strin
             format!("{description} 的具体叶子；规则见 branches/{file}。"),
         )?;
         if branch == "knowledge" {
-            node.children
-                .push(knowledge_cards_folder_node(data_dir, root)?);
-            node.children
-                .sort_by(|left, right| left.label.cmp(&right.label));
+            node.description =
+                "知识调用分支只记录调用机制和用户确认沉淀的记忆叶子，不同步知识库运行文件。"
+                    .to_string();
         }
         nodes.push(node);
     }
@@ -550,11 +550,7 @@ fn folder_node(path: &Path, label: String, description: String) -> Result<Memory
                     name,
                     "作品项目记忆分组。".to_string(),
                 )?);
-            } else if safe_child
-                .extension()
-                .and_then(|extension| extension.to_str())
-                == Some("md")
-            {
+            } else if is_visible_memory_leaf_file(&safe_child, &name) {
                 children.push(arbitrary_file_node(
                     &safe_child,
                     name,
@@ -579,67 +575,32 @@ fn folder_node(path: &Path, label: String, description: String) -> Result<Memory
     })
 }
 
-fn knowledge_cards_folder_node(data_dir: &Path, root: &Path) -> Result<MemoryTreeNode, String> {
-    let knowledge = Some(resolved_knowledge_root(data_dir)?).filter(|path| path.is_dir());
-    let mut children = Vec::new();
-    if let Some(knowledge_root) = &knowledge {
-        collect_knowledge_card_nodes(knowledge_root, &mut children)?;
-    }
-    children.sort_by(|left, right| left.label.cmp(&right.label));
-    Ok(MemoryTreeNode {
-        id: root
-            .join("leaves")
-            .join("knowledge")
-            .join("cards")
-            .to_string_lossy()
-            .into_owned(),
-        kind: "folder".to_string(),
-        label: "cards".to_string(),
-        description: "从当前知识库同步读取的知识卡。".to_string(),
-        path: knowledge.map(|path| path.to_string_lossy().into_owned()),
-        content: None,
-        children,
-    })
+fn is_visible_memory_leaf_file(path: &Path, name: &str) -> bool {
+    path.extension().and_then(|extension| extension.to_str()) == Some("md")
+        && !is_internal_memory_runtime_file(name)
 }
 
-fn collect_knowledge_card_nodes(
-    root: &Path,
-    nodes: &mut Vec<MemoryTreeNode>,
-) -> Result<(), String> {
-    if !root.is_dir() {
+fn is_internal_memory_runtime_file(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    lower == "project.md"
+        || lower == "compressed.md"
+        || lower == "compact-summary.md"
+        || lower == "hot.md"
+        || lower.starts_with("knowledge-fold-")
+        || lower.starts_with("知识库体检-")
+}
+
+fn run_legacy_memory_migration_once(root: &Path) -> Result<(), String> {
+    let marker = root.join(LEGACY_MEMORY_MIGRATION_MARKER);
+    if marker.exists() {
         return Ok(());
     }
-    for entry in fs::read_dir(root).map_err(|error| format!("知识卡目录读取失败：{error}"))?
-    {
-        let entry = entry.map_err(|error| format!("知识卡目录读取失败：{error}"))?;
-        let path = entry.path();
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with('.') {
-            continue;
-        }
-        let Some(safe_path) = safe_child_path(root, &path, "知识卡")? else {
-            continue;
-        };
-        if safe_path.is_dir() {
-            collect_knowledge_card_nodes(&safe_path, nodes)?;
-        } else if safe_path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            == Some("md")
-        {
-            let mut node = arbitrary_file_node(
-                &safe_path,
-                name,
-                "当前知识库中的 Markdown 知识卡。".to_string(),
-            )?;
-            node.kind = "knowledge-card".to_string();
-            nodes.push(node);
-        }
-    }
-    Ok(())
+    migrate_legacy_memory_files(root)?;
+    fs::write(&marker, crate::runtime::iso_timestamp())
+        .map_err(|error| format!("记忆树迁移标记写入失败：{error}"))
 }
 
-fn migrate_legacy_memory_files(_data_dir: &Path, root: &Path) -> Result<(), String> {
+fn migrate_legacy_memory_files(root: &Path) -> Result<(), String> {
     copy_legacy_if_target_empty(&root.join("partner").join("soul.md"), &root.join("SOUL.md"))?;
     copy_legacy_if_target_empty(
         &root.join("global").join("AGENTS.md"),
@@ -657,7 +618,12 @@ fn copy_legacy_if_target_empty(source: &Path, target: &Path) -> Result<(), Strin
     if !source.is_file() || target.exists() {
         return Ok(());
     }
-    let content = fs::read_to_string(source).unwrap_or_default();
+    let content = fs::read_to_string(source).map_err(|error| {
+        format!(
+            "旧记忆文件读取失败（{}）：{error}",
+            source.to_string_lossy()
+        )
+    })?;
     if content.trim().is_empty() {
         return Ok(());
     }
@@ -683,13 +649,31 @@ mod tests {
     }
 
     #[test]
-    fn memory_tree_reads_knowledge_cards_from_selected_source_without_mirror_copy() {
+    fn memory_tree_does_not_sync_knowledge_files_as_leaves() {
         let data_dir = temp_data_dir("knowledge-sync");
         let work_root = data_dir.join("works");
         let knowledge_root = data_dir.join("knowledge");
         fs::create_dir_all(&work_root).expect("create works");
-        fs::create_dir_all(&knowledge_root).expect("create knowledge");
+        fs::create_dir_all(knowledge_root.join("00知识库治理").join("folds"))
+            .expect("create knowledge");
         fs::write(knowledge_root.join("人物.md"), "第一版").expect("write knowledge");
+        fs::write(
+            knowledge_root
+                .join("00知识库治理")
+                .join("知识库体检-2026-06-12.md"),
+            "---\nwridian_generated: true\nwridian_type: knowledge_health_report\n---\n体检",
+        )
+        .expect("write health report");
+        fs::write(
+            knowledge_root
+                .join("00知识库治理")
+                .join("folds")
+                .join("knowledge-fold-20260612.md"),
+            "---\nwridian_generated: true\nwridian_type: knowledge_fold\n---\nfold",
+        )
+        .expect("write fold");
+        fs::write(knowledge_root.join("compressed.md"), "知识库压缩运行文件")
+            .expect("write compressed");
         fs::create_dir_all(crate::runtime::runtime_root(&data_dir)).expect("create runtime");
         fs::write(
             crate::runtime::workspace_config_path(&data_dir),
@@ -702,18 +686,12 @@ mod tests {
         )
         .expect("write workspace config");
 
-        let first = read_memory_tree_files(&data_dir).expect("read first tree");
-        let knowledge_leaf =
-            find_node_by_label(&first.roots, "人物.md").expect("knowledge leaf exists");
-        assert_eq!(knowledge_leaf.kind, "knowledge-card");
-        assert_eq!(knowledge_leaf.content.as_deref(), Some("第一版"));
+        let tree = read_memory_tree_files(&data_dir).expect("read tree");
 
-        fs::write(knowledge_root.join("人物.md"), "第二版").expect("update knowledge");
-        let second = read_memory_tree_files(&data_dir).expect("read second tree");
-        let updated_leaf =
-            find_node_by_label(&second.roots, "人物.md").expect("updated leaf exists");
-
-        assert_eq!(updated_leaf.content.as_deref(), Some("第二版"));
+        assert!(find_node_by_label(&tree.roots, "人物.md").is_none());
+        assert!(find_node_by_label(&tree.roots, "知识库体检-2026-06-12.md").is_none());
+        assert!(find_node_by_label(&tree.roots, "knowledge-fold-20260612.md").is_none());
+        assert!(find_node_by_label(&tree.roots, "compressed.md").is_none());
         assert!(!memory_tree_files_root(&data_dir)
             .join("leaves/knowledge/cards/人物.md")
             .exists());
@@ -808,6 +786,24 @@ mod tests {
     }
 
     #[test]
+    fn legacy_memory_migration_runs_once_after_marker_is_written() {
+        let data_dir = temp_data_dir("legacy-migrate-once");
+        let root = memory_tree_files_root(&data_dir);
+        fs::create_dir_all(root.join("partner")).expect("create legacy partner");
+        fs::write(root.join("partner").join("soul.md"), "旧 SOUL").expect("write legacy");
+
+        ensure_memory_tree_files(&data_dir).expect("first ensure");
+        assert!(root.join(LEGACY_MEMORY_MIGRATION_MARKER).is_file());
+
+        fs::remove_file(root.join("SOUL.md")).expect("remove migrated target");
+        ensure_memory_tree_files(&data_dir).expect("second ensure");
+
+        let content = fs::read_to_string(root.join("SOUL.md")).expect("read default target");
+        assert!(content.contains("Wridian 的图腾"));
+        assert!(!content.contains("旧 SOUL"));
+    }
+
+    #[test]
     fn delete_memory_tree_file_rejects_project_core_files() {
         let data_dir = temp_data_dir("delete-core");
         let work_root = data_dir.join("works");
@@ -843,7 +839,7 @@ mod tests {
     }
 
     #[test]
-    fn memory_tree_includes_project_core_files() {
+    fn memory_tree_hides_project_core_runtime_files_from_leaf_view() {
         let data_dir = temp_data_dir("project-core-visible");
         let work_root = data_dir.join("works");
         let project = work_root.join("作品A");
@@ -862,8 +858,8 @@ mod tests {
 
         let tree = read_memory_tree_files(&data_dir).expect("read tree");
 
-        assert!(find_node_by_label(&tree.roots, "project.md").is_some());
-        assert!(find_node_by_label(&tree.roots, "compressed.md").is_some());
+        assert!(find_node_by_label(&tree.roots, "project.md").is_none());
+        assert!(find_node_by_label(&tree.roots, "compressed.md").is_none());
     }
 
     #[test]
@@ -1145,7 +1141,7 @@ fn stable_scope_id(value: &str) -> String {
 }
 
 fn chrono_like_date() -> String {
-    let seconds = crate::runtime::iso_timestamp().parse::<i64>().unwrap_or(0);
+    let seconds = crate::runtime::unix_timestamp_seconds();
     let days = seconds.div_euclid(86_400);
     civil_date_from_days(days)
 }

@@ -7,7 +7,6 @@ const SKILLS_RESOURCE_ROOT: &str = "resources/skills";
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CreativeSkillSources {
-    knowledge_ops: CreativeSkillSource,
     work_decompose: CreativeSkillSource,
     knowledge_card: CreativeSkillSource,
     author_distill: CreativeSkillSource,
@@ -33,34 +32,20 @@ pub(crate) fn wridian_get_creative_skill_sources(app: AppHandle) -> CreativeSkil
 
 fn creative_skill_sources_from_resource_root(resource_root: Option<&Path>) -> CreativeSkillSources {
     CreativeSkillSources {
-        knowledge_ops: builtin_skill_source(
-            resource_root,
-            "知识库运维",
-            Path::new("zhishiku-skill").join("SKILL.md"),
-        ),
         work_decompose: builtin_skill_source(
             resource_root,
             "作品拆解",
-            Path::new("zhishiku-skill")
-                .join("references")
-                .join("embedded-skills")
-                .join("chaijie-skill.md"),
+            Path::new("work-decompose").join("SKILL.md"),
         ),
         knowledge_card: builtin_skill_source(
             resource_root,
             "知识卡提炼",
-            Path::new("zhishiku-skill")
-                .join("references")
-                .join("embedded-skills")
-                .join("tilian-skill.md"),
+            Path::new("knowledge-card").join("SKILL.md"),
         ),
         author_distill: builtin_skill_source(
             resource_root,
             "大神蒸馏",
-            Path::new("zhishiku-skill")
-                .join("references")
-                .join("embedded-skills")
-                .join("zhengliu-skill.md"),
+            Path::new("author-distill").join("SKILL.md"),
         ),
     }
 }
@@ -90,24 +75,22 @@ mod tests {
             .join("skills");
         let sources = creative_skill_sources_from_resource_root(Some(&resource_root));
 
-        assert!(sources.knowledge_ops.available);
         assert!(sources.work_decompose.available);
         assert!(sources.knowledge_card.available);
         assert!(sources.author_distill.available);
-        assert_eq!(sources.knowledge_ops.source, "builtin-resource");
         assert!(
             sources
-                .knowledge_ops
+                .work_decompose
                 .path
                 .as_deref()
                 .unwrap_or_default()
-                .ends_with("resources\\skills\\zhishiku-skill\\SKILL.md")
+                .ends_with("resources\\skills\\work-decompose\\SKILL.md")
                 || sources
-                    .knowledge_ops
+                    .work_decompose
                     .path
                     .as_deref()
                     .unwrap_or_default()
-                    .ends_with("resources/skills/zhishiku-skill/SKILL.md")
+                    .ends_with("resources/skills/work-decompose/SKILL.md")
         );
     }
 
@@ -115,7 +98,6 @@ mod tests {
     fn creative_skill_sources_report_missing_resources() {
         let sources = creative_skill_sources_from_resource_root(Some(Path::new("missing-skills")));
 
-        assert!(!sources.knowledge_ops.available);
         assert!(!sources.work_decompose.available);
         assert!(!sources.knowledge_card.available);
         assert!(!sources.author_distill.available);

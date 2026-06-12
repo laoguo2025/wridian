@@ -43,6 +43,7 @@ export function WridianPromptEditor({
   suggestions: PromptSuggestion[];
   value: string;
 }) {
+  const [editorError, setEditorError] = useState("");
   const initialConfig = useMemo(
     () => ({
       namespace: "WridianChatInput",
@@ -52,7 +53,7 @@ export function WridianPromptEditor({
         root: "prompt-editor-root",
       },
       onError(error: Error) {
-        console.error("Wridian chat input error", error);
+        setEditorError(`输入框异常：${error.message}`);
       },
     }),
     [],
@@ -80,6 +81,7 @@ export function WridianPromptEditor({
         <PromptPastePlugin onImagePaste={onImagePaste} />
         <PromptTypeaheadPlugin onSelectSuggestion={onSelectSuggestion} suggestions={suggestions} />
         <PromptValueSyncPlugin value={value} />
+        {editorError ? <div className="prompt-editor-error">{editorError}</div> : null}
       </div>
     </LexicalComposer>
   );
