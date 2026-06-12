@@ -36,7 +36,7 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
   - `src-tauri/src/runtime.rs`：本地数据目录、默认 Vault、运行时文件路径。
   - `src-tauri/src/workspace.rs`：本地作品目录、文件树、正文读写。
   - `src-tauri/src/model_accounts.rs`：多供应商模型账户配置、凭据存储、模型切换和连接测试。
-- NSIS 卸载清数据 hook：`src-tauri/nsis-hooks.nsh`，用于补齐 Tauri 默认清理路径未覆盖的 `$APPDATA\Wridian` / `$LOCALAPPDATA\Wridian`、当前配置知识库及常见用户目录下 `Wridian知识库` 的 Wridian 运行产物（`.wridian`、`.wridian-trash`、`hot.md`、fold、体检报告）和 Wridian 已知模型供应商 Windows 凭据目标；不会直接删除整个知识库根目录。
+- NSIS 卸载清数据 hook：`src-tauri/nsis-hooks.nsh` 由 `.workbench/tools/generate-nsis-hooks.mjs` 生成，用于补齐 Tauri 默认清理路径未覆盖的 `$APPDATA\Wridian` / `$LOCALAPPDATA\Wridian`、Tauri 标识符缓存目录、用户聊天和会话数据、默认自动创建的常见 `Wridian知识库` 根目录，以及 Wridian 已知模型供应商 Windows 凭据目标；若用户手动选择了自定义知识库，只清其中 Wridian 运行产物（`.wridian`、`.wridian-trash`、`hot.md`、fold、体检报告），不直接删除整个自定义知识库根目录。
 - `src-tauri/src/memory.rs`：文件化记忆树、作用域记忆和知识卡读取。
   - `src-tauri/src/cocreation.rs`：对话请求上下文组装和模型回复。
 - `src-tauri/src/bridge.rs`：作品域和知识域之间的显式 frontmatter 关系写入命令。
