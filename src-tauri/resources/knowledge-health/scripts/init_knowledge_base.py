@@ -201,8 +201,10 @@ def write_if_missing(path: Path, content: str, executable: bool = False) -> bool
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Initialize knowledge base")
-    parser.add_argument("--root", default="~/Desktop/Wridian知识库", help="target knowledge base root")
+    parser.add_argument("--root", default=os.environ.get("WRIDIAN_KNOWLEDGE_ROOT"), help="target knowledge base root")
     args = parser.parse_args()
+    if not args.root:
+        parser.error("pass --root or set WRIDIAN_KNOWLEDGE_ROOT")
 
     root = Path(os.path.expanduser(args.root)).resolve()
     root.mkdir(parents=True, exist_ok=True)

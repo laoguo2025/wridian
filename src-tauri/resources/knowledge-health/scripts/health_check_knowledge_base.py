@@ -448,9 +448,11 @@ def write_health_report(root: Path, issues: list[str], review_marks: list[str]) 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Health check knowledge base")
-    parser.add_argument("--root", default="~/Desktop/Wridian知识库")
+    parser.add_argument("--root", default=os.environ.get("WRIDIAN_KNOWLEDGE_ROOT"))
     parser.add_argument("--report", action="store_true", help="write 00知识库治理/知识库体检-YYYYMMDDTHHMMSS*.md")
     args = parser.parse_args()
+    if not args.root:
+        parser.error("pass --root or set WRIDIAN_KNOWLEDGE_ROOT")
 
     root = Path(os.path.expanduser(args.root)).resolve()
     issues = (

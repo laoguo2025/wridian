@@ -29,13 +29,7 @@ description: >
 
 ## Phase 0：知识库定位
 
-默认根目录：
-
-```text
-/Users/mac/Desktop/Wridian知识库
-```
-
-若该目录不存在，再询问用户路径。所有产物路径以 `$ROOT` 表示。
+知识库根目录优先来自 Wridian 当前库；脚本化执行时由参数或 `WRIDIAN_KNOWLEDGE_ROOT` 传入。无法定位时先询问用户路径。所有产物路径以 `$ROOT` 表示。
 
 ## Phase 0.5：上游拆解入口闸门
 

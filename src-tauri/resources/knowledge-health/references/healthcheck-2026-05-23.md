@@ -4,9 +4,9 @@
 
 ## 已验证通过项
 
-- 知识库路径：`/Users/mac/Desktop/Wridian知识库`
+- 知识库路径：历史验证环境的本机知识库根目录。
 - `health-check.sh`：通过。
-- `scripts/health_check_knowledge_base.py --root /Users/mac/Desktop/Wridian知识库`：通过。
+- `scripts/health_check_knowledge_base.py --root <知识库根目录>`：通过。
 - `02拆解报告` 专项扫描：131 个案例；缺报告 0；缺分析笔记/事件流 0；README 陈旧缺失标记 0；字面 `[truncated]` / `...[truncated]` 标记 0。
 - `03-07` 卡片总数：1836。
 - `08大神蒸馏`：16 个作者小 skill；均有 `SKILL.md`、frontmatter description、自包含案例证据与边界说明；未发现本地路径依赖。

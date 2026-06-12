@@ -68,13 +68,9 @@ description: |
 - "拆解 A 和 B"（同一作者两部）→ 并行建目录+提取，然后分批启动精读分析（受 max_concurrent=3 限制，可能需要分两批）。
 - "提炼 A" + "拆解并提炼 B"（同一作者）→ A 走 tilian 快速路径，B 走完整流程，最后合并做交叉验证评级。
 
-## 默认知识库路径
+## 知识库路径
 
-```text
-/Users/mac/Desktop/Wridian知识库
-```
-
-以下用 `$ROOT` 表示。
+优先使用用户在 Wridian 当前库中选择的知识库根目录；脚本化执行时由参数或 `WRIDIAN_KNOWLEDGE_ROOT` 传入。以下用 `$ROOT` 表示。
 
 ## 02 目录标准
 

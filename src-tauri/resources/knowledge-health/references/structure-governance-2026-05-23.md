@@ -37,7 +37,7 @@
 治理后已验证：
 
 - `health-check.sh`：通过。
-- `scripts/health_check_knowledge_base.py --root /Users/mac/Desktop/Wridian知识库`：通过。
+- `scripts/health_check_knowledge_base.py --root <知识库根目录>`：通过。
 - `02拆解报告` 专项：131 个案例；缺报告 0；缺笔记 0；README 陈旧缺失标记 0；字面截断标记 0。
 - `03/04/05/06/07` 受 SCHEMA 限定的旧分类目录残留：0。
 - `03-07` 知识卡总数仍为 1836，迁移未丢卡。

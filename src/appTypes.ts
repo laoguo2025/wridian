@@ -137,33 +137,6 @@ export type KnowledgeGraphState = {
   warnings: string[];
 };
 
-export type KnowledgeCacheResponse = {
-  ok: boolean;
-  manifestPath: string;
-  generatedAt: string;
-  fileCount: number;
-  linkCount: number;
-  unresolvedLinkCount: number;
-  warnings: string[];
-};
-
-export type KnowledgeHotCacheResponse = {
-  ok: boolean;
-  path: string;
-  updatedAt: string;
-  fileCount: number;
-  lineCount: number;
-  warnings: string[];
-};
-
-export type KnowledgeFoldResponse = {
-  ok: boolean;
-  path: string;
-  createdAt: string;
-  sourceCount: number;
-  warnings: string[];
-};
-
 export type KnowledgeHealthResponse = {
   ok: boolean;
   checkedAt: string;
@@ -277,76 +250,4 @@ export type BridgeRelationResponse = {
   inserted: boolean;
   message: string;
   warnings: string[];
-};
-
-export type MetadataIndexState = {
-  libraries: MetadataLibraryIndex[];
-  warnings: string[];
-};
-
-export type MetadataLibraryIndex = {
-  library: "works" | "knowledge" | string;
-  rootPath?: string | null;
-  files: MetadataFile[];
-  links: MetadataLink[];
-  backlinks: MetadataBacklink[];
-  unresolvedLinks: MetadataUnresolvedLink[];
-};
-
-export type MetadataFile = {
-  id: string;
-  library: "works" | "knowledge" | string;
-  path: string;
-  relativePath: string;
-  title: string;
-  aliases: string[];
-  tags: string[];
-  frontmatter: Record<string, string[]>;
-  outgoingLinks: MetadataLink[];
-  backlinks: MetadataBacklink[];
-};
-
-export type MetadataLink = {
-  sourceId: string;
-  sourceLibrary: "works" | "knowledge" | string;
-  sourcePath: string;
-  sourceRelativePath: string;
-  rawTarget: string;
-  normalizedTarget: string;
-  displayText?: string | null;
-  section?: string | null;
-  embed: boolean;
-  frontmatterField?: string | null;
-  targetId?: string | null;
-  targetLibrary?: "works" | "knowledge" | string | null;
-  targetPath?: string | null;
-  targetRelativePath?: string | null;
-  resolved: boolean;
-  ambiguous: boolean;
-};
-
-export type MetadataBacklink = {
-  targetId: string;
-  targetLibrary: "works" | "knowledge" | string;
-  targetPath: string;
-  targetRelativePath: string;
-  sourceId: string;
-  sourceLibrary: "works" | "knowledge" | string;
-  sourcePath: string;
-  sourceRelativePath: string;
-  rawTarget: string;
-  frontmatterField?: string | null;
-  embed: boolean;
-};
-
-export type MetadataUnresolvedLink = {
-  sourceId: string;
-  sourceLibrary: "works" | "knowledge" | string;
-  sourcePath: string;
-  sourceRelativePath: string;
-  rawTarget: string;
-  normalizedTarget: string;
-  frontmatterField?: string | null;
-  embed: boolean;
-  reason: "not_found" | "ambiguous" | string;
 };

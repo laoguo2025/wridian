@@ -1,9 +1,20 @@
 #!/usr/bin/env bash
 # 知识库一致性校验。用法: bash health-check.sh [知识库路径] [--deep]
 # --deep: 开启内容忠实度抽查（防知识腐烂）
-ROOT="${1:-$HOME/Desktop/Wridian知识库}"
+ROOT="${WRIDIAN_KNOWLEDGE_ROOT:-}"
 DEEP=false
-[[ "$*" == *"--deep"* ]] && DEEP=true
+for arg in "$@"; do
+  if [ "$arg" = "--deep" ]; then
+    DEEP=true
+  else
+    ROOT="$arg"
+  fi
+done
+if [ -z "$ROOT" ]; then
+  echo "用法: bash health-check.sh [知识库路径] [--deep]"
+  echo "或先设置 WRIDIAN_KNOWLEDGE_ROOT。"
+  exit 2
+fi
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'

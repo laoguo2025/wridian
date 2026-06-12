@@ -556,14 +556,28 @@ const DEFAULT_KNOWLEDGE_GRAPH_FIT_RATIO = 0.86;
 
 function buildKnowledgeGraphLayout(graph: KnowledgeGraphState) {
   const limited = graph.nodes.slice(0, MAX_KNOWLEDGE_GRAPH_NODES);
+  const depthBuckets = new Map<number, KnowledgeGraphNode[]>();
+  for (const node of limited) {
+    const depth = knowledgeGraphNodeDepth(node);
+    const bucket = depthBuckets.get(depth);
+    if (bucket) {
+      bucket.push(node);
+    } else {
+      depthBuckets.set(depth, [node]);
+    }
+  }
+  const siblingPositionById = new Map<string, { index: number; count: number }>();
+  for (const siblings of depthBuckets.values()) {
+    siblings.forEach((node, index) => {
+      siblingPositionById.set(node.id, { index, count: Math.max(1, siblings.length) });
+    });
+  }
   const nodes = limited.map((node, index): KnowledgeGraphLayoutNode => {
     const depth = knowledgeGraphNodeDepth(node);
-    const depthSiblings = limited.filter((candidate) => knowledgeGraphNodeDepth(candidate) === depth);
-    const siblingIndex = depthSiblings.findIndex((candidate) => candidate.id === node.id);
-    const siblingCount = Math.max(1, depthSiblings.length);
+    const siblingPosition = siblingPositionById.get(node.id) ?? { index: 0, count: 1 };
     const groupHash = stableNumber(`${node.group}:${node.id}`);
     const depthRing = 120 + Math.min(depth, 7) * 58 + (node.kind === "folder" ? 0 : 28);
-    const angle = ((siblingIndex / siblingCount) * 360 + (depth % 2) * 23 + (groupHash % 22)) * (Math.PI / 180);
+    const angle = ((siblingPosition.index / siblingPosition.count) * 360 + (depth % 2) * 23 + (groupHash % 22)) * (Math.PI / 180);
     const radius = knowledgeGraphNodeRadius(node);
     const showLabel = node.kind === "folder" || index < 80 || (node.backlinkCount ?? 0) + (node.outgoingCount ?? 0) >= 4;
     const labelRadius = showLabel ? Math.min(92, Math.max(22, node.label.length * 4.2)) : 0;
