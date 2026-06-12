@@ -51,10 +51,6 @@ const GOOGLE_OAUTH_CALLBACK_PATH: &str = "/oauth2callback";
 const GOOGLE_OAUTH_REFRESH_SKEW_SECONDS: u64 = 60;
 const GOOGLE_GEMINI_CLOUDCODE_BASE_URL: &str = "cloudcode-pa://google";
 const GOOGLE_CODE_ASSIST_ENDPOINT: &str = "https://cloudcode-pa.googleapis.com";
-const GOOGLE_CODE_ASSIST_FALLBACK_ENDPOINTS: &[&str] = &[
-    "https://daily-cloudcode-pa.sandbox.googleapis.com",
-    "https://autopush-cloudcode-pa.sandbox.googleapis.com",
-];
 const GOOGLE_CODE_ASSIST_FREE_TIER_ID: &str = "free-tier";
 const GOOGLE_CODE_ASSIST_LEGACY_TIER_ID: &str = "legacy-tier";
 const GOOGLE_CODE_ASSIST_STANDARD_TIER_ID: &str = "standard-tier";
@@ -903,9 +899,19 @@ pub(crate) fn read_active_model_settings(
         .map(str::trim)
         .filter(|id| !id.is_empty())
         .or(file.active_model_id.as_deref());
-    let selected = selected_id
-        .and_then(|id| configured.iter().find(|model| model.id == id))
-        .unwrap_or(&configured[0]);
+    let selected = if let Some(requested_id) = requested_model_id
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    {
+        configured
+            .iter()
+            .find(|model| model.id == requested_id)
+            .ok_or_else(|| "选择的模型已失效，请重新选择模型。".to_string())?
+    } else {
+        selected_id
+            .and_then(|id| configured.iter().find(|model| model.id == id))
+            .unwrap_or(&configured[0])
+    };
     let provider = file
         .providers
         .iter()
@@ -1992,24 +1998,17 @@ async fn load_google_code_assist(
     if !project_id.trim().is_empty() {
         body["cloudaicompanionProject"] = json!(project_id.trim());
     }
-    let mut endpoints = Vec::with_capacity(1 + GOOGLE_CODE_ASSIST_FALLBACK_ENDPOINTS.len());
-    endpoints.push(GOOGLE_CODE_ASSIST_ENDPOINT);
-    endpoints.extend_from_slice(GOOGLE_CODE_ASSIST_FALLBACK_ENDPOINTS);
-    let mut last_error = None;
-    for endpoint in endpoints {
-        let url = format!("{endpoint}/v1internal:loadCodeAssist");
-        match post_google_code_assist_json(&url, &body, access_token, model).await {
-            Ok(value) => return Ok(parse_google_code_assist_project_info(&value)),
-            Err(error) if error.contains("SECURITY_POLICY_VIOLATED") => {
-                return Ok(GoogleCodeAssistProjectInfo {
-                    current_tier_id: GOOGLE_CODE_ASSIST_STANDARD_TIER_ID.to_string(),
-                    cloudaicompanion_project: project_id.trim().to_string(),
-                });
-            }
-            Err(error) => last_error = Some(error),
+    let url = format!("{GOOGLE_CODE_ASSIST_ENDPOINT}/v1internal:loadCodeAssist");
+    match post_google_code_assist_json(&url, &body, access_token, model).await {
+        Ok(value) => Ok(parse_google_code_assist_project_info(&value)),
+        Err(error) if error.contains("SECURITY_POLICY_VIOLATED") => {
+            Ok(GoogleCodeAssistProjectInfo {
+                current_tier_id: GOOGLE_CODE_ASSIST_STANDARD_TIER_ID.to_string(),
+                cloudaicompanion_project: project_id.trim().to_string(),
+            })
         }
+        Err(error) => Err(error),
     }
-    Err(last_error.unwrap_or_else(|| "Gemini Code Assist project 发现失败。".to_string()))
 }
 
 async fn onboard_google_code_assist_user(
@@ -2967,6 +2966,34 @@ mod tests {
         assert_eq!(provider.base_url, GOOGLE_GEMINI_CLOUDCODE_BASE_URL);
         assert_eq!(provider.auth_style, "oauth_external");
         assert!(validate_base_url(&provider.base_url).is_ok());
+    }
+
+    #[test]
+    fn requested_model_id_must_exist_before_sending_prompt() {
+        let data_dir = test_data_dir("requested-model-missing");
+        let file = StoredModelAccountsFile {
+            schema_version: 2,
+            active_model_id: Some("provider-a::model-a".to_string()),
+            providers: vec![StoredModelProviderFile {
+                id: "provider-a".to_string(),
+                preset_key: None,
+                provider_name: "Provider A".to_string(),
+                provider_type: None,
+                protocol: "openai-compatible".to_string(),
+                auth_style: "auth_token".to_string(),
+                base_url: "https://api.example.com/v1".to_string(),
+                models: vec!["model-a".to_string()],
+                extra_env: std::collections::BTreeMap::new(),
+                key_stored: false,
+                api_key: Some("secret".to_string()),
+            }],
+        };
+        write_model_accounts_file(&data_dir, &file).expect("write accounts file");
+
+        let error = read_active_model_settings(&data_dir, Some("provider-b::model-b"))
+            .expect_err("missing requested model should fail");
+
+        assert!(error.contains("选择的模型已失效"));
     }
 
     #[test]

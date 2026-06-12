@@ -18,7 +18,7 @@ pub(crate) fn safe_child_path(
             path.to_string_lossy()
         )
     })?;
-    if metadata.file_type().is_symlink() || is_reparse_point(&metadata) {
+    if is_symlink_or_reparse(&metadata) {
         return Ok(None);
     }
     let canonical = path
@@ -28,6 +28,10 @@ pub(crate) fn safe_child_path(
         return Ok(None);
     }
     Ok(Some(canonical))
+}
+
+pub(crate) fn is_symlink_or_reparse(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_symlink() || is_reparse_point(metadata)
 }
 
 #[cfg(windows)]

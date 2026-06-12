@@ -1,4 +1,4 @@
-use crate::path_safety::safe_child_path;
+use crate::path_safety::{is_symlink_or_reparse, safe_child_path};
 use crate::runtime::{
     default_knowledge_root, ensure_workspace, iso_timestamp, vault_root, workspace_config_path,
     wridian_data_dir,
@@ -330,9 +330,8 @@ pub(crate) fn apply_workspace_write_file(
     if !is_supported_editable_file(&path) {
         return Err("只能写入 md、txt、docx 文件。".to_string());
     }
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| format!("文件夹创建失败：{error}"))?;
-    }
+    ensure_safe_workspace_parent(&root, &path, "写入文件")?;
+    ensure_safe_workspace_write_target(&root, &path, "写入文件")?;
     write_editable_file_content(&path, content)?;
     Ok(path)
 }
@@ -344,7 +343,9 @@ pub(crate) fn apply_workspace_create_folder(
 ) -> Result<PathBuf, String> {
     let root = workspace_library_root(data_dir, library)?;
     let path = resolve_relative_workspace_target(&root, relative_path)?;
+    ensure_safe_workspace_parent(&root, &path, "创建文件夹")?;
     fs::create_dir_all(&path).map_err(|error| format!("文件夹创建失败：{error}"))?;
+    ensure_safe_existing_workspace_path(&root, &path, "创建文件夹")?;
     Ok(path)
 }
 
@@ -441,6 +442,80 @@ fn resolve_relative_workspace_target(root: &Path, relative_path: &str) -> Result
         Ok(target)
     } else {
         Err("目标路径不在当前库内。".to_string())
+    }
+}
+
+fn ensure_safe_workspace_parent(root: &Path, path: &Path, label: &str) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("{label}目标缺少父目录。"))?;
+    if parent == root {
+        return Ok(());
+    }
+    let relative_parent = parent
+        .strip_prefix(root)
+        .map_err(|_| format!("{label}目标不在当前库内。"))?;
+    let mut current = root.to_path_buf();
+    for segment in relative_parent.components() {
+        current.push(segment.as_os_str());
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) => {
+                if is_symlink_or_reparse(&metadata) {
+                    return Err(format!("{label}目标路径包含链接或重解析点。"));
+                }
+                if !metadata.is_dir() {
+                    return Err(format!("{label}目标父路径不是文件夹。"));
+                }
+                let canonical = current
+                    .canonicalize()
+                    .map_err(|error| format!("{label}路径解析失败：{error}"))?;
+                if !canonical.starts_with(root) {
+                    return Err(format!("{label}目标路径不在当前库内。"));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                fs::create_dir_all(&current).map_err(|error| format!("文件夹创建失败：{error}"))?;
+                ensure_safe_existing_workspace_path(root, &current, label)?;
+            }
+            Err(error) => return Err(format!("{label}路径信息读取失败：{error}")),
+        }
+    }
+    Ok(())
+}
+
+fn ensure_safe_workspace_write_target(root: &Path, path: &Path, label: &str) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if is_symlink_or_reparse(&metadata) {
+                return Err(format!("{label}目标不能是链接或重解析点。"));
+            }
+            if !metadata.is_file() {
+                return Err(format!("{label}目标不是普通文件。"));
+            }
+            ensure_safe_existing_workspace_path(root, path, label)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("{label}目标路径信息读取失败：{error}")),
+    }
+}
+
+fn ensure_safe_existing_workspace_path(
+    root: &Path,
+    path: &Path,
+    label: &str,
+) -> Result<(), String> {
+    let metadata =
+        fs::symlink_metadata(path).map_err(|error| format!("{label}路径信息读取失败：{error}"))?;
+    if is_symlink_or_reparse(&metadata) {
+        return Err(format!("{label}目标不能是链接或重解析点。"));
+    }
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| format!("{label}路径解析失败：{error}"))?;
+    if canonical.starts_with(root) {
+        Ok(())
+    } else {
+        Err(format!("{label}目标路径不在当前库内。"))
     }
 }
 
@@ -547,7 +622,23 @@ pub(crate) fn resolved_knowledge_root(data_dir: &Path) -> Result<PathBuf, String
 }
 
 fn read_work_tree(root: &Path, base: &Path, library: &str) -> Result<Vec<WorkFileNode>, String> {
+    let mut visited = 0;
+    read_work_tree_inner(root, base, library, 0, &mut visited)
+}
+
+fn read_work_tree_inner(
+    root: &Path,
+    base: &Path,
+    library: &str,
+    depth: usize,
+    visited: &mut usize,
+) -> Result<Vec<WorkFileNode>, String> {
+    const MAX_WORK_TREE_DEPTH: usize = 24;
+    const MAX_WORK_TREE_NODES: usize = 5000;
     if !root.is_dir() {
+        return Ok(Vec::new());
+    }
+    if depth > MAX_WORK_TREE_DEPTH || *visited >= MAX_WORK_TREE_NODES {
         return Ok(Vec::new());
     }
     let mut nodes = Vec::new();
@@ -555,6 +646,12 @@ fn read_work_tree(root: &Path, base: &Path, library: &str) -> Result<Vec<WorkFil
     for entry in entries {
         let entry = entry.map_err(|error| format!("作品目录读取失败：{error}"))?;
         let path = entry.path();
+        if *visited >= MAX_WORK_TREE_NODES {
+            break;
+        }
+        if safe_child_path(base, &path, "文件树")?.is_none() {
+            continue;
+        }
         let name = entry.file_name().to_string_lossy().into_owned();
         if should_skip_entry(&name) {
             continue;
@@ -563,8 +660,9 @@ fn read_work_tree(root: &Path, base: &Path, library: &str) -> Result<Vec<WorkFil
         if should_skip_workspace_tree_node(library, &relative) {
             continue;
         }
+        *visited += 1;
         if path.is_dir() {
-            let children = read_work_tree(&path, base, library)?;
+            let children = read_work_tree_inner(&path, base, library, depth + 1, visited)?;
             nodes.push(WorkFileNode {
                 name,
                 path: path.to_string_lossy().into_owned(),
@@ -1213,6 +1311,69 @@ mod tests {
     }
 
     #[test]
+    fn workspace_tree_skips_directory_links_when_available() {
+        let data_dir = temp_data_dir("tree-link-skip");
+        let work_root = data_dir.join("user-works");
+        let outside = data_dir.join("outside");
+        fs::create_dir_all(&work_root).expect("create work root");
+        fs::create_dir_all(&outside).expect("create outside");
+        fs::write(work_root.join("正文.md"), "正文").expect("write work file");
+        fs::write(outside.join("secret.md"), "secret").expect("write outside file");
+        if create_dir_link(&outside, &work_root.join("linked")).is_err() {
+            return;
+        }
+        fs::create_dir_all(crate::runtime::runtime_root(&data_dir)).expect("create runtime");
+        fs::write(
+            workspace_config_path(&data_dir),
+            serde_json::json!({
+                "schemaVersion": 1,
+                "activeWorkRoot": work_root.to_string_lossy()
+            })
+            .to_string(),
+        )
+        .expect("write workspace config");
+
+        let info = workspace_info(&data_dir).expect("workspace info");
+        let names = info
+            .files
+            .iter()
+            .map(|node| node.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"正文.md"));
+        assert!(!names.contains(&"linked"));
+    }
+
+    #[test]
+    fn workspace_file_operations_reject_linked_parent_when_available() {
+        let data_dir = temp_data_dir("write-link-parent");
+        let work_root = data_dir.join("user-works");
+        let outside = data_dir.join("outside");
+        fs::create_dir_all(&work_root).expect("create work root");
+        fs::create_dir_all(&outside).expect("create outside");
+        if create_dir_link(&outside, &work_root.join("linked")).is_err() {
+            return;
+        }
+        fs::create_dir_all(crate::runtime::runtime_root(&data_dir)).expect("create runtime");
+        fs::write(
+            workspace_config_path(&data_dir),
+            serde_json::json!({
+                "schemaVersion": 1,
+                "activeWorkRoot": work_root.to_string_lossy()
+            })
+            .to_string(),
+        )
+        .expect("write workspace config");
+
+        assert!(
+            apply_workspace_write_file(&data_dir, "works", "linked/secret.md", "leak").is_err()
+        );
+        assert!(!outside.join("secret.md").exists());
+        assert!(apply_workspace_create_folder(&data_dir, "works", "linked/generated").is_err());
+        assert!(!outside.join("generated").exists());
+    }
+
+    #[test]
     fn workspace_info_uses_default_knowledge_root_without_user_selection() {
         let data_dir = temp_data_dir("default-knowledge-root");
         crate::runtime::ensure_workspace(&data_dir).expect("ensure workspace");
@@ -1355,5 +1516,15 @@ mod tests {
             writer.finish().map_err(|error| error.to_string())?;
         }
         fs::write(path, output.into_inner()).map_err(|error| error.to_string())
+    }
+
+    #[cfg(windows)]
+    fn create_dir_link(target: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::windows::fs::symlink_dir(target, link)
+    }
+
+    #[cfg(unix)]
+    fn create_dir_link(target: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(target, link)
     }
 }

@@ -1,4 +1,4 @@
-import { type CSSProperties, useEffect, useMemo, useState } from "react";
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import type { MemoryTreeNode, MemoryTreeState } from "../appTypes";
 import type { ProjectConfig } from "../chat/projectContext";
 import memoryTreeBase from "../assets/memory-tree-base.png";
@@ -34,6 +34,9 @@ export function MemoryDrawer({
   const selectedNode = useMemo(() => findMemoryNodeByPath(memoryTree.roots, selectedPath), [memoryTree.roots, selectedPath]);
   const [draft, setDraft] = useState(selectedNode?.content ?? "");
   const [transitionSaving, setTransitionSaving] = useState(false);
+  const selectedNodeRef = useRef<MemoryTreeNode | undefined>(selectedNode);
+  const draftRef = useRef(draft);
+  const filterTransitionSeqRef = useRef(0);
   const isBusy = saving || transitionSaving;
   const selectedProject = projects.find((project) => project.id === projectFilterId);
   const selectedCanDelete = canDeleteMemoryNode(selectedNode);
@@ -43,7 +46,15 @@ export function MemoryDrawer({
   }, [selectedNode?.content, selectedNode?.path]);
 
   useEffect(() => {
-    setProjectFilterId(selectedProjectId ?? "");
+    selectedNodeRef.current = selectedNode;
+  }, [selectedNode]);
+
+  useEffect(() => {
+    draftRef.current = draft;
+  }, [draft]);
+
+  useEffect(() => {
+    void changeProjectFilter(selectedProjectId ?? "");
   }, [selectedProjectId]);
 
   useEffect(() => {
@@ -59,6 +70,32 @@ export function MemoryDrawer({
       return await onSaveFile(selectedNode.path, draft);
     } finally {
       setTransitionSaving(false);
+    }
+  };
+
+  const saveCurrentDraftSnapshot = async () => {
+    const node = selectedNodeRef.current;
+    const currentDraft = draftRef.current;
+    if (!node?.path || currentDraft === (node.content ?? "")) return true;
+    setTransitionSaving(true);
+    try {
+      return await onSaveFile(node.path, currentDraft);
+    } finally {
+      setTransitionSaving(false);
+    }
+  };
+
+  const changeProjectFilter = async (nextProjectFilterId: string) => {
+    if (isBusy || nextProjectFilterId === projectFilterId) return;
+    const requestSeq = filterTransitionSeqRef.current + 1;
+    filterTransitionSeqRef.current = requestSeq;
+    const saved = await saveCurrentDraftSnapshot();
+    if (!saved || filterTransitionSeqRef.current !== requestSeq) return;
+    setProjectFilterId(nextProjectFilterId);
+    const node = selectedNodeRef.current;
+    const nextViewModel = buildMemoryTreeViewModel(memoryTree.roots, nextProjectFilterId);
+    if (node && !nodeVisibleInViewModel(nextViewModel.branches, node.path ?? "")) {
+      setSelectedPath("");
     }
   };
 
@@ -124,7 +161,7 @@ export function MemoryDrawer({
               <select
                 className="memory-project-filter"
                 value={projectFilterId}
-                onChange={(event) => setProjectFilterId(event.currentTarget.value)}
+                onChange={(event) => void changeProjectFilter(event.currentTarget.value)}
                 aria-label="按作品项目过滤记忆树"
                 disabled={isBusy}
               >

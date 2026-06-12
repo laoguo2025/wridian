@@ -298,6 +298,7 @@ function App() {
   const draftEditorRef = useRef<HTMLDivElement | null>(null);
   const fontSizeControlRef = useRef<HTMLDivElement | null>(null);
   const draftSelectionRef = useRef<TextSelection>({ start: editorContent.length, end: editorContent.length });
+  const selectedPathRef = useRef("");
   const openFileRequestSeqRef = useRef(0);
   const relevantNotesRequestSeqRef = useRef(0);
   const updatePromptPills = useCallback((
@@ -310,6 +311,10 @@ function App() {
   const appendDraftEdits = useCallback((edits: DraftEdit[]) => {
     setPendingEdits((current) => [...current, ...edits]);
   }, []);
+
+  useEffect(() => {
+    selectedPathRef.current = selectedPath;
+  }, [selectedPath]);
 
   useEffect(() => {
     if (!fontSizeMenuOpen) {
@@ -680,6 +685,8 @@ function App() {
       setBridgeApplying(false);
       return;
     }
+    const requestSeq = openFileRequestSeqRef.current + 1;
+    openFileRequestSeqRef.current = requestSeq;
     try {
       const response = await invoke<BridgeRelationResponse>("wridian_apply_bridge_relation", {
         input: {
@@ -691,10 +698,17 @@ function App() {
           sourceTitle: candidate.sourceTitle,
         },
       });
-      const refreshed = await openWorkFile(candidate.targetPath);
-      setEditorContent(refreshed.content);
-      setLastSavedContent(refreshed.content);
-      setSaveStatus("saved");
+      if (selectedPathRef.current === candidate.targetPath && openFileRequestSeqRef.current === requestSeq) {
+        const refreshed = await openWorkFile(candidate.targetPath);
+        if (openFileRequestSeqRef.current === requestSeq && selectedPathRef.current === candidate.targetPath) {
+          setEditorContent(refreshed.content);
+          setLastSavedContent(refreshed.content);
+          setPromptFileContentCache((current) => ({ ...current, [refreshed.path]: refreshed.content }));
+          draftSelectionRef.current = { start: refreshed.content.length, end: refreshed.content.length };
+          setSelectionActionPosition(null);
+          setSaveStatus("saved");
+        }
+      }
       setBridgeStatus(response.message);
       if (knowledgeGraphOpen) {
         void loadKnowledgeGraph();
