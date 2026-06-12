@@ -1423,7 +1423,7 @@ function App() {
                 </div>
                 <div className="draft-suggestion-actions" aria-label="待确认修改操作" hidden={!pendingDraftEdits.length}>
                   <div className="draft-suggestion-summary">
-                    <span>{pendingDraftEdits.length} 处待确认修改</span>
+                    <span>{pendingDraftEdits.length} 处待确认修改，确认后才会写入正文</span>
                     {blockedDraftEditCount ? <span className="draft-guard-note">{blockedDraftEditCount} 处需重新定位</span> : null}
                   </div>
                   <div className="draft-suggestion-action-buttons">

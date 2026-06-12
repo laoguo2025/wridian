@@ -74,8 +74,8 @@ export function DraftEditor({
             </span>
             {chunk.edit.rationale ? <small>{chunk.edit.rationale}</small> : null}
             <span className="inline-edit-actions" contentEditable={false}>
-              <button type="button" onClick={() => onAcceptEdit(chunk.edit.id)}>确认</button>
-              <button type="button" className="secondary" onClick={() => onRejectEdit(chunk.edit.id)}>取消</button>
+              <button type="button" title="确认后写入正文" onClick={() => onAcceptEdit(chunk.edit.id)}>确认</button>
+              <button type="button" className="secondary" title="取消这处建议，正文保持原样" onClick={() => onRejectEdit(chunk.edit.id)}>取消</button>
             </span>
           </span>
         );

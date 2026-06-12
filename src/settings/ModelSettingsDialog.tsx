@@ -150,6 +150,7 @@ export function ModelSettingsDialog({
             <div className="provider-section-head">
               <div>
                 <h3>已连接服务</h3>
+                <p>这里的服务会出现在右侧对话的模型切换里；先测试通过，再保存使用。</p>
               </div>
             </div>
             <div className="provider-card-grid connected">
@@ -190,6 +191,7 @@ export function ModelSettingsDialog({
             <div className="provider-section-head compact">
               <div>
                 <h3>添加服务</h3>
+                <p>只需要连接你会实际使用的服务，已连接的服务不会重复显示。</p>
               </div>
             </div>
             <div className="provider-section-list">
@@ -305,6 +307,7 @@ function ProviderCard({
         <div className="provider-card-title">
           <strong>{name}</strong>
           <small>{description}</small>
+          <em>已保存，可编辑后重新测试</em>
         </div>
         <div className="provider-card-actions">{action}</div>
       </div>
@@ -409,7 +412,7 @@ function PresetConnectDialog({
       });
       setTestMessage(response.message || "测试通过。");
     } catch (testError) {
-      setError(testError instanceof Error ? testError.message : String(testError));
+      setError(readableModelTestError(testError));
     } finally {
       setTesting(false);
     }
@@ -493,6 +496,9 @@ function PresetConnectDialog({
 
         {error ? <div className="settings-message error">{error}</div> : null}
         {testMessage ? <div className="settings-message">{testMessage}</div> : null}
+        <div className="provider-connect-help">
+          测试只验证当前表单能否完成一次模型请求；保存后，右侧对话才会使用这个服务。
+        </div>
 
         <div className="settings-actions">
           <button type="button" className="secondary-action" onClick={() => void testConnection()} disabled={busy || testing}>
@@ -511,6 +517,21 @@ function parseModels(value: string) {
     .split(/\r?\n|,/)
     .map((model) => model.trim())
     .filter(Boolean);
+}
+
+function readableModelTestError(error: unknown) {
+  const raw = error instanceof Error ? error.message : String(error);
+  const lower = raw.toLowerCase();
+  if (lower.includes("401") || lower.includes("unauthorized") || lower.includes("invalid api key")) {
+    return `测试失败：凭据没有通过验证。请检查 API Key、Token 或 OAuth 登录状态。\n原始信息：${raw}`;
+  }
+  if (lower.includes("404") || lower.includes("not found")) {
+    return `测试失败：服务地址或模型名没有命中。请检查 Base URL 和模型列表第一行。\n原始信息：${raw}`;
+  }
+  if (lower.includes("timeout") || lower.includes("timed out") || lower.includes("connection") || lower.includes("network")) {
+    return `测试失败：网络或服务连接不可用。请检查网络、代理和服务地址。\n原始信息：${raw}`;
+  }
+  return `测试失败：${raw}`;
 }
 
 function parseEnvOverrides(value: string) {

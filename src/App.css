@@ -1034,6 +1034,10 @@ button {
   color: var(--text-muted);
 }
 
+.draft-suggestion-summary > span:first-child {
+  color: var(--text-body);
+}
+
 .draft-suggestion-summary,
 .draft-suggestion-action-buttons {
   min-width: 0;
@@ -1842,6 +1846,12 @@ button {
   gap: 5px;
 }
 
+.message-context-popover-head {
+  color: var(--text-muted);
+  font-size: calc(11px * var(--ui-font-scale, 1));
+  line-height: 16px;
+}
+
 .message-context-pill {
   display: inline-flex;
   align-items: center;
@@ -2590,6 +2600,12 @@ button {
   font-size: calc(12px * var(--ui-font-scale, 1));
   line-height: 17px;
   overflow-wrap: anywhere;
+}
+
+.knowledge-ops-help {
+  color: var(--text-faint);
+  font-size: calc(11px * var(--ui-font-scale, 1));
+  line-height: 16px;
 }
 
 .knowledge-search-results {
@@ -3419,6 +3435,13 @@ button {
   line-height: 19px;
 }
 
+.provider-section-head p {
+  margin: 3px 0 0;
+  color: var(--text-muted);
+  font-size: calc(11px * var(--ui-font-scale, 1));
+  line-height: 16px;
+}
+
 .provider-card-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -3470,6 +3493,16 @@ button {
   color: var(--text-muted);
   font-size: calc(11px * var(--ui-font-scale, 1));
   line-height: 15px;
+}
+
+.provider-card-title em {
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: calc(11px * var(--ui-font-scale, 1));
+  font-style: normal;
+  line-height: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .provider-card-actions {
@@ -3654,6 +3687,12 @@ button {
   background: color-mix(in srgb, var(--bg-selected), transparent 30%);
   color: var(--text-muted);
   padding: 2px 8px;
+  font-size: calc(11px * var(--ui-font-scale, 1));
+  line-height: 16px;
+}
+
+.provider-connect-help {
+  color: var(--text-muted);
   font-size: calc(11px * var(--ui-font-scale, 1));
   line-height: 16px;
 }

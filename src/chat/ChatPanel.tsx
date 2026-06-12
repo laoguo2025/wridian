@@ -555,6 +555,9 @@ function ChatMessageView({
                 </button>
                 {contextOpen && hasContext ? (
                   <div className="message-context-popover" ref={contextPopoverRef}>
+                    <div className="message-context-popover-head">
+                      本轮发送时读取的上下文快照，只用于生成回复，不会自动改正文。
+                    </div>
                     {contextPills.length ? (
                       <div className="message-context-row">
                         {contextPills.map((pill) => (
@@ -607,7 +610,7 @@ function ContextLoadStatusList({ status }: { status: PromptContextLoadStatus[] }
   const truncated = status.some((item) => item.truncated);
   return (
     <div className="message-context-status">
-      {truncated ? <div className="message-context-note">部分内容已精简</div> : null}
+      {truncated ? <div className="message-context-note">部分内容较长，已保留关键片段。</div> : null}
       <ul>
         {status.map((item) => (
           <li key={item.key}>
@@ -665,15 +668,27 @@ function contextStatusLabel(item: PromptContextLoadStatus) {
 
 function contextStatusSummary(item: PromptContextLoadStatus) {
   if (item.key === "current-draft-selection") {
-    return item.itemCount > 1 ? "包含稿件和选区" : "包含当前稿件";
+    return item.itemCount > 1 ? "读取了当前稿件和选区" : "读取了当前稿件";
+  }
+  if (item.key === "project-mode") {
+    return item.itemCount > 1 ? `读取了 ${item.itemCount} 项作品记忆` : "读取了作品记忆";
+  }
+  if (item.key === "explicit-knowledge-cards") {
+    return item.itemCount > 1 ? `读取了 ${item.itemCount} 张知识卡` : "读取了已选知识卡";
+  }
+  if (item.key === "mentioned-files") {
+    return item.itemCount > 1 ? `读取了 ${item.itemCount} 个点名文件` : "读取了点名文件";
+  }
+  if (item.key === "skill-protocol") {
+    return item.itemCount > 1 ? `带入了 ${item.itemCount} 条技能规则` : "带入了技能规则";
   }
   if (item.key === "user-request") {
     return "已读取你的输入";
   }
   if (item.itemCount > 1) {
-    return `已读取 ${item.itemCount} 项`;
+    return `读取了 ${item.itemCount} 项`;
   }
-  return "已读取";
+  return "已读取这一项";
 }
 
 function pillClassName(pill: PromptContextPill) {

@@ -248,7 +248,7 @@ export function KnowledgeGraphDrawer({
     try {
       const response = await invoke<KnowledgeHealthWorkflowResponse>("wridian_run_knowledge_health_check");
       onHealthResult(response);
-      setOpsMessage(`体检完成：主要问题 ${response.issues.length} 个，待确认修复 ${response.pendingFixes.length} 项。`);
+      setOpsMessage(`体检完成：发现 ${response.issues.length} 个需要关注的问题，${response.pendingFixes.length} 项需要你判断。`);
       await onRefresh();
     } catch (error) {
       setOpsMessage(error instanceof Error ? error.message : String(error));
@@ -264,7 +264,7 @@ export function KnowledgeGraphDrawer({
     try {
       const response = await invoke<KnowledgeHealthFixResponse>("wridian_fix_knowledge_health_low_risk");
       onHealthResult(response);
-      setOpsMessage(`修复完成：已执行 ${response.appliedFixes.length} 项，报告已更新。`);
+      setOpsMessage(`修复完成：已处理 ${response.appliedFixes.length} 项低风险问题，报告已更新。`);
       await onRefresh();
     } catch (error) {
       setOpsMessage(error instanceof Error ? error.message : String(error));
@@ -303,7 +303,7 @@ export function KnowledgeGraphDrawer({
           </div>
           <div className="drawer-header-actions">
             <button type="button" className="small-action" onClick={() => void runKnowledgeHealthCheck()} disabled={!knowledgeRootConfigured || Boolean(opsBusy)}>
-              {opsBusy === "health" ? "体检中" : "知识库体检"}
+              {opsBusy === "health" ? "体检中" : "体检"}
             </button>
             <button type="button" className="small-action" onClick={resetGraphView}>
               重置视图
@@ -346,6 +346,9 @@ export function KnowledgeGraphDrawer({
             </button>
           </form>
           {opsMessage ? <div className="knowledge-ops-message">{opsMessage}</div> : null}
+          <div className="knowledge-ops-help">
+            图谱只展示知识卡、分类和引用关系；体检会给出可自动处理、需要判断和仅提醒的问题。
+          </div>
           {searchHits.length ? (
             <div className="knowledge-search-results">
               {searchHits.map((hit) => (
@@ -493,7 +496,7 @@ function KnowledgeHealthResultPanel({
     >
       <div className="knowledge-health-result-header">
         <div>
-          <div className="knowledge-health-result-title">知识库体检完成</div>
+          <div className="knowledge-health-result-title">体检完成</div>
           <div className="knowledge-health-result-meta">报告：{result.reportRelativePath}</div>
         </div>
         <strong>{result.score}</strong>
@@ -502,18 +505,18 @@ function KnowledgeHealthResultPanel({
         <span>断链 {result.summary.unresolvedLinkCount}</span>
         <span>孤岛 {result.summary.orphanFileCount}</span>
         <span>缺来源 {Math.max(0, result.summary.fileCount - result.summary.sourceCoverageCount)}</span>
-        <span>待确认 {result.pendingFixes.length}</span>
+        <span>需判断 {result.pendingFixes.length}</span>
       </div>
       <div className="knowledge-health-result-note">
-        主要问题 {result.issues.length} 个，治理标签 {issueTagCount} 类。
-        {appliedCount ? ` 已执行低风险修复 ${appliedCount} 项。` : ""}
+        可自动处理的低风险项会写入报告；需要判断的整理建议不会自动改文件。
+        {appliedCount ? ` 本次已处理 ${appliedCount} 项。` : ` 本次发现 ${result.issues.length} 个问题，覆盖 ${issueTagCount} 类。`}
       </div>
       <div className="knowledge-health-result-actions">
         <button type="button" className="small-action" onClick={onOpenReport}>
           打开报告
         </button>
-        <button type="button" className="small-action" onClick={onFix}>
-          一键修复
+        <button type="button" className="small-action" onClick={onFix} disabled={!result.pendingFixes.length && !result.issues.length}>
+          处理低风险项
         </button>
       </div>
     </div>

@@ -136,7 +136,7 @@ export function FileContextMenuView({
       <button type="button" onClick={() => run(() => onRename(menu.node))}>
         重命名
       </button>
-      <button type="button" className="danger" onClick={() => run(() => onTrash(menu.node))}>
+      <button type="button" className="danger" title="移动到系统回收站，不会直接永久删除" onClick={() => run(() => onTrash(menu.node))}>
         移到回收站
       </button>
     </div>
