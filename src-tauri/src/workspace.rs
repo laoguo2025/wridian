@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use zip::write::SimpleFileOptions;
 
 const MAX_WORKSPACE_TEXT_FILE_BYTES: u64 = 512 * 1024;
-const MAX_PREVIEW_ASSET_BYTES: u64 = 10 * 1024 * 1024;
+const MAX_PREVIEW_ASSET_BYTES: u64 = 20 * 1024 * 1024;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1387,12 +1387,15 @@ mod tests {
     fn workspace_text_and_asset_preview_reject_oversized_files() {
         let data_dir = temp_data_dir("oversized-preview");
         let text_path = data_dir.join("large.txt");
+        let allowed_image_path = data_dir.join("allowed.png");
         let image_path = data_dir.join("large.png");
         fs::write(
             &text_path,
             "x".repeat((MAX_WORKSPACE_TEXT_FILE_BYTES as usize) + 1),
         )
         .expect("write large text");
+        fs::write(&allowed_image_path, vec![0_u8; MAX_PREVIEW_ASSET_BYTES as usize])
+            .expect("write allowed image");
         fs::write(
             &image_path,
             vec![0_u8; (MAX_PREVIEW_ASSET_BYTES as usize) + 1],
@@ -1400,6 +1403,7 @@ mod tests {
         .expect("write large image");
 
         assert!(read_workspace_text_content(&text_path).is_err());
+        assert!(preview_asset_response(&allowed_image_path).is_ok());
         assert!(preview_asset_response(&image_path).is_err());
     }
 
