@@ -15,6 +15,18 @@ export type CoCreateFileOperation = {
   path: string;
 };
 
+export type CoCreateFileOperationDraft = {
+  action: "writeFile" | "createFolder" | "rename" | "trash";
+  library: "works" | "knowledge";
+  path: string;
+  newName?: string | null;
+  content?: string | null;
+};
+
+export type ApplyChatFileOperationsResponse = {
+  fileOperations: CoCreateFileOperation[];
+};
+
 export type CoCreateResponse = {
   contextLoadStatus: PromptContextLoadStatus[];
   reply: string;
@@ -62,5 +74,11 @@ export async function abortCocreation(requestId: string) {
   if (!requestId.trim()) return;
   await invoke("wridian_abort_cocreate", {
     input: { requestId },
+  });
+}
+
+export async function applyChatFileOperations(operations: CoCreateFileOperationDraft[], sourcePath = "") {
+  return invoke<ApplyChatFileOperationsResponse>("wridian_apply_chat_file_operations", {
+    input: { operations, sourcePath: sourcePath || null },
   });
 }

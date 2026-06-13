@@ -55,6 +55,7 @@ pub fn run() {
             knowledge_ops::wridian_fix_knowledge_health_low_risk,
             bridge::wridian_apply_bridge_relation,
             cocreation::wridian_cocreate,
+            cocreation::wridian_apply_chat_file_operations,
             cocreation::wridian_abort_cocreate,
             chat_persistence::wridian_load_chat_continuity,
             chat_persistence::wridian_save_chat_transcript,

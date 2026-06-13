@@ -94,6 +94,19 @@ pub(crate) struct CoCreateResponse {
     memories_written: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ApplyChatFileOperationsInput {
+    source_path: Option<String>,
+    operations: Vec<ModelFileOperation>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ApplyChatFileOperationsResponse {
+    file_operations: Vec<AppliedFileOperation>,
+}
+
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ContextLoadStatus {
@@ -156,6 +169,24 @@ pub(crate) async fn wridian_cocreate(
         finish_cocreation_request(id);
     }
     result
+}
+
+#[tauri::command]
+pub(crate) async fn wridian_apply_chat_file_operations(
+    _app: AppHandle,
+    input: ApplyChatFileOperationsInput,
+) -> Result<ApplyChatFileOperationsResponse, String> {
+    let data_dir = wridian_data_dir()?;
+    ensure_workspace(&data_dir)?;
+    let mut operations = input.operations;
+    route_new_work_file_operations_to_current_folder(
+        &data_dir,
+        input.source_path.as_deref().unwrap_or(""),
+        &mut operations,
+    );
+    Ok(ApplyChatFileOperationsResponse {
+        file_operations: apply_model_file_operations(&data_dir, &operations),
+    })
 }
 
 #[tauri::command]
@@ -468,9 +499,8 @@ async fn repair_missing_file_operations_for_file_requests(
     .await
     {
         Ok(repaired) if !repaired.file_operations.is_empty() => Ok(repaired),
-        _ => Ok(reject_missing_file_operations_for_file_requests(
-            input, parsed,
-        )),
+        _ if reply_can_seed_local_file_operation(&parsed.reply) => Ok(parsed),
+        _ => Ok(reject_missing_file_operations_for_file_requests(input, parsed)),
     }
 }
 
@@ -1554,17 +1584,73 @@ fn user_requested_file_tree_write(input: &CoCreateInput) -> bool {
     has_create_intent && has_file_target
 }
 
+fn reply_can_seed_local_file_operation(reply: &str) -> bool {
+    let text = normalize_match_text(reply);
+    if text.chars().count() < 20 {
+        return false;
+    }
+    if reply_claims_file_tree_write(reply) {
+        return false;
+    }
+    !text.contains("没有返回可执行的文件树操作")
+}
+
+fn reply_claims_file_tree_write(reply: &str) -> bool {
+    let text = normalize_match_text(reply);
+    if text.is_empty() {
+        return false;
+    }
+    let claims_done = [
+        "已新建",
+        "已创建",
+        "已写入",
+        "已保存",
+        "新建为",
+        "创建为",
+        "写入到",
+        "保存到",
+    ]
+    .iter()
+    .any(|keyword| text.contains(keyword));
+    let mentions_file = [
+        "works/",
+        "knowledge/",
+        ".md",
+        ".markdown",
+        ".docx",
+        ".txt",
+        "文件",
+        "文档",
+    ]
+    .iter()
+    .any(|keyword| text.contains(keyword));
+    claims_done && mentions_file
+}
+
 fn route_new_work_files_to_current_folder(
     data_dir: &Path,
     input: &CoCreateInput,
     mut parsed: ParsedCoCreateResponse,
 ) -> ParsedCoCreateResponse {
-    let current_relative_dir = current_work_file_relative_dir(data_dir, input);
+    route_new_work_file_operations_to_current_folder(
+        data_dir,
+        &input.source_path,
+        &mut parsed.file_operations,
+    );
+    parsed
+}
+
+fn route_new_work_file_operations_to_current_folder(
+    data_dir: &Path,
+    source_path: &str,
+    operations: &mut [ModelFileOperation],
+) {
+    let current_relative_dir = current_work_file_relative_dir(data_dir, source_path);
     if current_relative_dir.is_none() {
-        return parsed;
+        return;
     }
     let current_relative_dir = current_relative_dir.unwrap_or_default();
-    for operation in &mut parsed.file_operations {
+    for operation in operations {
         if operation.action.trim() != "writeFile" || operation.library.trim() != "works" {
             continue;
         }
@@ -1580,14 +1666,13 @@ fn route_new_work_files_to_current_folder(
             format!("{}/{}", current_relative_dir, normalized)
         };
     }
-    parsed
 }
 
-fn current_work_file_relative_dir(data_dir: &Path, input: &CoCreateInput) -> Option<String> {
-    if input.source_path.trim().is_empty() {
+fn current_work_file_relative_dir(data_dir: &Path, source_path: &str) -> Option<String> {
+    if source_path.trim().is_empty() {
         return None;
     }
-    let source_path = canonical_existing_path(Path::new(&input.source_path))?;
+    let source_path = canonical_existing_path(Path::new(source_path))?;
     let root = crate::workspace::workspace_library_root_for_audit(data_dir, "works").ok()?;
     if !source_path.starts_with(&root) {
         return None;
@@ -3122,6 +3207,28 @@ mod tests {
         assert!(rejected.file_operations.is_empty());
         assert!(rejected.edits.is_empty());
         assert!(rejected.memories.is_empty());
+    }
+
+    #[test]
+    fn plain_document_reply_can_seed_local_write_tool_fallback() {
+        let parsed = parse_cocreation_model_output(
+            r###"{"reply":"## 第2集\n\n这一集从上一集结尾继续，主角走进新的冲突。","edits":[],"fileOperations":[],"memories":[]}"###,
+        )
+        .expect("parse");
+
+        assert!(reply_can_seed_local_file_operation(&parsed.reply));
+        assert!(!reply_claims_file_tree_write(&parsed.reply));
+    }
+
+    #[test]
+    fn fake_done_reply_cannot_seed_local_write_tool_fallback() {
+        let parsed = parse_cocreation_model_output(
+            r#"{"reply":"已根据第1集剧情续写第2集。剧本已新建为 `works/第2集.docx`。","edits":[],"fileOperations":[],"memories":[]}"#,
+        )
+        .expect("parse");
+
+        assert!(reply_claims_file_tree_write(&parsed.reply));
+        assert!(!reply_can_seed_local_file_operation(&parsed.reply));
     }
 
     #[test]

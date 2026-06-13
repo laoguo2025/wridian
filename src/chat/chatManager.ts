@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { abortCocreation, requestCocreation, type CoCreateEdit } from "./cocreationClient";
+import {
+  abortCocreation,
+  applyChatFileOperations,
+  requestCocreation,
+  type CoCreateEdit,
+  type CoCreateFileOperationDraft,
+} from "./cocreationClient";
 import {
   createChatSessionId,
   loadChatContinuity,
@@ -223,7 +229,37 @@ export function useChatManager({
         }),
       );
       onDraftEdits(createPendingDraftEdits(response.edits, input), shouldAutoApplyDraftEdits(input.text));
-      if (response.fileOperations.some((operation) => operation.ok)) {
+      let fileOperations = response.fileOperations;
+      if (!fileOperations.length) {
+        const localFileOperation = createLocalWriteFileOperationFallback(input, assistantReply);
+        if (localFileOperation) {
+          const applied = await applyChatFileOperations([localFileOperation], input.sourcePath);
+          fileOperations = applied.fileOperations;
+          const messagesWithAppliedOperation = messagesWithAssistant.map((message) =>
+            message.id === messagesWithAssistant[messagesWithAssistant.length - 1]?.id
+              ? { ...message, fileOperations: fileOperations.length ? fileOperations : undefined }
+              : message,
+          );
+          messagesRef.current = messagesWithAppliedOperation;
+          setMessages(messagesWithAppliedOperation);
+          void persistChat(
+            messagesWithAppliedOperation,
+            input,
+            projectIdRef.current,
+            sessionIdRef.current,
+            parentSessionIdRef.current,
+            forkedFromMessageIdRef.current,
+            setError,
+            buildActiveContext({
+              assistantReply,
+              input,
+              messages: messagesWithAppliedOperation,
+              sessionId: sessionIdRef.current,
+            }),
+          );
+        }
+      }
+      if (fileOperations.some((operation) => operation.ok)) {
         onWorkspaceChanged?.();
       }
       return true;
@@ -507,6 +543,66 @@ function findOpeningRewriteRange(content: string, modelTargetLength: number): Pr
   const lineBreak = content.indexOf("\n", desiredEnd);
   const end = lineBreak >= 0 && lineBreak + 1 <= maxEnd ? lineBreak + 1 : maxEnd;
   return end > start ? { start, end } : null;
+}
+
+function createLocalWriteFileOperationFallback(
+  input: SendChatPromptInput,
+  assistantReply: string,
+): CoCreateFileOperationDraft | null {
+  if (!isExplicitNewDocumentRequest(input.text)) return null;
+  const content = stripOperationalFailureText(assistantReply).trim();
+  if (!content || content.length < 12) return null;
+  const filename = inferRequestedDocumentFilename(input.text) ?? "新建文档";
+  return {
+    action: "writeFile",
+    library: inferRequestedLibrary(input.text),
+    path: ensureEditableExtension(filename),
+    content,
+  };
+}
+
+function isExplicitNewDocumentRequest(text: string) {
+  const normalized = normalizeIntentText(text);
+  const hasCreateIntent = /新建|创建|新增|生成|写入|保存|放到|放在/.test(normalized);
+  const hasDocumentTarget = /文档|文件|稿件|作品库|知识库|md|markdown|docx|txt/.test(normalized);
+  return hasCreateIntent && hasDocumentTarget;
+}
+
+function inferRequestedLibrary(text: string): "works" | "knowledge" {
+  return /知识库/.test(normalizeIntentText(text)) ? "knowledge" : "works";
+}
+
+function inferRequestedDocumentFilename(text: string) {
+  const normalized = text.trim();
+  const named = normalized.match(/(?:命名为|叫做|名为|文件名为|文档名为)\s*([^\s，。,.]{1,80})/);
+  if (named?.[1]) return named[1].trim();
+  const episodeFilename = inferNextEpisodeFilename(normalized);
+  if (episodeFilename) return episodeFilename;
+  const quotedTarget = normalized.match(
+    /(?:新建|创建|新增|生成|写入|保存)(?:一个|一份|个|份)?(?:名为|叫做)?\s*[「『《“"]([^」』》”"]{1,80})[」』》”"]\s*(?:文档|文件|稿件|md|markdown|docx|txt)?/,
+  );
+  return quotedTarget?.[1]?.trim() || null;
+}
+
+function inferNextEpisodeFilename(text: string) {
+  const normalized = normalizeIntentText(text);
+  const episode = normalized.match(/(?:续写|写|生成|创建|新建)?第([0-9一二三四五六七八九十百]+)集/);
+  return episode?.[1] ? `第${episode[1]}集` : null;
+}
+
+function ensureEditableExtension(filename: string) {
+  const cleanName = filename.replace(/[\\/:*?"<>|]/g, "").trim() || "新建文档";
+  return /\.(md|markdown|txt|docx)$/i.test(cleanName) ? cleanName : `${cleanName}.md`;
+}
+
+function stripOperationalFailureText(text: string) {
+  return text
+    .replace(/这次模型没有返回可执行的文件树操作[\s\S]*?(?:目录。|目录|$)/g, "")
+    .trim();
+}
+
+function normalizeIntentText(text: string) {
+  return text.trim().replace(/\s+/g, "");
 }
 
 function createLocalLiteralReplacePlan(input: SendChatPromptInput): LocalLiteralReplacePlan | null {
