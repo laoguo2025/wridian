@@ -808,6 +808,15 @@ async fn generate_document_body_with_openai_compatible(
         .timeout(Duration::from_secs(90))
         .build()
         .map_err(|error| format!("正文生成客户端创建失败：{error}"))?;
+    let body_prompt = build_document_body_prompt(
+        input,
+        memories,
+        active_context,
+        active_project_context,
+        rule_route_context,
+        file_tree,
+        mentioned_files,
+    );
     let body = openai_compatible_chat_body(
         settings,
         project_model.unwrap_or(&settings.model),
@@ -818,15 +827,7 @@ async fn generate_document_body_with_openai_compatible(
             },
             {
                 "role": "user",
-                "content": build_document_body_prompt(
-                    input,
-                    memories,
-                    active_context,
-                    active_project_context,
-                    rule_route_context,
-                    file_tree,
-                    mentioned_files,
-                )
+                "content": body_prompt
             }
         ]),
         4096,
@@ -860,25 +861,45 @@ fn document_body_system_prompt() -> &'static str {
 
 fn build_document_body_prompt(
     input: &CoCreateInput,
-    memories: &[String],
-    active_context: &str,
-    active_project_context: &str,
-    rule_route_context: &RuleRouteContext,
+    _memories: &[String],
+    _active_context: &str,
+    _active_project_context: &str,
+    _rule_route_context: &RuleRouteContext,
     file_tree: &str,
     mentioned_files: &[DialogueContextItem],
 ) -> String {
+    let target_path = infer_local_write_file_plan_from_request(input)
+        .map(|plan| plan.path)
+        .unwrap_or_else(|| "新建文档.md".to_string());
+    let mut source_materials = Vec::new();
+    if !input.content.trim().is_empty() {
+        source_materials.push(format!(
+            "[当前打开稿件]\n文件：{}\n正文：\n{}",
+            prompt_source_label(&input.source_path, &input.title),
+            compact_text(&input.content, 9000)
+        ));
+    }
+    for item in mentioned_files.iter().take(3) {
+        if !item.value.trim().is_empty() {
+            source_materials.push(format!(
+                "[点名文件：{}]\n{}",
+                item.label,
+                compact_text(&item.value, 3000)
+            ));
+        }
+    }
+    let source_materials = if source_materials.is_empty() {
+        "未提供可读取正文，请基于用户请求直接创作。".to_string()
+    } else {
+        source_materials.join("\n\n")
+    };
+    let file_tree = compact_text(file_tree, 1200);
     format!(
-        "{}\n\n硬性要求：\n- 只输出目标新文件正文。\n- 第一行应是目标稿件标题，例如“# 第2集”或“## 第2集”。\n- 不要说已经保存，不要写操作说明，不要列“重点推进/大纲/说明”。\n- 文风和格式承接当前稿件。\n\n用户原请求：{}",
-        build_cocreation_prompt(
-            input,
-            memories,
-            active_context,
-            active_project_context,
-            rule_route_context,
-            file_tree,
-            mentioned_files,
-        ),
-        input.user_input.trim()
+        "任务：为 Wridian 生成一个新文件的正文。\n\n目标文件：{}\n用户本次请求：{}\n\n硬性要求：\n- 只输出将保存到目标文件的正文。\n- 第一行必须是标题，例如“# 第2集”或“## 第2集”。\n- 不要输出 JSON。\n- 不要说已经保存、已经新建、已经写入。\n- 不要写操作说明、总结、重点推进、大纲、下一步建议或免责声明。\n- 不要引用旧会话的失败判断；只处理上面的本次请求。\n- 文风、人物和格式承接参考正文。\n\n参考正文：\n{}\n\n当前文件树仅用于避免重名，不要复述：\n{}",
+        target_path,
+        input.user_input.trim(),
+        source_materials,
+        file_tree
     )
 }
 
@@ -4204,6 +4225,40 @@ mod tests {
         };
 
         assert_eq!(infer_direct_write_content_from_request(&input), None);
+    }
+
+    #[test]
+    fn document_body_prompt_does_not_include_old_chat_failure_context() {
+        let input = CoCreateInput {
+            request_id: None,
+            source_path: "D:/works/测试/第1集.docx".to_string(),
+            title: "第1集.docx".to_string(),
+            content: "第1集\n\n牛魔王抱着铁扇公主跪在火焰山血雨里。".to_string(),
+            draft_kind: Some("screenplay".to_string()),
+            user_input: "根据第1集剧情，续写第2集，在作品库新建个文档保存".to_string(),
+            selected_text: None,
+            selected_model_id: None,
+            context_items: Vec::new(),
+        };
+        let stale_active_context =
+            "上次判断：这次模型没有返回可执行的文件树操作；Wridian 已拦截这条回复";
+        let stale_memory = vec!["上次用户意图：旧消息".to_string()];
+        let prompt = build_document_body_prompt(
+            &input,
+            &stale_memory,
+            stale_active_context,
+            "旧项目记忆",
+            &empty_rule_route_context(),
+            "第1集.docx\n第2集.md",
+            &[],
+        );
+
+        assert!(prompt.contains("目标文件：第2集.md"));
+        assert!(prompt.contains("用户本次请求：根据第1集剧情，续写第2集，在作品库新建个文档保存"));
+        assert!(prompt.contains("牛魔王抱着铁扇公主"));
+        assert!(!prompt.contains("这次模型没有返回可执行的文件树操作"));
+        assert!(!prompt.contains("上次用户意图"));
+        assert!(!prompt.contains("旧项目记忆"));
     }
 
     #[test]

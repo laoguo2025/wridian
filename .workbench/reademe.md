@@ -90,3 +90,4 @@
   - `.workbench/governance/2026-06-14-exact-docx-episode-chat-e2e.md`
   - `.workbench/governance/2026-06-14-real-model-document-body-repair.md`
   - `.workbench/governance/2026-06-14-chat-direct-content-write-order.md`
+  - `.workbench/governance/2026-06-14-clean-document-body-repair-context.md`
