@@ -326,10 +326,10 @@ function App() {
     const guardReport = createDraftReplaceGuardReport(content, edits);
     setPendingEdits((current) => [...current, ...edits]);
     if (!guardReport.matches.length) {
-      chatManager.setError("没有在当前打开文件中找到可安全修改的原文片段。请确认现在打开的是要修改的文件，再重试。");
+      chatManager.setError("模型建议的原文片段没有在当前正文中安全定位。可能是模型改写范围不准，或正文已变化；请检查内联 diff。");
       return;
     }
-    chatManager.setError(guardReport.skipped.length ? `${guardReport.skipped.length} 处修改没有在当前打开文件中安全定位。请确认是否已打开正确文件。` : "");
+    chatManager.setError(guardReport.skipped.length ? `${guardReport.skipped.length} 处模型建议没有在当前正文中安全定位，已保留可定位的内联 diff。` : "");
     draftSelectionRef.current = { start: 0, end: 0 };
     setSelectionActionPosition(null);
   }, []);
@@ -1122,7 +1122,7 @@ function App() {
     if (!match) {
       const skipped = guardReport.skipped.find((item) => item.edit.id === id);
       const reason = skipped ? describeDraftReplaceSkip(skipped.reason) : "这处修改无法安全定位";
-      chatManager.setError(`${reason}。请确认现在打开的是要修改的文件。`);
+      chatManager.setError(`${reason}。这通常是模型给出的原文片段不够精确，或正文已变化。`);
       return;
     }
     chatManager.setError("");
@@ -1150,7 +1150,7 @@ function App() {
     const matches = guardReport.matches;
 
     if (!matches.length) {
-      chatManager.setError("没有可以安全确认的修改。请确认现在打开的是要修改的文件。");
+      chatManager.setError("没有可以安全确认的修改。请检查模型建议的原文片段是否仍存在于当前正文。");
       return;
     }
 
@@ -1164,7 +1164,7 @@ function App() {
     setAcceptedEditUndo({ path: selectedPath, content: editorContent });
     setEditorContent(nextContent);
     setPendingEdits((edits) => edits.map((edit) => (appliedIds.has(edit.id) ? { ...edit, status: "accepted" } : edit)));
-    chatManager.setError(guardReport.skipped.length ? `${guardReport.skipped.length} 处修改没有在当前打开文件中安全定位。请确认是否已打开正确文件。` : "");
+    chatManager.setError(guardReport.skipped.length ? `${guardReport.skipped.length} 处模型建议没有在当前正文中安全定位，已确认其余可定位修改。` : "");
     draftSelectionRef.current = { start: 0, end: 0 };
     setSelectionActionPosition(null);
 

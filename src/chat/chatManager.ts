@@ -20,6 +20,12 @@ export type ChatDraftEdit = CoCreateEdit & {
   status: "pending" | "accepted" | "rejected";
 };
 
+export type LocalLiteralReplacePlan = {
+  edits: ChatDraftEdit[];
+  from: string;
+  to: string;
+};
+
 export type SendChatPromptInput = {
   content: string;
   contextPills: PromptContextPill[];
@@ -143,6 +149,38 @@ export function useChatManager({
         sessionId: sessionIdRef.current,
       }),
     );
+
+    const localLiteralReplace = createLocalLiteralReplacePlan(input);
+    if (localLiteralReplace) {
+      const assistantReply = localLiteralReplace.edits.length
+        ? `已在当前打开文件中找到 ${localLiteralReplace.edits.length} 处「${localLiteralReplace.from}」，将精确替换为「${localLiteralReplace.to}」。请在正文内联 diff 中确认后写入。`
+        : `当前正文或选区里没有找到「${localLiteralReplace.from}」，未生成修改。`;
+      const messagesWithAssistant = [...messagesWithUser, createAssistantChatMessage(assistantReply)];
+      messagesRef.current = messagesWithAssistant;
+      setMessages(messagesWithAssistant);
+      void persistChat(
+        messagesWithAssistant,
+        input,
+        projectIdRef.current,
+        sessionIdRef.current,
+        parentSessionIdRef.current,
+        forkedFromMessageIdRef.current,
+        setError,
+        buildActiveContext({
+          assistantReply,
+          input,
+          messages: messagesWithAssistant,
+          sessionId: sessionIdRef.current,
+        }),
+      );
+      if (localLiteralReplace.edits.length) {
+        onDraftEdits(localLiteralReplace.edits, true);
+      }
+      activeRequestIdRef.current = "";
+      pendingRef.current = false;
+      setPending(false);
+      return true;
+    }
 
     try {
       const response = await requestCocreation({
@@ -400,6 +438,67 @@ function createPendingDraftEdits(edits: CoCreateEdit[], contextPills: PromptCont
     sourceRange: selectedRangePill?.value.trim() === edit.target.trim() ? selectedRangePill.range : undefined,
     status: "pending" as const,
   }));
+}
+
+function createLocalLiteralReplacePlan(input: SendChatPromptInput): LocalLiteralReplacePlan | null {
+  const parsed = parseLiteralReplaceIntent(input.text);
+  if (!parsed) return null;
+  const selectedRangePill = input.contextPills.find((pill) => pill.kind === "selection" && pill.range);
+  const content = selectedRangePill?.value.trim() ? selectedRangePill.value : input.content;
+  const baseOffset = selectedRangePill?.range ? selectedRangePill.range.start : 0;
+  const ranges = findLiteralRanges(content, parsed.from);
+  const createdAt = Date.now();
+  return {
+    edits: ranges.map((range, index) => ({
+      id: `literal-replace-${createdAt}-${index}`,
+      rationale: "按用户明确字面替换指令生成",
+      replacement: parsed.to,
+      sourceRange: { start: baseOffset + range.start, end: baseOffset + range.end },
+      status: "pending" as const,
+      target: parsed.from,
+    })),
+    from: parsed.from,
+    to: parsed.to,
+  };
+}
+
+function parseLiteralReplaceIntent(input: string): { from: string; to: string } | null {
+  const normalized = input.trim().replace(/[“”]/g, "\"").replace(/[‘’]/g, "'");
+  const patterns = [
+    /^(?:请)?(?:把|将)\s*["'「『《]?(.+?)["'」』》]?\s*(?:全部|都|全都|统一)?\s*(?:改成|改为|换成|替换为|替换成)\s*["'「『《]?(.+?)["'」』》]?\s*$/,
+    /^(?:请)?(?:将|把)?\s*["'「『《]?(.+?)["'」』》]?\s*(?:全部|都|全都|统一)?\s*(?:替换为|替换成|改成|改为|换成)\s*["'「『《]?(.+?)["'」』》]?\s*$/,
+  ];
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    if (!match) continue;
+    const from = cleanupLiteralReplaceTerm(match[1]);
+    const to = cleanupLiteralReplaceTerm(match[2]);
+    if (from && to && from !== to && from.length <= 80 && to.length <= 80) {
+      return { from, to };
+    }
+  }
+  return null;
+}
+
+function cleanupLiteralReplaceTerm(term: string) {
+  return term
+    .trim()
+    .replace(/^(?:所有|全部|都|全都|正文中|文中|当前文件中|当前正文中|当前打开文件中|的)+/g, "")
+    .replace(/(?:全部|都|全都|统一|这个词|这个名字|这个称呼|这几个字|这些字|所有出现处|出现处|在当前文件中|在当前正文中|在正文中|在文中)+$/g, "")
+    .trim()
+    .replace(/^["'「『《]+|["'」』》。！!，,、；;：:\s]+$/g, "")
+    .trim();
+}
+
+function findLiteralRanges(content: string, target: string) {
+  const ranges: Array<{ start: number; end: number }> = [];
+  if (!target) return ranges;
+  let index = content.indexOf(target);
+  while (index >= 0) {
+    ranges.push({ start: index, end: index + target.length });
+    index = content.indexOf(target, index + target.length);
+  }
+  return ranges;
 }
 
 function shouldAutoApplyDraftEdits(userInput: string) {
