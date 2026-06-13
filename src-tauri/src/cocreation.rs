@@ -1656,11 +1656,31 @@ fn user_requested_file_tree_write(input: &CoCreateInput) -> bool {
 
 fn reply_can_seed_local_file_operation(reply: &str) -> bool {
     let seed_content = strip_file_tree_write_claim_lines(reply);
+    if !looks_like_standalone_document_body(&seed_content) {
+        return false;
+    }
     let text = normalize_match_text(&seed_content);
     if text.chars().count() < 12 {
         return false;
     }
     !text.contains("没有返回可执行的文件树操作")
+}
+
+fn looks_like_standalone_document_body(content: &str) -> bool {
+    let trimmed = content.trim_start();
+    if trimmed.starts_with("```") {
+        return true;
+    }
+    trimmed
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .map(|line| {
+            let line = line.trim_start();
+            line.starts_with("# ")
+                || line.starts_with("## ")
+                || line.starts_with("第") && line.contains("集") && !line.contains("已")
+        })
+        .unwrap_or(false)
 }
 
 fn strip_file_tree_write_claim_lines(reply: &str) -> String {
@@ -3332,6 +3352,16 @@ mod tests {
         assert!(seeded.edits.is_empty());
         assert!(seeded.memories.is_empty());
         assert!(seeded.reply.contains("## 第2集"));
+    }
+
+    #[test]
+    fn summary_style_reply_cannot_seed_local_write_tool_fallback() {
+        let parsed = parse_cocreation_model_output(
+            r#"{"reply":"已根据第1集剧情续写第2集，保存至作品库。本集承接金箍棒携牛魔王逃至斜月三星洞的悬念，重点推进：\n\n1. **菩提祖师登场**：揭示悟空被分魂九魄、散镇三界的真相\n2. **牛魔王的抉择**：妖丹已碎、命不久矣，但仍选择踏上死路\n\n文风和格式完全延续第1集的短剧脚本规范。","edits":[],"fileOperations":[],"memories":[]}"#,
+        )
+        .expect("parse");
+
+        assert!(!reply_can_seed_local_file_operation(&parsed.reply));
     }
 
     #[test]

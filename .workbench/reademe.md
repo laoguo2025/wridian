@@ -86,3 +86,4 @@
   - `.workbench/governance/2026-06-14-package-0.0.9-claudian-file-tools.md`
   - `.workbench/governance/2026-06-14-e2e-exe-control-entry.md`
   - `.workbench/governance/2026-06-14-chat-new-episode-file-fallback.md`
+  - `.workbench/governance/2026-06-14-chat-summary-reply-file-write-guard.md`

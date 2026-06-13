@@ -556,6 +556,7 @@ function createLocalWriteFileOperationFallback(
   if (!isExplicitNewDocumentRequest(input.text)) return null;
   const content = extractLocalWriteFileContent(assistantReply).trim();
   if (!content || content.length < 12) return null;
+  if (!looksLikeStandaloneDocumentBody(content)) return null;
   const filename = inferRequestedDocumentFilename(input.text) ?? "新建文档";
   return {
     action: "writeFile",
@@ -614,6 +615,15 @@ function extractLocalWriteFileContent(text: string) {
     .filter((line) => !lineClaimsFileTreeWrite(line))
     .join("\n")
     .trim();
+}
+
+function looksLikeStandaloneDocumentBody(content: string) {
+  const trimmed = content.trimStart();
+  if (trimmed.startsWith("```")) return true;
+  const firstLine = trimmed.split(/\r?\n/).find((line) => line.trim());
+  if (!firstLine) return false;
+  const line = firstLine.trimStart();
+  return line.startsWith("# ") || line.startsWith("## ") || (/^第.+集/.test(line) && !line.includes("已"));
 }
 
 function lineClaimsFileTreeWrite(line: string) {

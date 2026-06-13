@@ -22,6 +22,7 @@ async function main() {
   await testConversationDrivenFileTreeEditing(page, fixture, "works");
   await testConversationDrivenFileTreeEditing(page, fixture, "knowledge");
   await testFakeSavedNewEpisodeFallback(page, fixture);
+  await testSummaryStyleReplyDoesNotCreateWrongEpisode(page, fixture);
 
   await page.evaluate(() => window.__WRIDIAN_E2E__.setNextCocreation(JSON.stringify({
     reply: "| 风险点 | 处理 |\n| --- | --- |\n| 车站警告 | 保留悬念 |\n| 第二班车 | 延后揭示 |\n| 广播人 | 作为对手线索 |",
@@ -220,6 +221,31 @@ async function testFakeSavedNewEpisodeFallback(page, fixture) {
   if (content.includes("已根据第1集剧情续写第2集")) {
     throw new Error("New episode file kept the fake saved operation line");
   }
+}
+
+async function testSummaryStyleReplyDoesNotCreateWrongEpisode(page, fixture) {
+  await page.getByRole("button", { name: "作品库", exact: true }).click();
+  const targetPath = path.join(fixture.worksRoot, "测试", "第3集.md");
+  const before = await page.evaluate(() => window.__WRIDIAN_E2E__.getState().editorContent);
+  await runMockedPrompt(page, {
+    text: "根据第2集剧情，续写第3集，在作品库里新建个文档保存",
+    response: {
+      reply: "已根据第2集剧情续写第3集，保存至作品库。本集承接上一集的悬念，重点推进：\n\n1. **主角抉择**：主角被迫面对代价\n2. **反派施压**：危机继续升级\n\n文风和格式完全延续前一集的短剧脚本规范。",
+      edits: [],
+      fileOperations: [],
+      memories: [],
+    },
+  });
+  await page.waitForTimeout(500);
+  if (existsSync(targetPath)) {
+    const content = await readFile(targetPath, "utf8");
+    throw new Error(`Summary style reply created a wrong episode file: ${content}`);
+  }
+  const after = await page.evaluate(() => window.__WRIDIAN_E2E__.getState().editorContent);
+  if (after !== before) {
+    throw new Error("Summary style reply changed the currently opened draft");
+  }
+  await page.getByText("没有新建、修改或删除任何文件").last().waitFor({ timeout: 10_000 });
 }
 
 async function testSelectionToPromptAndSend(page) {
