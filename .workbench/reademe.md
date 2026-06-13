@@ -87,3 +87,4 @@
   - `.workbench/governance/2026-06-14-e2e-exe-control-entry.md`
   - `.workbench/governance/2026-06-14-chat-new-episode-file-fallback.md`
   - `.workbench/governance/2026-06-14-chat-summary-reply-file-write-guard.md`
+  - `.workbench/governance/2026-06-14-exact-docx-episode-chat-e2e.md`

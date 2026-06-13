@@ -23,7 +23,7 @@ use crate::workspace::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::future::Future;
 use std::io::Write;
@@ -214,9 +214,6 @@ async fn run_cocreation(
 
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
-    if let Some(mock_output) = crate::e2e::take_next_cocreation_output(&data_dir)? {
-        return run_mock_cocreation(&data_dir, &input, mock_output);
-    }
     let skill_resource_root = app
         .path()
         .resolve("resources/skills", BaseDirectory::Resource)
@@ -229,12 +226,16 @@ async fn run_cocreation(
     check_cocreation_cancelled(request_id)?;
     let selected_model_id = input.selected_model_id.clone();
     let settings_data_dir = data_dir.clone();
-    let settings = tokio::task::spawn_blocking(move || {
-        read_active_model_settings(&settings_data_dir, selected_model_id.as_deref())
-    })
-    .await
-    .map_err(|error| format!("模型设置读取任务失败：{error}"))??
-    .ok_or_else(|| "请先在模型设置里保存模型账户。".to_string())?;
+    let settings = if crate::e2e::has_queued_cocreation_output(&settings_data_dir) {
+        e2e_mock_model_settings()
+    } else {
+        tokio::task::spawn_blocking(move || {
+            read_active_model_settings(&settings_data_dir, selected_model_id.as_deref())
+        })
+        .await
+        .map_err(|error| format!("模型设置读取任务失败：{error}"))??
+        .ok_or_else(|| "请先在模型设置里保存模型账户。".to_string())?
+    };
     let memories_used =
         read_relevant_memory_snippets(&data_dir, &input.source_path, &input.title, 8)?;
     let active_context = read_active_context(&data_dir);
@@ -304,62 +305,6 @@ async fn run_cocreation(
         memories_used,
         memories_written,
     })
-}
-
-fn run_mock_cocreation(
-    data_dir: &Path,
-    input: &CoCreateInput,
-    mock_output: String,
-) -> Result<CoCreateResponse, String> {
-    let file_tree = read_workspace_file_trees(data_dir)?;
-    let file_tree_slot = build_file_tree_slot(&file_tree);
-    let mentioned_files = read_user_mentioned_workspace_files(input, &file_tree);
-    let rule_route_context = RuleRouteContext {
-        block: String::new(),
-        item_count: 0,
-        truncated: false,
-    };
-    let context_load_status = build_context_load_status(
-        input,
-        &[],
-        "",
-        "",
-        &rule_route_context,
-        &file_tree_slot,
-        &mentioned_files,
-    );
-    let model_output =
-        ensure_parsed_cocreation_response(parse_cocreation_model_output(&mock_output)?)?;
-    let model_output = apply_mock_file_operation_repair_result(input, model_output);
-    let model_output = route_current_file_writes_to_edits(data_dir, input, model_output);
-    let mut model_output = route_new_work_files_to_current_folder(data_dir, input, model_output);
-    let memories_written = write_memory_leaves(data_dir, &model_output.memories)?
-        .into_iter()
-        .map(|path| path.to_string_lossy().into_owned())
-        .collect();
-    let file_operations = apply_model_file_operations(data_dir, &model_output.file_operations);
-    model_output.reply = model_output.reply.trim().to_string();
-    Ok(CoCreateResponse {
-        context_load_status,
-        reply: model_output.reply,
-        edits: model_output.edits,
-        file_operations,
-        memories_used: Vec::new(),
-        memories_written,
-    })
-}
-
-fn apply_mock_file_operation_repair_result(
-    input: &CoCreateInput,
-    parsed: ParsedCoCreateResponse,
-) -> ParsedCoCreateResponse {
-    if !should_repair_missing_file_operations(input, &parsed) {
-        return parsed;
-    }
-    if reply_can_seed_local_file_operation(&parsed.reply) {
-        return prepare_local_file_operation_seed_response(parsed);
-    }
-    reject_missing_file_operations_for_file_requests(input, parsed)
 }
 
 static ACTIVE_COCREATION_REQUESTS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -440,7 +385,7 @@ struct ModelCoCreateResponse {
     reply: Option<String>,
     #[serde(default)]
     edits: Vec<CoCreateEdit>,
-    #[serde(default)]
+    #[serde(default, alias = "fileOperations")]
     file_operations: Vec<ModelFileOperation>,
     #[serde(default)]
     memories: Vec<MemoryLeafDraft>,
@@ -465,6 +410,10 @@ async fn cocreate_with_model(
     file_tree: &str,
     mentioned_files: &[DialogueContextItem],
 ) -> Result<ParsedCoCreateResponse, String> {
+    let data_dir = wridian_data_dir()?;
+    if let Some(mock_output) = crate::e2e::take_next_cocreation_output(&data_dir)? {
+        return ensure_parsed_cocreation_response(parse_cocreation_model_output(&mock_output)?);
+    }
     ensure_supported_protocol(&settings.protocol)?;
     if is_openai_oauth_settings(settings) {
         return cocreate_with_openai_oauth(
@@ -527,6 +476,20 @@ async fn cocreate_with_model(
     }
 }
 
+fn e2e_mock_model_settings() -> ActiveModelSettings {
+    ActiveModelSettings {
+        provider_id: "e2e-mock".to_string(),
+        provider_name: "E2E Mock".to_string(),
+        protocol: "openai-compatible".to_string(),
+        auth_style: "api-key".to_string(),
+        base_url: "http://127.0.0.1/e2e".to_string(),
+        api_key: "e2e".to_string(),
+        model: "e2e-mock".to_string(),
+        model_id: "e2e-mock".to_string(),
+        extra_env: BTreeMap::new(),
+    }
+}
+
 async fn repair_missing_file_operations_for_file_requests(
     settings: &ActiveModelSettings,
     project_model: Option<&str>,
@@ -561,10 +524,79 @@ async fn repair_missing_file_operations_for_file_requests(
         _ if reply_can_seed_local_file_operation(&parsed.reply) => {
             Ok(prepare_local_file_operation_seed_response(parsed))
         }
-        _ => Ok(reject_missing_file_operations_for_file_requests(
-            input, parsed,
-        )),
+        _ => {
+            match generate_local_write_file_from_repair_body(
+                settings,
+                project_model,
+                input,
+                memories,
+                active_context,
+                active_project_context,
+                rule_route_context,
+                file_tree,
+                mentioned_files,
+                &parsed.reply,
+            )
+            .await
+            {
+                Ok(Some(repaired)) => Ok(repaired),
+                _ => Ok(reject_missing_file_operations_for_file_requests(
+                    input, parsed,
+                )),
+            }
+        }
     }
+}
+
+async fn generate_local_write_file_from_repair_body(
+    settings: &ActiveModelSettings,
+    project_model: Option<&str>,
+    input: &CoCreateInput,
+    memories: &[String],
+    active_context: &str,
+    active_project_context: &str,
+    rule_route_context: &RuleRouteContext,
+    file_tree: &str,
+    mentioned_files: &[DialogueContextItem],
+    previous_reply: &str,
+) -> Result<Option<ParsedCoCreateResponse>, String> {
+    let Some(path) = infer_local_write_file_path_from_request(input) else {
+        return Ok(None);
+    };
+    let mut repair_input = clone_cocreation_input(input);
+    repair_input.user_input = build_document_body_repair_user_input(input, previous_reply, &path);
+    let mut body_response = cocreate_with_model(
+        settings,
+        project_model,
+        &repair_input,
+        memories,
+        active_context,
+        active_project_context,
+        rule_route_context,
+        file_tree,
+        mentioned_files,
+    )
+    .await?;
+    let content = strip_file_tree_write_claim_lines(&body_response.reply);
+    if !reply_can_seed_local_file_operation(&body_response.reply) {
+        return Ok(None);
+    }
+    body_response.edits.clear();
+    body_response.memories.clear();
+    let library = infer_local_write_library_from_request(input);
+    body_response.reply = format!(
+        "已生成正文，并保存到{}文件 `{}`。",
+        local_write_library_label(library),
+        path
+    );
+    body_response.file_operations = vec![ModelFileOperation {
+        action: "writeFile".to_string(),
+        library: library.to_string(),
+        path,
+        new_name: None,
+        content: Some(strip_wrapping_code_fence(&content).trim().to_string()),
+    }];
+    Ok(Some(body_response))
 }
 
 fn clone_cocreation_input(input: &CoCreateInput) -> CoCreateInput {
@@ -587,6 +619,211 @@ fn build_file_operation_repair_user_input(input: &CoCreateInput, previous_reply:
         input.user_input.trim(),
         previous_reply.trim()
     )
+}
+
+fn build_document_body_repair_user_input(
+    input: &CoCreateInput,
+    previous_reply: &str,
+    path: &str,
+) -> String {
+    format!(
+        "上一轮回复仍没有提供可执行文件操作，Wridian 需要先拿到完整新文档正文再由本地安全写入。请基于当前稿件和用户原请求，直接输出目标文件 `{}` 的完整正文。不要写“已保存/已新建/重点推进/说明/总结/我将”，不要列大纲，不要解释；只输出可以原样保存进文件的正文。用户原请求：{}\n上一轮回复：{}",
+        path,
+        input.user_input.trim(),
+        previous_reply.trim()
+    )
+}
+
+fn infer_local_write_library_from_request(input: &CoCreateInput) -> &'static str {
+    if normalize_match_text(&input.user_input).contains("知识库") {
+        "knowledge"
+    } else {
+        "works"
+    }
+}
+
+fn local_write_library_label(library: &str) -> &'static str {
+    if library == "knowledge" {
+        "知识库"
+    } else {
+        "作品库"
+    }
+}
+
+fn infer_local_write_file_path_from_request(input: &CoCreateInput) -> Option<String> {
+    let text = input.user_input.trim();
+    let filename = infer_requested_document_filename(text)?;
+    Some(ensure_editable_document_extension(&filename))
+}
+
+fn infer_requested_document_filename(text: &str) -> Option<String> {
+    if let Some(named) =
+        extract_name_after_keywords(text, &["命名为", "叫做", "名为", "文件名为", "文档名为"])
+    {
+        return Some(named);
+    }
+    if let Some(episode) = infer_next_episode_filename(text) {
+        return Some(episode);
+    }
+    extract_quoted_document_name(text)
+}
+
+fn infer_next_episode_filename(text: &str) -> Option<String> {
+    let normalized = normalize_match_text(text);
+    let direct = extract_episode_numbers_after_keywords(
+        &normalized,
+        &["续写第", "生成第", "创建第", "新建第", "写第"],
+    );
+    if let Some(episode) = direct.last() {
+        return Some(format!("第{}集", episode));
+    }
+    let episodes = extract_all_episode_numbers(&normalized);
+    if episodes.len() >= 2 {
+        return episodes.last().map(|episode| format!("第{}集", episode));
+    }
+    None
+}
+
+fn extract_name_after_keywords(text: &str, keywords: &[&str]) -> Option<String> {
+    keywords.iter().find_map(|keyword| {
+        let start = text.find(keyword)? + keyword.len();
+        take_filename_token(&text[start..])
+    })
+}
+
+fn extract_quoted_document_name(text: &str) -> Option<String> {
+    let pairs = [
+        ('「', '」'),
+        ('『', '』'),
+        ('《', '》'),
+        ('“', '”'),
+        ('"', '"'),
+    ];
+    for (open, close) in pairs {
+        let Some(start) = text.find(open) else {
+            continue;
+        };
+        let body_start = start + open.len_utf8();
+        let Some(end_offset) = text[body_start..].find(close) else {
+            continue;
+        };
+        let value = text[body_start..body_start + end_offset].trim();
+        if !value.is_empty() && value.chars().count() <= 80 {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+fn take_filename_token(text: &str) -> Option<String> {
+    let value = text
+        .trim_start()
+        .chars()
+        .take_while(|ch| !ch.is_whitespace() && !"，。,.；;：:".contains(*ch))
+        .take(80)
+        .collect::<String>()
+        .trim()
+        .to_string();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn extract_episode_numbers_after_keywords(text: &str, keywords: &[&str]) -> Vec<String> {
+    let mut episodes = Vec::new();
+    for keyword in keywords {
+        let mut rest = text;
+        while let Some(index) = rest.find(keyword) {
+            let after = &rest[index + keyword.len()..];
+            if let Some(episode) = take_episode_number_before_ji(after) {
+                episodes.push(episode);
+            }
+            rest = &after[after
+                .char_indices()
+                .nth(1)
+                .map(|(offset, _)| offset)
+                .unwrap_or(after.len())..];
+        }
+    }
+    episodes
+}
+
+fn extract_all_episode_numbers(text: &str) -> Vec<String> {
+    let mut episodes = Vec::new();
+    let mut rest = text;
+    while let Some(index) = rest.find('第') {
+        let after = &rest[index + '第'.len_utf8()..];
+        if let Some(episode) = take_episode_number_before_ji(after) {
+            episodes.push(episode);
+        }
+        rest = after;
+    }
+    episodes
+}
+
+fn take_episode_number_before_ji(text: &str) -> Option<String> {
+    let mut number = String::new();
+    for ch in text.chars() {
+        if ch == '集' {
+            return if number.is_empty() {
+                None
+            } else {
+                Some(number)
+            };
+        }
+        if ch.is_ascii_digit() || "一二三四五六七八九十百".contains(ch) {
+            number.push(ch);
+            continue;
+        }
+        break;
+    }
+    None
+}
+
+fn ensure_editable_document_extension(filename: &str) -> String {
+    let clean_name = filename
+        .chars()
+        .filter(|ch| !matches!(ch, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+        .collect::<String>()
+        .trim()
+        .to_string();
+    let clean_name = if clean_name.is_empty() {
+        "新建文档".to_string()
+    } else {
+        clean_name
+    };
+    let lower = clean_name.to_lowercase();
+    if lower.ends_with(".md")
+        || lower.ends_with(".markdown")
+        || lower.ends_with(".txt")
+        || lower.ends_with(".docx")
+    {
+        clean_name
+    } else {
+        format!("{}.md", clean_name)
+    }
+}
+
+fn strip_wrapping_code_fence(content: &str) -> String {
+    let trimmed = content.trim();
+    if !trimmed.starts_with("```") {
+        return trimmed.to_string();
+    }
+    let mut lines = trimmed.lines().collect::<Vec<_>>();
+    if lines.len() >= 2
+        && lines
+            .first()
+            .is_some_and(|line| line.trim_start().starts_with("```"))
+    {
+        lines.remove(0);
+        if lines.last().is_some_and(|line| line.trim() == "```") {
+            lines.pop();
+        }
+        return lines.join("\n").trim().to_string();
+    }
+    trimmed.to_string()
 }
 
 async fn cocreate_with_openai_oauth(
@@ -3347,7 +3584,7 @@ mod tests {
             "## 第2集\n\n主角走进新的冲突。"
         );
 
-        let seeded = apply_mock_file_operation_repair_result(&input, parsed);
+        let seeded = prepare_local_file_operation_seed_response(parsed);
         assert!(seeded.file_operations.is_empty());
         assert!(seeded.edits.is_empty());
         assert!(seeded.memories.is_empty());
@@ -3362,6 +3599,26 @@ mod tests {
         .expect("parse");
 
         assert!(!reply_can_seed_local_file_operation(&parsed.reply));
+    }
+
+    #[test]
+    fn exact_episode_request_infers_second_episode_filename() {
+        let input = CoCreateInput {
+            request_id: None,
+            source_path: "D:/works/测试/第1集.docx".to_string(),
+            title: "第1集.docx".to_string(),
+            content: "第一集".to_string(),
+            draft_kind: Some("screenplay".to_string()),
+            user_input: "根据第1集剧情，续写第2集，在作品库里新建个文档保存".to_string(),
+            selected_text: None,
+            selected_model_id: None,
+            context_items: Vec::new(),
+        };
+
+        assert_eq!(
+            infer_local_write_file_path_from_request(&input),
+            Some("第2集.md".to_string())
+        );
     }
 
     #[test]
