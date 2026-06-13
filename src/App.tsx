@@ -26,7 +26,7 @@ import {
   createDraftReplaceGuardReport,
   describeDraftReplaceSkip,
 } from "./editor/draftReplaceGuard";
-import { DraftEditor, readContentEditableSelection, setContentEditableCaret, type TextSelection } from "./editor/DraftEditor";
+import { DraftEditor, readContentEditableSelection, setContentEditableCaret, type AppliedDraftEdit, type TextSelection } from "./editor/DraftEditor";
 import { baseName, detectDraftKind } from "./editor/draftKind";
 import { libraryFolderTooltip } from "./libraryToolbar";
 import {
@@ -287,6 +287,7 @@ function App() {
   const [editorContent, setEditorContent] = useState("");
   const [lastSavedContent, setLastSavedContent] = useState("");
   const [acceptedEditUndo, setAcceptedEditUndo] = useState<AcceptedEditUndo | null>(null);
+  const [appliedDraftEdits, setAppliedDraftEdits] = useState<AppliedDraftEdit[]>([]);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [saveError, setSaveError] = useState("");
   const [bridgeStatus, setBridgeStatus] = useState("");
@@ -326,16 +327,33 @@ function App() {
     const guardReport = createDraftReplaceGuardReport(content, edits);
     if (!guardReport.matches.length) {
       setPendingEdits((current) => [...current, ...edits]);
+      chatManager.setError("没有在当前打开文件中找到可安全修改的原文片段。请确认现在打开的是要修改的文件，再重试。");
       return;
     }
     const appliedIds = new Set(guardReport.matches.map((match) => match.edit.id));
-    const nextContent = [...guardReport.matches].sort((left, right) => right.index - left.index).reduce((currentContent, match) => {
+    const matches = [...guardReport.matches].sort((left, right) => right.index - left.index);
+    const nextContent = matches.reduce((currentContent, match) => {
       const start = match.index;
       const end = start + match.edit.target.length;
       return `${currentContent.slice(0, start)}${match.edit.replacement}${currentContent.slice(end)}`;
     }, content);
+    let offset = 0;
+    const appliedHighlights = [...guardReport.matches].sort((left, right) => left.index - right.index).map((match) => {
+      const start = match.index + offset;
+      const end = start + match.edit.replacement.length;
+      offset += match.edit.replacement.length - match.edit.target.length;
+      return {
+        end,
+        id: match.edit.id,
+        replacement: match.edit.replacement,
+        start,
+        target: match.edit.target,
+      };
+    });
     editorContentRef.current = nextContent;
+    chatManager.setError(guardReport.skipped.length ? `${guardReport.skipped.length} 处修改没有在当前打开文件中安全定位。请确认是否已打开正确文件。` : "");
     setAcceptedEditUndo({ path: selectedPathRef.current, content });
+    setAppliedDraftEdits(appliedHighlights);
     setEditorContent(nextContent);
     setPendingEdits((current) => [
       ...current,
@@ -352,6 +370,7 @@ function App() {
   useEffect(() => {
     selectedPathRef.current = selectedPath;
     setAcceptedEditUndo(null);
+    setAppliedDraftEdits([]);
   }, [selectedPath]);
 
   useEffect(() => {
@@ -1081,26 +1100,15 @@ function App() {
 
   const handleEditorContentChange = useCallback((content: string) => {
     setAcceptedEditUndo(null);
+    setAppliedDraftEdits([]);
     setEditorContent(content);
   }, []);
-
-  const applyTextToDraft = useCallback((text: string, selection: TextSelection) => {
-    const start = Math.max(0, Math.min(selection.start, editorContent.length));
-    const end = Math.max(start, Math.min(selection.end, editorContent.length));
-    const nextContent = `${editorContent.slice(0, start)}${text}${editorContent.slice(end)}`;
-    const nextCursor = start + text.length;
-    setEditorContent(nextContent);
-    draftSelectionRef.current = { start: nextCursor, end: nextCursor };
-    setSelectionActionPosition(null);
-    window.requestAnimationFrame(() => {
-      setContentEditableCaret(draftEditorRef.current, nextCursor);
-    });
-  }, [editorContent]);
 
   const undoAcceptedEdit = () => {
     if (!acceptedEditUndo || acceptedEditUndo.path !== selectedPath) return;
     setEditorContent(acceptedEditUndo.content);
     setAcceptedEditUndo(null);
+    setAppliedDraftEdits([]);
     draftSelectionRef.current = { start: 0, end: 0 };
     setSelectionActionPosition(null);
     chatManager.setError("");
@@ -1145,12 +1153,29 @@ function App() {
     const match = guardReport.matches.find((item) => item.edit.id === id);
     if (!match) {
       const skipped = guardReport.skipped.find((item) => item.edit.id === id);
-      chatManager.setError(skipped ? describeDraftReplaceSkip(skipped.reason) : "这处修改无法安全定位。");
+      const reason = skipped ? describeDraftReplaceSkip(skipped.reason) : "这处修改无法安全定位";
+      chatManager.setError(`${reason}。请确认现在打开的是要修改的文件。`);
       return;
     }
     chatManager.setError("");
     setAcceptedEditUndo({ path: selectedPath, content: editorContent });
-    applyTextToDraft(edit.replacement, { start: match.index, end: match.index + edit.target.length });
+    const start = match.index;
+    const end = start + edit.target.length;
+    const nextContent = `${editorContent.slice(0, start)}${edit.replacement}${editorContent.slice(end)}`;
+    const nextCursor = start + edit.replacement.length;
+    setEditorContent(nextContent);
+    draftSelectionRef.current = { start: nextCursor, end: nextCursor };
+    setSelectionActionPosition(null);
+    setAppliedDraftEdits([{
+      end: start + edit.replacement.length,
+      id: edit.id,
+      replacement: edit.replacement,
+      start,
+      target: edit.target,
+    }]);
+    window.requestAnimationFrame(() => {
+      setContentEditableCaret(draftEditorRef.current, nextCursor);
+    });
     setPendingEdits((edits) => edits.map((item) => (item.id === id ? { ...item, status: "accepted" } : item)));
   };
 
@@ -1164,7 +1189,7 @@ function App() {
     const matches = guardReport.matches;
 
     if (!matches.length) {
-      chatManager.setError("没有可以安全确认的修改。");
+      chatManager.setError("没有可以安全确认的修改。请确认现在打开的是要修改的文件。");
       return;
     }
 
@@ -1177,8 +1202,21 @@ function App() {
 
     setAcceptedEditUndo({ path: selectedPath, content: editorContent });
     setEditorContent(nextContent);
+    let offset = 0;
+    setAppliedDraftEdits([...matches].sort((left, right) => left.index - right.index).map((match) => {
+      const start = match.index + offset;
+      const end = start + match.edit.replacement.length;
+      offset += match.edit.replacement.length - match.edit.target.length;
+      return {
+        end,
+        id: match.edit.id,
+        replacement: match.edit.replacement,
+        start,
+        target: match.edit.target,
+      };
+    }));
     setPendingEdits((edits) => edits.map((edit) => (appliedIds.has(edit.id) ? { ...edit, status: "accepted" } : edit)));
-    chatManager.setError(guardReport.skipped.length ? `${guardReport.skipped.length} 处修改需要重新定位。` : "");
+    chatManager.setError(guardReport.skipped.length ? `${guardReport.skipped.length} 处修改没有在当前打开文件中安全定位。请确认是否已打开正确文件。` : "");
     draftSelectionRef.current = { start: 0, end: 0 };
     setSelectionActionPosition(null);
 
@@ -1497,6 +1535,7 @@ function App() {
                   </div>
                 </div>
                 <DraftEditor
+                  appliedEdits={appliedDraftEdits}
                   content={editorContent}
                   edits={pendingDraftEdits}
                   editorRef={draftEditorRef}

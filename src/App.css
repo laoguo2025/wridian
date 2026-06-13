@@ -1093,6 +1093,15 @@ button {
   display: inline;
 }
 
+.inline-applied-edit {
+  display: inline;
+  background: rgba(45, 145, 82, 0.22);
+  color: color-mix(in srgb, var(--text-body), #2d9152 20%);
+  border-radius: 3px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
 .inline-diff {
   display: inline;
 }
@@ -1107,12 +1116,6 @@ button {
   background: rgba(45, 145, 82, 0.18);
   color: #226c3d;
   text-decoration: none;
-}
-
-.inline-edit small {
-  color: var(--text-muted);
-  font-size: calc(12px * var(--ui-font-scale, 1));
-  margin-left: 6px;
 }
 
 .inline-edit-actions {
