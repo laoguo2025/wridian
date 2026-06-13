@@ -17,6 +17,7 @@ import {
   MessageEditSubmitIcon,
   RetryIcon,
 } from "../icons";
+import type { CoCreateFileOperation } from "./cocreationClient";
 
 type ProjectMenuPosition = {
   left: number;
@@ -536,6 +537,7 @@ function ChatMessageView({
         ) : (
           <div className="chat-message-bubble">
             <div className="chat-message-body">{message.text}</div>
+            {message.fileOperations?.length ? <FileOperationBlocks operations={message.fileOperations} /> : null}
           </div>
         )}
         {!editing ? (
@@ -604,6 +606,49 @@ function ChatMessageView({
       </div>
     </article>
   );
+}
+
+function FileOperationBlocks({ operations }: { operations: CoCreateFileOperation[] }) {
+  return (
+    <div className="chat-tool-results" aria-label="文件操作结果">
+      {operations.map((operation, index) => (
+        <div
+          className={`chat-tool-result ${operation.ok ? "ok" : "error"}`}
+          key={`${operation.action}:${operation.library}:${operation.path}:${index}`}
+        >
+          <div className="chat-tool-result-head">
+            <span className="chat-tool-result-name">{fileOperationLabel(operation)}</span>
+            <span className="chat-tool-result-status">{operation.ok ? "已执行" : "未执行"}</span>
+          </div>
+          <div className="chat-tool-result-path" title={operation.path}>
+            {libraryLabel(operation.library)} / {operation.path || "未指定路径"}
+          </div>
+          <div className="chat-tool-result-message">{operation.message}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function fileOperationLabel(operation: CoCreateFileOperation) {
+  switch (operation.action) {
+    case "writeFile":
+      return "写入文件";
+    case "createFolder":
+      return "创建文件夹";
+    case "rename":
+      return "重命名";
+    case "trash":
+      return "移到回收站";
+    default:
+      return operation.action || "文件操作";
+  }
+}
+
+function libraryLabel(library: string) {
+  if (library === "knowledge") return "知识库";
+  if (library === "works") return "作品库";
+  return library || "文件库";
 }
 
 function ContextLoadStatusList({ status }: { status: PromptContextLoadStatus[] }) {

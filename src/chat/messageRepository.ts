@@ -1,3 +1,4 @@
+import type { CoCreateFileOperation } from "./cocreationClient";
 import type { PromptContextLoadStatus, PromptContextPill } from "./promptContext";
 
 export type ChatMessage = {
@@ -8,6 +9,7 @@ export type ChatMessage = {
   selectedText?: string;
   contextPills?: PromptContextPill[];
   contextLoadStatus?: PromptContextLoadStatus[];
+  fileOperations?: CoCreateFileOperation[];
 };
 
 function createChatMessageId(prefix: ChatMessage["role"]) {
@@ -30,12 +32,13 @@ export function createUserChatMessage(params: {
   };
 }
 
-export function createAssistantChatMessage(text: string): ChatMessage {
+export function createAssistantChatMessage(text: string, fileOperations: CoCreateFileOperation[] = []): ChatMessage {
   return {
     id: createChatMessageId("assistant"),
     role: "assistant",
     text,
     createdAt: Date.now(),
+    fileOperations: fileOperations.length ? fileOperations : undefined,
   };
 }
 

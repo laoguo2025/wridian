@@ -260,7 +260,7 @@ async fn run_cocreation(
         .map(|path| path.to_string_lossy().into_owned())
         .collect();
     let file_operations = apply_model_file_operations(&data_dir, &model_output.file_operations);
-    model_output.reply = reply_with_applied_file_operations(&model_output.reply, &file_operations);
+    model_output.reply = model_output.reply.trim().to_string();
 
     Ok(CoCreateResponse {
         context_load_status,
@@ -1609,27 +1609,6 @@ fn current_work_file_relative_dir(data_dir: &Path, input: &CoCreateInput) -> Opt
     let parent = relative.parent()?;
     let relative_dir = parent.to_string_lossy().replace('\\', "/");
     Some(relative_dir.trim_matches('/').to_string())
-}
-
-fn reply_with_applied_file_operations(
-    original_reply: &str,
-    file_operations: &[AppliedFileOperation],
-) -> String {
-    if file_operations.is_empty() {
-        return original_reply.trim().to_string();
-    }
-    let mut messages = Vec::new();
-    for operation in file_operations {
-        if operation.ok {
-            messages.push(format!("已处理：{}", operation.path));
-        } else {
-            messages.push(format!(
-                "未能处理 {}：{}",
-                operation.path, operation.message
-            ));
-        }
-    }
-    messages.join("\n")
 }
 
 fn apply_model_file_operations(
@@ -3090,9 +3069,9 @@ mod tests {
 
         let routed = route_new_work_files_to_current_folder(&data_dir, &input, parsed);
         let results = apply_model_file_operations(&data_dir, &routed.file_operations);
-        let reply = reply_with_applied_file_operations(&routed.reply, &results);
 
         assert_eq!(routed.file_operations[0].path, "测试/第2集.md");
+        assert_eq!(routed.reply, "已写入 works/第2集.md。");
         assert!(results[0].ok);
         assert_eq!(results[0].path, "测试/第2集.md");
         assert_eq!(
@@ -3100,8 +3079,6 @@ mod tests {
             "第二集"
         );
         assert!(!work_root.join("第2集.md").exists());
-        assert!(!reply.contains("works/第2集.md"));
-        assert!(reply.contains("测试/第2集.md"));
     }
 
     #[test]

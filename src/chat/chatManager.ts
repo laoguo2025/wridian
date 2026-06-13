@@ -201,7 +201,10 @@ export function useChatManager({
         message.id === userMessage.id ? attachContextLoadStatus(message, response.contextLoadStatus) : message,
       );
       const assistantReply = response.reply;
-      const messagesWithAssistant = [...messagesWithContextStatus, createAssistantChatMessage(assistantReply)];
+      const messagesWithAssistant = [
+        ...messagesWithContextStatus,
+        createAssistantChatMessage(assistantReply, response.fileOperations),
+      ];
       messagesRef.current = messagesWithAssistant;
       setMessages(messagesWithAssistant);
       void persistChat(
