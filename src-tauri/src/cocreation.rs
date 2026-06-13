@@ -565,7 +565,7 @@ async fn generate_local_write_file_from_repair_body(
     };
     let mut repair_input = clone_cocreation_input(input);
     repair_input.user_input = build_document_body_repair_user_input(input, previous_reply, &path);
-    let mut body_response = cocreate_with_model(
+    let content = generate_document_body_with_model(
         settings,
         project_model,
         &repair_input,
@@ -577,26 +577,27 @@ async fn generate_local_write_file_from_repair_body(
         mentioned_files,
     )
     .await?;
-    let content = strip_file_tree_write_claim_lines(&body_response.reply);
-    if !reply_can_seed_local_file_operation(&body_response.reply) {
+    let content = sanitize_generated_document_body(&content);
+    if !looks_like_standalone_document_body(&content) {
         return Ok(None);
     }
-    body_response.edits.clear();
-    body_response.memories.clear();
     let library = infer_local_write_library_from_request(input);
-    body_response.reply = format!(
-        "已生成正文，并保存到{}文件 `{}`。",
-        local_write_library_label(library),
-        path
-    );
-    body_response.file_operations = vec![ModelFileOperation {
-        action: "writeFile".to_string(),
-        library: library.to_string(),
-        path,
-        new_name: None,
-        content: Some(strip_wrapping_code_fence(&content).trim().to_string()),
-    }];
-    Ok(Some(body_response))
+    Ok(Some(ParsedCoCreateResponse {
+        reply: format!(
+            "已生成正文，并保存到{}文件 `{}`。",
+            local_write_library_label(library),
+            path
+        ),
+        edits: Vec::new(),
+        memories: Vec::new(),
+        file_operations: vec![ModelFileOperation {
+            action: "writeFile".to_string(),
+            library: library.to_string(),
+            path,
+            new_name: None,
+            content: Some(content),
+        }],
+    }))
 }
 
 fn clone_cocreation_input(input: &CoCreateInput) -> CoCreateInput {
@@ -611,6 +612,151 @@ fn clone_cocreation_input(input: &CoCreateInput) -> CoCreateInput {
         selected_model_id: input.selected_model_id.clone(),
         context_items: input.context_items.clone(),
     }
+}
+
+async fn generate_document_body_with_model(
+    settings: &ActiveModelSettings,
+    project_model: Option<&str>,
+    input: &CoCreateInput,
+    memories: &[String],
+    active_context: &str,
+    active_project_context: &str,
+    rule_route_context: &RuleRouteContext,
+    file_tree: &str,
+    mentioned_files: &[DialogueContextItem],
+) -> Result<String, String> {
+    let data_dir = wridian_data_dir()?;
+    if let Some(mock_output) = crate::e2e::take_next_cocreation_output(&data_dir)? {
+        return Ok(parse_cocreation_model_output(&mock_output)?.reply);
+    }
+    ensure_supported_protocol(&settings.protocol)?;
+    match settings.protocol.as_str() {
+        "openai-compatible" => {
+            generate_document_body_with_openai_compatible(
+                settings,
+                project_model,
+                input,
+                memories,
+                active_context,
+                active_project_context,
+                rule_route_context,
+                file_tree,
+                mentioned_files,
+            )
+            .await
+        }
+        _ => {
+            let parsed = cocreate_with_model(
+                settings,
+                project_model,
+                input,
+                memories,
+                active_context,
+                active_project_context,
+                rule_route_context,
+                file_tree,
+                mentioned_files,
+            )
+            .await?;
+            Ok(parsed.reply)
+        }
+    }
+}
+
+async fn generate_document_body_with_openai_compatible(
+    settings: &ActiveModelSettings,
+    project_model: Option<&str>,
+    input: &CoCreateInput,
+    memories: &[String],
+    active_context: &str,
+    active_project_context: &str,
+    rule_route_context: &RuleRouteContext,
+    file_tree: &str,
+    mentioned_files: &[DialogueContextItem],
+) -> Result<String, String> {
+    let url = openai_chat_completions_url(&settings.base_url);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(90))
+        .build()
+        .map_err(|error| format!("正文生成客户端创建失败：{error}"))?;
+    let body = openai_compatible_chat_body(
+        settings,
+        project_model.unwrap_or(&settings.model),
+        json!([
+            {
+                "role": "system",
+                "content": document_body_system_prompt()
+            },
+            {
+                "role": "user",
+                "content": build_document_body_prompt(
+                    input,
+                    memories,
+                    active_context,
+                    active_project_context,
+                    rule_route_context,
+                    file_tree,
+                    mentioned_files,
+                )
+            }
+        ]),
+        4096,
+        0.85,
+    );
+    let response = client
+        .post(url)
+        .bearer_auth(&settings.api_key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| format!("正文生成请求失败：{error}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("正文生成响应读取失败：{error}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "正文生成失败：HTTP {} {}",
+            status.as_u16(),
+            response_body_summary(&body)
+        ));
+    }
+    read_model_response_text(&body)
+}
+
+fn document_body_system_prompt() -> &'static str {
+    "你是短剧/小说正文续写助手。本轮只输出可直接保存进新文档的正文，不输出 JSON，不输出解释，不输出总结，不输出“已保存/已新建/我将/以下是”。"
+}
+
+fn build_document_body_prompt(
+    input: &CoCreateInput,
+    memories: &[String],
+    active_context: &str,
+    active_project_context: &str,
+    rule_route_context: &RuleRouteContext,
+    file_tree: &str,
+    mentioned_files: &[DialogueContextItem],
+) -> String {
+    format!(
+        "{}\n\n硬性要求：\n- 只输出目标新文件正文。\n- 第一行应是目标稿件标题，例如“# 第2集”或“## 第2集”。\n- 不要说已经保存，不要写操作说明，不要列“重点推进/大纲/说明”。\n- 文风和格式承接当前稿件。\n\n用户原请求：{}",
+        build_cocreation_prompt(
+            input,
+            memories,
+            active_context,
+            active_project_context,
+            rule_route_context,
+            file_tree,
+            mentioned_files,
+        ),
+        input.user_input.trim()
+    )
+}
+
+fn sanitize_generated_document_body(content: &str) -> String {
+    strip_wrapping_code_fence(&strip_file_tree_write_claim_lines(content))
+        .trim()
+        .to_string()
 }
 
 fn build_file_operation_repair_user_input(input: &CoCreateInput, previous_reply: &str) -> String {
