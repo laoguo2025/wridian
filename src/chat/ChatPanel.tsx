@@ -536,7 +536,9 @@ function ChatMessageView({
           </div>
         ) : (
           <div className="chat-message-bubble">
-            <div className="chat-message-body">{message.text}</div>
+            <div className={`chat-message-body ${isUser ? "plain" : "markdown"}`}>
+              {isUser ? message.text : <MarkdownMessage text={message.text} />}
+            </div>
             {message.fileOperations?.length ? <FileOperationBlocks operations={message.fileOperations} /> : null}
           </div>
         )}
@@ -606,6 +608,198 @@ function ChatMessageView({
       </div>
     </article>
   );
+}
+
+function MarkdownMessage({ text }: { text: string }) {
+  return <div className="chat-markdown">{renderMarkdownBlocks(text)}</div>;
+}
+
+function renderMarkdownBlocks(text: string) {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const blocks: ReactNode[] = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index];
+    if (!line.trim()) {
+      index += 1;
+      continue;
+    }
+
+    const codeFence = line.match(/^\s*```(\w+)?\s*$/);
+    if (codeFence) {
+      const language = codeFence[1];
+      const codeLines: string[] = [];
+      index += 1;
+      while (index < lines.length && !/^\s*```\s*$/.test(lines[index])) {
+        codeLines.push(lines[index]);
+        index += 1;
+      }
+      if (index < lines.length) index += 1;
+      blocks.push(
+        <pre className="chat-markdown-codeblock" key={`code-${index}`}>
+          <code data-language={language || undefined}>{codeLines.join("\n")}</code>
+        </pre>,
+      );
+      continue;
+    }
+
+    const table = parseMarkdownTable(lines, index);
+    if (table) {
+      blocks.push(
+        <div className="chat-markdown-table-wrap" key={`table-${index}`}>
+          <table>
+            <thead>
+              <tr>
+                {table.headers.map((header, cellIndex) => (
+                  <th key={`h-${cellIndex}`}>{renderInlineMarkdown(header)}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {table.rows.map((row, rowIndex) => (
+                <tr key={`r-${rowIndex}`}>
+                  {table.headers.map((_, cellIndex) => (
+                    <td key={`c-${cellIndex}`}>{renderInlineMarkdown(row[cellIndex] ?? "")}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>,
+      );
+      index = table.nextIndex;
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,4})\s+(.+)$/);
+    if (heading) {
+      const level = Math.min(heading[1].length, 4);
+      const HeadingTag = `h${level}` as "h1" | "h2" | "h3" | "h4";
+      blocks.push(<HeadingTag key={`heading-${index}`}>{renderInlineMarkdown(heading[2].trim())}</HeadingTag>);
+      index += 1;
+      continue;
+    }
+
+    if (/^\s*[-*]\s+/.test(line)) {
+      const items: ReactNode[] = [];
+      while (index < lines.length) {
+        const match = lines[index].match(/^\s*[-*]\s+(.+)$/);
+        if (!match) break;
+        items.push(<li key={`ul-${index}`}>{renderInlineMarkdown(match[1].trim())}</li>);
+        index += 1;
+      }
+      blocks.push(<ul key={`ul-block-${index}`}>{items}</ul>);
+      continue;
+    }
+
+    if (/^\s*\d+[.)]\s+/.test(line)) {
+      const items: ReactNode[] = [];
+      while (index < lines.length) {
+        const match = lines[index].match(/^\s*\d+[.)]\s+(.+)$/);
+        if (!match) break;
+        items.push(<li key={`ol-${index}`}>{renderInlineMarkdown(match[1].trim())}</li>);
+        index += 1;
+      }
+      blocks.push(<ol key={`ol-block-${index}`}>{items}</ol>);
+      continue;
+    }
+
+    const paragraphLines = [line.trim()];
+    index += 1;
+    while (
+      index < lines.length
+      && lines[index].trim()
+      && !isMarkdownBlockStart(lines, index)
+    ) {
+      paragraphLines.push(lines[index].trim());
+      index += 1;
+    }
+    blocks.push(<p key={`p-${index}`}>{renderInlineMarkdown(paragraphLines.join(" "))}</p>);
+  }
+
+  return blocks;
+}
+
+function isMarkdownBlockStart(lines: string[], index: number) {
+  const line = lines[index];
+  return Boolean(
+    /^\s*```/.test(line)
+    || /^(#{1,4})\s+/.test(line)
+    || /^\s*[-*]\s+/.test(line)
+    || /^\s*\d+[.)]\s+/.test(line)
+    || parseMarkdownTable(lines, index),
+  );
+}
+
+function parseMarkdownTable(lines: string[], startIndex: number) {
+  const headerLine = lines[startIndex];
+  const separatorLine = lines[startIndex + 1];
+  if (!isMarkdownTableRow(headerLine) || !isMarkdownTableSeparator(separatorLine)) {
+    return null;
+  }
+
+  const headers = splitMarkdownTableRow(headerLine);
+  const rows: string[][] = [];
+  let index = startIndex + 2;
+  while (index < lines.length && isMarkdownTableRow(lines[index])) {
+    rows.push(splitMarkdownTableRow(lines[index]));
+    index += 1;
+  }
+
+  return { headers, rows, nextIndex: index };
+}
+
+function isMarkdownTableRow(line?: string) {
+  return Boolean(line && line.includes("|") && splitMarkdownTableRow(line).length > 1);
+}
+
+function isMarkdownTableSeparator(line?: string) {
+  if (!line || !line.includes("|")) return false;
+  const cells = splitMarkdownTableRow(line);
+  return cells.length > 1 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
+}
+
+function splitMarkdownTableRow(line: string) {
+  return line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+}
+
+function renderInlineMarkdown(text: string): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\(https?:\/\/[^)\s]+\))/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(text))) {
+    if (match.index > lastIndex) nodes.push(text.slice(lastIndex, match.index));
+    const token = match[0];
+    const key = `${match.index}-${token}`;
+    if (token.startsWith("`")) {
+      nodes.push(<code key={key}>{token.slice(1, -1)}</code>);
+    } else if (token.startsWith("**")) {
+      nodes.push(<strong key={key}>{renderInlineMarkdown(token.slice(2, -2))}</strong>);
+    } else {
+      const link = token.match(/^\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)$/);
+      if (link) {
+        nodes.push(
+          <a href={link[2]} key={key} rel="noreferrer" target="_blank">
+            {link[1]}
+          </a>,
+        );
+      } else {
+        nodes.push(token);
+      }
+    }
+    lastIndex = pattern.lastIndex;
+  }
+
+  if (lastIndex < text.length) nodes.push(text.slice(lastIndex));
+  return nodes;
 }
 
 function FileOperationBlocks({ operations }: { operations: CoCreateFileOperation[] }) {

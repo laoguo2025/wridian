@@ -78,3 +78,4 @@
   - `.workbench/governance/2026-06-13-package-0.0.7-test-inline-diff.md`
   - `.workbench/governance/2026-06-13-chat-file-operation-tool-blocks.md`
   - `.workbench/governance/2026-06-13-package-0.0.8-chat-file-operation-tool-blocks.md`
+  - `.workbench/governance/2026-06-13-chat-markdown-file-operation-repair.md`

@@ -490,7 +490,7 @@ fn clone_cocreation_input(input: &CoCreateInput) -> CoCreateInput {
 
 fn build_file_operation_repair_user_input(input: &CoCreateInput, previous_reply: &str) -> String {
     format!(
-        "上一轮回复声称已经新建或写入文件，但 fileOperations 为空，Wridian 实际没有执行任何文件树操作。请基于同一当前稿件和同一用户请求，重新只返回可执行 JSON：reply 简短说明，edits 为空，memories 为空，fileOperations 必须包含实际需要的新建文件操作。用户原请求：{}\n上一轮回复：{}\n如果用户没有指定扩展名，新建文档默认使用 .md；如果用户要求放在新建文档里，使用 writeFile 写入完整初始内容；不要再只在 reply 里说已新建。",
+        "上一轮回复没有返回可执行的 fileOperations，Wridian 实际没有执行任何文件树操作。请基于同一当前稿件和同一用户请求，重新只返回可执行 JSON：reply 简短说明，edits 为空，memories 为空，fileOperations 必须包含实际需要的文件树操作。用户原请求：{}\n上一轮回复：{}\n如果用户没有指定扩展名，新建文档默认使用 .md；如果用户要求放在新建文档里，使用 writeFile 写入完整初始内容；重命名使用 rename；删除使用 trash；创建目录使用 createFolder。不要再只在 reply 里给正文或口头描述。",
         input.user_input.trim(),
         previous_reply.trim()
     )
@@ -1495,7 +1495,7 @@ fn reject_missing_file_operations_for_file_requests(
         return parsed;
     }
     parsed.reply =
-        "这次模型只在回复里声称已新建文件，但没有返回可执行的文件树操作；Wridian 已拦截这条假成功回复，没有写入任何文件。请重新发送一次新建文件请求。".to_string();
+        "这次模型没有返回可执行的文件树操作；Wridian 已拦截这条回复，没有新建、修改或删除任何文件。请重新发送一次文件树操作请求，最好带上目标文件名或目录。".to_string();
     parsed.edits.clear();
     parsed.memories.clear();
     parsed
@@ -1507,7 +1507,6 @@ fn should_repair_missing_file_operations(
 ) -> bool {
     parsed.file_operations.is_empty()
         && user_requested_file_tree_write(input)
-        && reply_claims_file_tree_write(&parsed.reply)
 }
 
 fn user_requested_file_tree_write(input: &CoCreateInput) -> bool {
@@ -1516,7 +1515,23 @@ fn user_requested_file_tree_write(input: &CoCreateInput) -> bool {
         return false;
     }
     let has_create_intent = [
-        "新建", "创建", "新增", "生成", "写入", "放到", "放在", "保存",
+        "新建",
+        "创建",
+        "新增",
+        "生成",
+        "写入",
+        "放到",
+        "放在",
+        "保存",
+        "重命名",
+        "改名",
+        "修改文件名",
+        "改文件名",
+        "删除",
+        "删掉",
+        "移除",
+        "移到回收站",
+        "移动到回收站",
     ]
     .iter()
     .any(|keyword| text.contains(keyword));
@@ -1526,6 +1541,9 @@ fn user_requested_file_tree_write(input: &CoCreateInput) -> bool {
         "文件树",
         "作品库",
         "知识库",
+        "文件夹",
+        "目录",
+        "稿件",
         "md",
         "markdown",
         "docx",
@@ -1534,37 +1552,6 @@ fn user_requested_file_tree_write(input: &CoCreateInput) -> bool {
     .iter()
     .any(|keyword| text.contains(keyword));
     has_create_intent && has_file_target
-}
-
-fn reply_claims_file_tree_write(reply: &str) -> bool {
-    let text = normalize_match_text(reply);
-    if text.is_empty() {
-        return false;
-    }
-    let claims_done = [
-        "已新建",
-        "已创建",
-        "已写入",
-        "已保存",
-        "新建为",
-        "创建为",
-        "写入到",
-    ]
-    .iter()
-    .any(|keyword| text.contains(keyword));
-    let mentions_file = [
-        "works/",
-        "knowledge/",
-        ".md",
-        ".markdown",
-        ".docx",
-        ".txt",
-        "文件",
-        "文档",
-    ]
-    .iter()
-    .any(|keyword| text.contains(keyword));
-    claims_done && mentions_file
 }
 
 fn route_new_work_files_to_current_folder(
@@ -3103,7 +3090,35 @@ mod tests {
         let rejected = reject_missing_file_operations_for_file_requests(&input, parsed);
 
         assert!(!rejected.reply.contains("works/第2集.docx"));
-        assert!(rejected.reply.contains("没有写入任何文件"));
+        assert!(rejected.reply.contains("没有新建、修改或删除任何文件"));
+        assert!(rejected.file_operations.is_empty());
+        assert!(rejected.edits.is_empty());
+        assert!(rejected.memories.is_empty());
+    }
+
+    #[test]
+    fn explicit_new_document_request_with_plain_reply_is_repaired_or_rejected() {
+        let input = CoCreateInput {
+            request_id: None,
+            source_path: "D:/works/测试/第1集.docx".to_string(),
+            title: "第1集.docx".to_string(),
+            content: "第一集".to_string(),
+            draft_kind: Some("screenplay".to_string()),
+            user_input: "新建一个文档，续写第2集".to_string(),
+            selected_text: None,
+            selected_model_id: None,
+            context_items: Vec::new(),
+        };
+        let parsed = parse_cocreation_model_output(
+            r###"{"reply":"## 第2集\n\n这一集从上一集结尾继续。","edits":[],"fileOperations":[],"memories":[]}"###,
+        )
+        .expect("parse");
+
+        assert!(should_repair_missing_file_operations(&input, &parsed));
+        let rejected = reject_missing_file_operations_for_file_requests(&input, parsed);
+
+        assert!(rejected.reply.contains("没有新建、修改或删除任何文件"));
+        assert!(!rejected.reply.contains("## 第2集"));
         assert!(rejected.file_operations.is_empty());
         assert!(rejected.edits.is_empty());
         assert!(rejected.memories.is_empty());
