@@ -328,7 +328,9 @@ fn run_mock_cocreation(
         &file_tree_slot,
         &mentioned_files,
     );
-    let model_output = ensure_parsed_cocreation_response(parse_cocreation_model_output(&mock_output)?)?;
+    let model_output =
+        ensure_parsed_cocreation_response(parse_cocreation_model_output(&mock_output)?)?;
+    let model_output = apply_mock_file_operation_repair_result(input, model_output);
     let model_output = route_current_file_writes_to_edits(data_dir, input, model_output);
     let mut model_output = route_new_work_files_to_current_folder(data_dir, input, model_output);
     let memories_written = write_memory_leaves(data_dir, &model_output.memories)?
@@ -345,6 +347,19 @@ fn run_mock_cocreation(
         memories_used: Vec::new(),
         memories_written,
     })
+}
+
+fn apply_mock_file_operation_repair_result(
+    input: &CoCreateInput,
+    parsed: ParsedCoCreateResponse,
+) -> ParsedCoCreateResponse {
+    if !should_repair_missing_file_operations(input, &parsed) {
+        return parsed;
+    }
+    if reply_can_seed_local_file_operation(&parsed.reply) {
+        return prepare_local_file_operation_seed_response(parsed);
+    }
+    reject_missing_file_operations_for_file_requests(input, parsed)
 }
 
 static ACTIVE_COCREATION_REQUESTS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -543,8 +558,12 @@ async fn repair_missing_file_operations_for_file_requests(
     .await
     {
         Ok(repaired) if !repaired.file_operations.is_empty() => Ok(repaired),
-        _ if reply_can_seed_local_file_operation(&parsed.reply) => Ok(parsed),
-        _ => Ok(reject_missing_file_operations_for_file_requests(input, parsed)),
+        _ if reply_can_seed_local_file_operation(&parsed.reply) => {
+            Ok(prepare_local_file_operation_seed_response(parsed))
+        }
+        _ => Ok(reject_missing_file_operations_for_file_requests(
+            input, parsed,
+        )),
     }
 }
 
@@ -1575,12 +1594,19 @@ fn reject_missing_file_operations_for_file_requests(
     parsed
 }
 
+fn prepare_local_file_operation_seed_response(
+    mut parsed: ParsedCoCreateResponse,
+) -> ParsedCoCreateResponse {
+    parsed.edits.clear();
+    parsed.memories.clear();
+    parsed
+}
+
 fn should_repair_missing_file_operations(
     input: &CoCreateInput,
     parsed: &ParsedCoCreateResponse,
 ) -> bool {
-    parsed.file_operations.is_empty()
-        && user_requested_file_tree_write(input)
+    parsed.file_operations.is_empty() && user_requested_file_tree_write(input)
 }
 
 fn user_requested_file_tree_write(input: &CoCreateInput) -> bool {
@@ -1629,14 +1655,22 @@ fn user_requested_file_tree_write(input: &CoCreateInput) -> bool {
 }
 
 fn reply_can_seed_local_file_operation(reply: &str) -> bool {
-    let text = normalize_match_text(reply);
-    if text.chars().count() < 20 {
-        return false;
-    }
-    if reply_claims_file_tree_write(reply) {
+    let seed_content = strip_file_tree_write_claim_lines(reply);
+    let text = normalize_match_text(&seed_content);
+    if text.chars().count() < 12 {
         return false;
     }
     !text.contains("没有返回可执行的文件树操作")
+}
+
+fn strip_file_tree_write_claim_lines(reply: &str) -> String {
+    reply
+        .lines()
+        .filter(|line| !reply_claims_file_tree_write(line))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
 }
 
 fn reply_claims_file_tree_write(reply: &str) -> bool {
@@ -1653,6 +1687,10 @@ fn reply_claims_file_tree_write(reply: &str) -> bool {
         "创建为",
         "写入到",
         "保存到",
+        "新建",
+        "创建",
+        "写入",
+        "保存",
     ]
     .iter()
     .any(|keyword| text.contains(keyword));
@@ -3262,6 +3300,38 @@ mod tests {
 
         assert!(reply_can_seed_local_file_operation(&parsed.reply));
         assert!(!reply_claims_file_tree_write(&parsed.reply));
+    }
+
+    #[test]
+    fn fake_done_prefix_with_document_body_can_seed_local_write_tool_fallback() {
+        let input = CoCreateInput {
+            request_id: None,
+            source_path: "D:/works/测试/第1集.docx".to_string(),
+            title: "第1集.docx".to_string(),
+            content: "第一集里主角到达车站。".to_string(),
+            draft_kind: Some("screenplay".to_string()),
+            user_input: "根据第1集剧情，续写第2集，在作品库里新建个文档保存".to_string(),
+            selected_text: None,
+            selected_model_id: None,
+            context_items: Vec::new(),
+        };
+        let parsed = parse_cocreation_model_output(
+            r###"{"reply":"已根据第1集剧情续写第2集，新建 `works/第2集.docx` 保存。\n\n## 第2集\n\n主角走进新的冲突。","edits":[{"target":"主角","replacement":"## 第2集\n\n主角走进新的冲突。","rationale":"错误地把新文档当正文修改"}],"fileOperations":[],"memories":[{"branch":"drama","title":"第2集","summary":"假成功","reason":"测试","sourcePath":"第1集.docx"}]}"###,
+        )
+        .expect("parse");
+
+        assert!(should_repair_missing_file_operations(&input, &parsed));
+        assert!(reply_can_seed_local_file_operation(&parsed.reply));
+        assert_eq!(
+            strip_file_tree_write_claim_lines(&parsed.reply),
+            "## 第2集\n\n主角走进新的冲突。"
+        );
+
+        let seeded = apply_mock_file_operation_repair_result(&input, parsed);
+        assert!(seeded.file_operations.is_empty());
+        assert!(seeded.edits.is_empty());
+        assert!(seeded.memories.is_empty());
+        assert!(seeded.reply.contains("## 第2集"));
     }
 
     #[test]

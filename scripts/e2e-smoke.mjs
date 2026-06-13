@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 
@@ -21,6 +21,7 @@ async function main() {
 
   await testConversationDrivenFileTreeEditing(page, fixture, "works");
   await testConversationDrivenFileTreeEditing(page, fixture, "knowledge");
+  await testFakeSavedNewEpisodeFallback(page, fixture);
 
   await page.evaluate(() => window.__WRIDIAN_E2E__.setNextCocreation(JSON.stringify({
     reply: "| 风险点 | 处理 |\n| --- | --- |\n| 车站警告 | 保留悬念 |\n| 第二班车 | 延后揭示 |\n| 广播人 | 作为对手线索 |",
@@ -32,7 +33,7 @@ async function main() {
     window.__WRIDIAN_E2E__.setPrompt("请用 Markdown 表格列出第1集的三个风险点");
   });
   await page.getByRole("button", { name: "发送" }).click();
-  await page.getByText("请用 Markdown 表格列出第1集的三个风险点").waitFor({ timeout: 5_000 });
+  await page.getByText("请用 Markdown 表格列出第1集的三个风险点").last().waitFor({ timeout: 5_000 });
   await page.locator(".chat-markdown-table-wrap table").first().waitFor({ timeout: 10_000 });
 
   await testSelectionToPromptAndSend(page);
@@ -180,6 +181,47 @@ async function testConversationDrivenFileTreeEditing(page, fixture, library) {
   await page.getByText(`${libraryLabel} / ${renamedRel}`).waitFor({ timeout: 10_000 });
 }
 
+async function testFakeSavedNewEpisodeFallback(page, fixture) {
+  await page.getByRole("button", { name: "作品库", exact: true }).click();
+  const targetPath = path.join(fixture.worksRoot, "测试", "第2集.md");
+  const before = await page.evaluate(() => window.__WRIDIAN_E2E__.getState().editorContent);
+  await runMockedPrompt(page, {
+    text: "根据第1集剧情，续写第2集，在作品库里新建个文档保存",
+    response: {
+      reply: "已根据第1集剧情续写第2集，新建 `works/第2集.docx` 保存。\n\n## 第2集\n\n主角走进新的冲突，车站广播再次响起。",
+      edits: [{
+        target: "主角",
+        replacement: "## 第2集\n\n主角走进新的冲突，车站广播再次响起。",
+        rationale: "错误地把新文档内容当成当前正文修改",
+      }],
+      fileOperations: [],
+      memories: [{ branch: "drama", title: "第2集", summary: "不应在 fallback 前写入记忆", reason: "测试", sourcePath: "第1集.md" }],
+    },
+  });
+  await waitForTreePath(page, "files", targetPath);
+  await page.getByRole("button", { name: /^第2集/i }).waitFor({ timeout: 10_000 });
+
+  const after = await page.evaluate(() => window.__WRIDIAN_E2E__.getState().editorContent);
+  if (after !== before) {
+    throw new Error("New episode fallback changed the currently opened draft");
+  }
+  const pendingEdits = await page.evaluate(() => window.__WRIDIAN_E2E__.getState().pendingEdits.length);
+  if (pendingEdits !== 0) {
+    throw new Error(`New episode fallback created pending draft edits: ${pendingEdits}`);
+  }
+  const inlineDiffCount = await page.locator(".inline-diff del, .inline-diff ins").count();
+  if (inlineDiffCount !== 0) {
+    throw new Error(`New episode fallback rendered inline diff nodes: ${inlineDiffCount}`);
+  }
+  const content = await readFile(targetPath, "utf8");
+  if (!content.includes("## 第2集") || !content.includes("车站广播再次响起")) {
+    throw new Error(`New episode file content is incomplete: ${content}`);
+  }
+  if (content.includes("已根据第1集剧情续写第2集")) {
+    throw new Error("New episode file kept the fake saved operation line");
+  }
+}
+
 async function testSelectionToPromptAndSend(page) {
   await page.evaluate(() => {
     const editor = document.querySelector(".draft-editor");
@@ -215,14 +257,14 @@ async function testSelectionToPromptAndSend(page) {
   })));
   await page.evaluate(() => window.__WRIDIAN_E2E__.setPrompt("解释我刚才划选的词"));
   await page.getByRole("button", { name: "发送" }).click();
-  await page.getByText("解释我刚才划选的词").waitFor({ timeout: 10_000 });
-  await page.getByText("已读取选区：主角。").waitFor({ timeout: 10_000 });
+  await page.getByText("解释我刚才划选的词").last().waitFor({ timeout: 10_000 });
+  await page.getByText("已读取选区：主角。").last().waitFor({ timeout: 10_000 });
 }
 
 async function runMockedPrompt(page, { text, response }) {
   await page.evaluate((output) => window.__WRIDIAN_E2E__.setNextCocreation(JSON.stringify(output)), response);
   await page.evaluate((promptText) => window.__WRIDIAN_E2E__.sendPrompt(promptText), text);
-  await page.getByText(text).waitFor({ timeout: 10_000 });
+  await page.getByText(text).last().waitFor({ timeout: 10_000 });
 }
 
 async function waitForTreePath(page, treeStateKey, targetPath) {
@@ -254,6 +296,6 @@ async function loadPlaywright() {
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
+  console.error(error instanceof Error ? error.stack || error.message : String(error));
   process.exit(1);
 });

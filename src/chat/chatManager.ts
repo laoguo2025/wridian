@@ -228,11 +228,12 @@ export function useChatManager({
           sessionId: sessionIdRef.current,
         }),
       );
-      onDraftEdits(createPendingDraftEdits(response.edits, input), shouldAutoApplyDraftEdits(input.text));
       let fileOperations = response.fileOperations;
+      let draftEdits = response.edits;
       if (!fileOperations.length) {
         const localFileOperation = createLocalWriteFileOperationFallback(input, assistantReply);
         if (localFileOperation) {
+          draftEdits = [];
           const applied = await applyChatFileOperations([localFileOperation], input.sourcePath);
           fileOperations = applied.fileOperations;
           const messagesWithAppliedOperation = messagesWithAssistant.map((message) =>
@@ -257,8 +258,11 @@ export function useChatManager({
               sessionId: sessionIdRef.current,
             }),
           );
+        } else if (isExplicitNewDocumentRequest(input.text)) {
+          draftEdits = [];
         }
       }
+      onDraftEdits(createPendingDraftEdits(draftEdits, input), shouldAutoApplyDraftEdits(input.text));
       if (fileOperations.some((operation) => operation.ok)) {
         onWorkspaceChanged?.();
       }
@@ -550,7 +554,7 @@ function createLocalWriteFileOperationFallback(
   assistantReply: string,
 ): CoCreateFileOperationDraft | null {
   if (!isExplicitNewDocumentRequest(input.text)) return null;
-  const content = stripOperationalFailureText(assistantReply).trim();
+  const content = extractLocalWriteFileContent(assistantReply).trim();
   if (!content || content.length < 12) return null;
   const filename = inferRequestedDocumentFilename(input.text) ?? "新建文档";
   return {
@@ -586,8 +590,16 @@ function inferRequestedDocumentFilename(text: string) {
 
 function inferNextEpisodeFilename(text: string) {
   const normalized = normalizeIntentText(text);
-  const episode = normalized.match(/(?:续写|写|生成|创建|新建)?第([0-9一二三四五六七八九十百]+)集/);
-  return episode?.[1] ? `第${episode[1]}集` : null;
+  const directEpisodeMatches = [...normalized.matchAll(/(?:续写|写|生成|创建|新建)第([0-9一二三四五六七八九十百]+)集/g)];
+  const directEpisode = directEpisodeMatches[directEpisodeMatches.length - 1]?.[1];
+  if (directEpisode) return `第${directEpisode}集`;
+
+  const episodeMatches = [...normalized.matchAll(/第([0-9一二三四五六七八九十百]+)集/g)];
+  if (episodeMatches.length >= 2) {
+    const targetEpisode = episodeMatches[episodeMatches.length - 1]?.[1];
+    return targetEpisode ? `第${targetEpisode}集` : null;
+  }
+  return null;
 }
 
 function ensureEditableExtension(filename: string) {
@@ -595,10 +607,21 @@ function ensureEditableExtension(filename: string) {
   return /\.(md|markdown|txt|docx)$/i.test(cleanName) ? cleanName : `${cleanName}.md`;
 }
 
-function stripOperationalFailureText(text: string) {
+function extractLocalWriteFileContent(text: string) {
   return text
     .replace(/这次模型没有返回可执行的文件树操作[\s\S]*?(?:目录。|目录|$)/g, "")
+    .split(/\r?\n/)
+    .filter((line) => !lineClaimsFileTreeWrite(line))
+    .join("\n")
     .trim();
+}
+
+function lineClaimsFileTreeWrite(line: string) {
+  const normalized = normalizeIntentText(line);
+  if (!normalized) return false;
+  const claimsDone = /已新建|已创建|已写入|已保存|新建为|创建为|写入到|保存到|新建|创建|写入|保存/.test(normalized);
+  const mentionsFile = /works\/|knowledge\/|\.md|\.markdown|\.docx|\.txt|文件|文档/.test(normalized);
+  return claimsDone && mentionsFile;
 }
 
 function normalizeIntentText(text: string) {

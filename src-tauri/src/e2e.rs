@@ -93,7 +93,8 @@ pub(crate) fn wridian_e2e_set_next_cocreation(input: E2eMockCocreationInput) -> 
         return Err("E2E mock 回复不能为空。".to_string());
     }
     let data_dir = wridian_data_dir()?;
-    fs::create_dir_all(runtime_root(&data_dir)).map_err(|error| format!("E2E 运行目录创建失败：{error}"))?;
+    fs::create_dir_all(runtime_root(&data_dir))
+        .map_err(|error| format!("E2E 运行目录创建失败：{error}"))?;
     fs::write(e2e_next_cocreation_path(&data_dir), output)
         .map_err(|error| format!("E2E mock 回复写入失败：{error}"))
 }
@@ -106,7 +107,8 @@ pub(crate) fn take_next_cocreation_output(data_dir: &Path) -> Result<Option<Stri
     if !path.exists() {
         return Ok(None);
     }
-    let output = fs::read_to_string(&path).map_err(|error| format!("E2E mock 回复读取失败：{error}"))?;
+    let output =
+        fs::read_to_string(&path).map_err(|error| format!("E2E mock 回复读取失败：{error}"))?;
     let _ = fs::remove_file(&path);
     Ok(Some(output))
 }
@@ -129,8 +131,13 @@ fn e2e_next_cocreation_path(data_dir: &Path) -> PathBuf {
     runtime_root(data_dir).join("e2e-next-cocreation.json")
 }
 
-fn write_workspace_config(data_dir: &Path, works_root: &Path, knowledge_root: &Path) -> Result<(), String> {
-    fs::create_dir_all(runtime_root(data_dir)).map_err(|error| format!("E2E 运行目录创建失败：{error}"))?;
+fn write_workspace_config(
+    data_dir: &Path,
+    works_root: &Path,
+    knowledge_root: &Path,
+) -> Result<(), String> {
+    fs::create_dir_all(runtime_root(data_dir))
+        .map_err(|error| format!("E2E 运行目录创建失败：{error}"))?;
     let content = serde_json::to_string_pretty(&json!({
         "schemaVersion": 1,
         "activeWorkRoot": works_root.to_string_lossy(),
