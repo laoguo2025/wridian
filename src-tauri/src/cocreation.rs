@@ -236,12 +236,14 @@ async fn run_cocreation(
     .await?;
     check_cocreation_cancelled(request_id)?;
     let model_output = route_current_file_writes_to_edits(&data_dir, &input, model_output);
+    let mut model_output = route_new_work_files_to_current_folder(&data_dir, &input, model_output);
 
     let memories_written = write_memory_leaves(&data_dir, &model_output.memories)?
         .into_iter()
         .map(|path| path.to_string_lossy().into_owned())
         .collect();
     let file_operations = apply_model_file_operations(&data_dir, &model_output.file_operations);
+    model_output.reply = reply_with_applied_file_operations(&model_output.reply, &file_operations);
 
     Ok(CoCreateResponse {
         context_load_status,
@@ -1409,6 +1411,71 @@ fn canonical_existing_path(path: &Path) -> Option<PathBuf> {
     path.canonicalize().ok()
 }
 
+fn route_new_work_files_to_current_folder(
+    data_dir: &Path,
+    input: &CoCreateInput,
+    mut parsed: ParsedCoCreateResponse,
+) -> ParsedCoCreateResponse {
+    let current_relative_dir = current_work_file_relative_dir(data_dir, input);
+    if current_relative_dir.is_none() {
+        return parsed;
+    }
+    let current_relative_dir = current_relative_dir.unwrap_or_default();
+    for operation in &mut parsed.file_operations {
+        if operation.action.trim() != "writeFile" || operation.library.trim() != "works" {
+            continue;
+        }
+        let normalized =
+            normalize_model_operation_relative_path(&operation.library, &operation.path);
+        if normalized.contains('/') {
+            operation.path = normalized;
+            continue;
+        }
+        operation.path = if current_relative_dir.is_empty() {
+            normalized
+        } else {
+            format!("{}/{}", current_relative_dir, normalized)
+        };
+    }
+    parsed
+}
+
+fn current_work_file_relative_dir(data_dir: &Path, input: &CoCreateInput) -> Option<String> {
+    if input.source_path.trim().is_empty() {
+        return None;
+    }
+    let source_path = canonical_existing_path(Path::new(&input.source_path))?;
+    let root = crate::workspace::workspace_library_root_for_audit(data_dir, "works").ok()?;
+    if !source_path.starts_with(&root) {
+        return None;
+    }
+    let relative = source_path.strip_prefix(&root).ok()?;
+    let parent = relative.parent()?;
+    let relative_dir = parent.to_string_lossy().replace('\\', "/");
+    Some(relative_dir.trim_matches('/').to_string())
+}
+
+fn reply_with_applied_file_operations(
+    original_reply: &str,
+    file_operations: &[AppliedFileOperation],
+) -> String {
+    if file_operations.is_empty() {
+        return original_reply.trim().to_string();
+    }
+    let mut messages = Vec::new();
+    for operation in file_operations {
+        if operation.ok {
+            messages.push(format!("已处理：{}", operation.path));
+        } else {
+            messages.push(format!(
+                "未能处理 {}：{}",
+                operation.path, operation.message
+            ));
+        }
+    }
+    messages.join("\n")
+}
+
 fn apply_model_file_operations(
     data_dir: &Path,
     operations: &[ModelFileOperation],
@@ -1427,32 +1494,34 @@ fn apply_model_file_operation(
     let library = operation.library.trim().to_string();
     let path = normalize_model_operation_relative_path(&library, &operation.path);
     let before = file_operation_snapshot(data_dir, &library, &path);
-    let result = match action.as_str() {
-        "writeFile" => apply_workspace_write_file(
-            data_dir,
-            &library,
-            &path,
-            operation.content.as_deref().unwrap_or(""),
-        )
-        .map(|path| format!("已写入 {}", path.to_string_lossy())),
-        "createFolder" => apply_workspace_create_folder(data_dir, &library, &path)
-            .map(|path| format!("已创建文件夹 {}", path.to_string_lossy())),
-        "rename" => {
-            let new_name = operation
-                .new_name
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| "rename 操作缺少 newName。".to_string());
-            new_name.and_then(|new_name| {
-                apply_workspace_rename_node(data_dir, &library, &path, new_name)
-                    .map(|path| format!("已重命名为 {}", path.to_string_lossy()))
-            })
+    let result = ensure_model_operation_library_configured(data_dir, &library).and_then(|_| {
+        match action.as_str() {
+            "writeFile" => apply_workspace_write_file(
+                data_dir,
+                &library,
+                &path,
+                operation.content.as_deref().unwrap_or(""),
+            )
+            .map(|path| format!("已写入 {}", path.to_string_lossy())),
+            "createFolder" => apply_workspace_create_folder(data_dir, &library, &path)
+                .map(|path| format!("已创建文件夹 {}", path.to_string_lossy())),
+            "rename" => {
+                let new_name = operation
+                    .new_name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| "rename 操作缺少 newName。".to_string());
+                new_name.and_then(|new_name| {
+                    apply_workspace_rename_node(data_dir, &library, &path, new_name)
+                        .map(|path| format!("已重命名为 {}", path.to_string_lossy()))
+                })
+            }
+            "trash" => apply_workspace_trash_node(data_dir, &library, &path)
+                .map(|path| format!("已移到系统回收站 {}", path.to_string_lossy())),
+            _ => Err("未知文件操作 action。".to_string()),
         }
-        "trash" => apply_workspace_trash_node(data_dir, &library, &path)
-            .map(|path| format!("已移到系统回收站 {}", path.to_string_lossy())),
-        _ => Err("未知文件操作 action。".to_string()),
-    };
+    });
     let applied = match result {
         Ok(message) => AppliedFileOperation {
             action,
@@ -1471,6 +1540,23 @@ fn apply_model_file_operation(
     };
     audit_model_file_operation(data_dir, operation.new_name.as_deref(), &before, &applied);
     applied
+}
+
+fn ensure_model_operation_library_configured(data_dir: &Path, library: &str) -> Result<(), String> {
+    match library.trim() {
+        "works" => {
+            let root = read_active_work_root(data_dir)?
+                .map(PathBuf::from)
+                .filter(|path| path.is_dir());
+            if root.is_some() {
+                Ok(())
+            } else {
+                Err("请先在作品库打开本地文件夹，再让 Wridian 操作文件树。".to_string())
+            }
+        }
+        "knowledge" => Ok(()),
+        _ => Err("文件操作 library 必须是 works 或 knowledge。".to_string()),
+    }
 }
 
 fn normalize_model_operation_relative_path(library: &str, path: &str) -> String {
@@ -2818,6 +2904,70 @@ mod tests {
             crate::runtime::runtime_root(&data_dir).join("model-file-operations.jsonl");
         let audit = fs::read_to_string(audit_path).expect("read operation audit");
         assert!(audit.contains(r#""path":"第2集.md""#));
+    }
+
+    #[test]
+    fn new_work_file_routes_to_current_open_file_folder() {
+        let data_dir = temp_data_dir("file-ops-current-folder");
+        let work_root = data_dir.join("user-works");
+        let knowledge_root = data_dir.join("knowledge");
+        fs::create_dir_all(work_root.join("测试")).expect("create work folder");
+        fs::create_dir_all(&knowledge_root).expect("create knowledge");
+        let current_path = work_root.join("测试").join("第1集.docx");
+        fs::write(&current_path, "第一集").expect("write current");
+        write_test_workspace_config(&data_dir, &work_root, &knowledge_root);
+        let input = CoCreateInput {
+            request_id: None,
+            source_path: current_path.to_string_lossy().into_owned(),
+            title: "第1集.docx".to_string(),
+            content: "第一集".to_string(),
+            draft_kind: Some("prose".to_string()),
+            user_input: "新建一个md文件，根据第1集剧情，续写出第2集".to_string(),
+            selected_text: None,
+            selected_model_id: None,
+            context_items: Vec::new(),
+        };
+        let parsed = parse_cocreation_model_output(
+            r#"{"reply":"已写入 works/第2集.md。","edits":[],"fileOperations":[{"action":"writeFile","library":"works","path":"works/第2集.md","content":"第二集"}],"memories":[]}"#,
+        )
+        .expect("parse");
+
+        let routed = route_new_work_files_to_current_folder(&data_dir, &input, parsed);
+        let results = apply_model_file_operations(&data_dir, &routed.file_operations);
+        let reply = reply_with_applied_file_operations(&routed.reply, &results);
+
+        assert_eq!(routed.file_operations[0].path, "测试/第2集.md");
+        assert!(results[0].ok);
+        assert_eq!(results[0].path, "测试/第2集.md");
+        assert_eq!(
+            fs::read_to_string(work_root.join("测试").join("第2集.md")).expect("read written"),
+            "第二集"
+        );
+        assert!(!work_root.join("第2集.md").exists());
+        assert!(!reply.contains("works/第2集.md"));
+        assert!(reply.contains("测试/第2集.md"));
+    }
+
+    #[test]
+    fn model_file_operation_rejects_unconfigured_work_root() {
+        let data_dir = temp_data_dir("file-ops-no-work-root");
+        crate::runtime::ensure_workspace(&data_dir).expect("ensure workspace");
+        let operation = ModelFileOperation {
+            action: "writeFile".to_string(),
+            library: "works".to_string(),
+            path: "第2集.md".to_string(),
+            new_name: None,
+            content: Some("第二集".to_string()),
+        };
+
+        let result = apply_model_file_operation(&data_dir, &operation);
+
+        assert!(!result.ok);
+        assert!(result.message.contains("请先在作品库打开本地文件夹"));
+        assert!(!crate::runtime::vault_root(&data_dir)
+            .join("works")
+            .join("第2集.md")
+            .exists());
     }
 
     #[test]
