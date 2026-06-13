@@ -84,3 +84,4 @@
   - `.workbench/governance/2026-06-13-package-0.0.9-opening-diff-anchor.md`
   - `.workbench/governance/2026-06-13-claudian-style-file-tool-fallback.md`
   - `.workbench/governance/2026-06-14-package-0.0.9-claudian-file-tools.md`
+  - `.workbench/governance/2026-06-14-e2e-exe-control-entry.md`

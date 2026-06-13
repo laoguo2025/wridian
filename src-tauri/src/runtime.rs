@@ -25,6 +25,12 @@ const DEFAULT_KNOWLEDGE_CATEGORIES: &[(&str, Option<&str>)] = &[
 ];
 
 pub(crate) fn wridian_data_dir() -> Result<PathBuf, String> {
+    if let Ok(path) = std::env::var("WRIDIAN_DATA_DIR") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            return Ok(PathBuf::from(trimmed));
+        }
+    }
     dirs::data_dir()
         .map(|path| path.join(WRIDIAN_DATA_DIR_NAME))
         .ok_or_else(|| "无法定位 Wridian 数据目录。".to_string())

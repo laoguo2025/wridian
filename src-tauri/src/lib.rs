@@ -2,6 +2,7 @@ mod bridge;
 mod chat_persistence;
 mod cocreation;
 mod creative_skills;
+mod e2e;
 mod knowledge_graph;
 mod knowledge_ops;
 mod memory;
@@ -33,6 +34,9 @@ pub fn run() {
             workspace::wridian_duplicate_work_node,
             workspace::wridian_rename_work_node,
             workspace::wridian_trash_work_node,
+            e2e::wridian_e2e_status,
+            e2e::wridian_e2e_prepare_fixture,
+            e2e::wridian_e2e_set_next_cocreation,
             creative_skills::wridian_get_creative_skill_sources,
             model_accounts::wridian_get_model_accounts,
             model_accounts::wridian_save_model_provider,

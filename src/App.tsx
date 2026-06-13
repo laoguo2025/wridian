@@ -89,6 +89,21 @@ type FontSizeMode = "default" | "large" | "max";
 type SaveStatus = "idle" | "dirty" | "saving" | "saved" | "error";
 type WorkspaceLibrary = "works" | "knowledge";
 
+declare global {
+  interface Window {
+    __WRIDIAN_E2E__?: {
+      getState: () => unknown;
+      invoke: typeof invoke;
+      openFile: (path: string, library?: WorkspaceLibrary) => Promise<void>;
+      prepareFixture: (reset?: boolean) => Promise<unknown>;
+      sendPrompt: (text: string) => Promise<void>;
+      setLibrary: (library: WorkspaceLibrary) => void;
+      setNextCocreation: (output: string) => Promise<unknown>;
+      setPrompt: (text: string) => void;
+    };
+  }
+}
+
 type DraftEdit = ChatDraftEdit;
 type FilePreviewState = FilePreviewViewModel;
 
@@ -1047,6 +1062,48 @@ function App() {
     if (node.folder) return;
     await openFilePath(node.path, node.name, { targetLibrary: node.library });
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    void invoke<{ enabled: boolean }>("wridian_e2e_status")
+      .then((status) => {
+        if (cancelled || !status.enabled) return;
+        window.__WRIDIAN_E2E__ = {
+          getState: () => ({
+            chatError: chatManager.error,
+            editorContent: editorContentRef.current,
+            pendingEdits: pendingEdits.filter((edit) => edit.status === "pending"),
+            prompt,
+            selectedPath: selectedPathRef.current,
+            workspace,
+          }),
+          invoke,
+          openFile: async (path: string, library: WorkspaceLibrary = "works") => {
+            await openFilePath(path, "", { refreshBeforeOpen: true, targetLibrary: library });
+          },
+          prepareFixture: (reset = true) => invoke("wridian_e2e_prepare_fixture", { input: { reset } }),
+          sendPrompt: async (text: string) => {
+            await sendPrompt({ text });
+          },
+          setLibrary: setLibraryTab,
+          setNextCocreation: (output: string) => invoke("wridian_e2e_set_next_cocreation", { input: { output } }),
+          setPrompt,
+        };
+      })
+      .catch(() => {
+        if (!cancelled) delete window.__WRIDIAN_E2E__;
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    chatManager.error,
+    openFilePath,
+    pendingEdits,
+    prompt,
+    sendPrompt,
+    workspace,
+  ]);
 
   const openKnowledgeGraphFile = (path: string) => {
     setKnowledgeGraphOpen(false);

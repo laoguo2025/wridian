@@ -42,6 +42,7 @@ Wridian 不只用于写小说，也用于短剧剧本、剧本、分集大纲、
 - `src-tauri/src/bridge.rs`：作品域和知识域之间的显式 frontmatter 关系写入命令。
 - 本地运行：`npm run dev`
 - Rust 检查：普通 PowerShell 中优先运行 `powershell -ExecutionPolicy Bypass -File scripts\cargo-msvc.ps1 check --manifest-path src-tauri\Cargo.toml`；脚本会定位本机 Visual Studio Build Tools 并进入 MSVC 环境，仓库不再提交 `.cargo/config.toml` 这类本机绝对路径配置。
+- 测试版真实 exe 自动化入口：设置 `WRIDIAN_E2E=1` 和 `WRIDIAN_DATA_DIR=<隔离目录>` 后启动 Wridian，`scripts/e2e-launch.ps1` 会同时设置 WebView2 `--remote-debugging-port`；前端仅在后端确认 E2E 开启时挂载 `window.__WRIDIAN_E2E__`，用于 Playwright 准备夹具、打开文件、注入下一轮 mock 共创回复和读取当前 UI 状态。普通正式启动不暴露可用测试控制面。
 
 ## 当前边界
 

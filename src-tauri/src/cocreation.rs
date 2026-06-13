@@ -214,6 +214,9 @@ async fn run_cocreation(
 
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
+    if let Some(mock_output) = crate::e2e::take_next_cocreation_output(&data_dir)? {
+        return run_mock_cocreation(&data_dir, &input, mock_output);
+    }
     let skill_resource_root = app
         .path()
         .resolve("resources/skills", BaseDirectory::Resource)
@@ -299,6 +302,47 @@ async fn run_cocreation(
         edits: model_output.edits,
         file_operations,
         memories_used,
+        memories_written,
+    })
+}
+
+fn run_mock_cocreation(
+    data_dir: &Path,
+    input: &CoCreateInput,
+    mock_output: String,
+) -> Result<CoCreateResponse, String> {
+    let file_tree = read_workspace_file_trees(data_dir)?;
+    let file_tree_slot = build_file_tree_slot(&file_tree);
+    let mentioned_files = read_user_mentioned_workspace_files(input, &file_tree);
+    let rule_route_context = RuleRouteContext {
+        block: String::new(),
+        item_count: 0,
+        truncated: false,
+    };
+    let context_load_status = build_context_load_status(
+        input,
+        &[],
+        "",
+        "",
+        &rule_route_context,
+        &file_tree_slot,
+        &mentioned_files,
+    );
+    let model_output = ensure_parsed_cocreation_response(parse_cocreation_model_output(&mock_output)?)?;
+    let model_output = route_current_file_writes_to_edits(data_dir, input, model_output);
+    let mut model_output = route_new_work_files_to_current_folder(data_dir, input, model_output);
+    let memories_written = write_memory_leaves(data_dir, &model_output.memories)?
+        .into_iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect();
+    let file_operations = apply_model_file_operations(data_dir, &model_output.file_operations);
+    model_output.reply = model_output.reply.trim().to_string();
+    Ok(CoCreateResponse {
+        context_load_status,
+        reply: model_output.reply,
+        edits: model_output.edits,
+        file_operations,
+        memories_used: Vec::new(),
         memories_written,
     })
 }
