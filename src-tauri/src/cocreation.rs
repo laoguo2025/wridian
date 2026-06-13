@@ -399,6 +399,12 @@ struct ParsedCoCreateResponse {
     memories: Vec<MemoryLeafDraft>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LocalWriteFilePlan {
+    library: &'static str,
+    path: String,
+}
+
 async fn cocreate_with_model(
     settings: &ActiveModelSettings,
     project_model: Option<&str>,
@@ -505,6 +511,22 @@ async fn repair_missing_file_operations_for_file_requests(
     if !should_repair_missing_file_operations(input, &parsed) {
         return Ok(parsed);
     }
+    if let Some(repaired) = generate_planned_local_write_file(
+        settings,
+        project_model,
+        input,
+        memories,
+        active_context,
+        active_project_context,
+        rule_route_context,
+        file_tree,
+        mentioned_files,
+        &parsed.reply,
+    )
+    .await?
+    {
+        return Ok(repaired);
+    }
     let mut repair_input = clone_cocreation_input(input);
     repair_input.user_input = build_file_operation_repair_user_input(input, &parsed.reply);
     match cocreate_with_model(
@@ -524,31 +546,13 @@ async fn repair_missing_file_operations_for_file_requests(
         _ if reply_can_seed_local_file_operation(&parsed.reply) => {
             Ok(prepare_local_file_operation_seed_response(parsed))
         }
-        _ => {
-            match generate_local_write_file_from_repair_body(
-                settings,
-                project_model,
-                input,
-                memories,
-                active_context,
-                active_project_context,
-                rule_route_context,
-                file_tree,
-                mentioned_files,
-                &parsed.reply,
-            )
-            .await
-            {
-                Ok(Some(repaired)) => Ok(repaired),
-                _ => Ok(reject_missing_file_operations_for_file_requests(
-                    input, parsed,
-                )),
-            }
-        }
+        _ => Ok(reject_missing_file_operations_for_file_requests(
+            input, parsed,
+        )),
     }
 }
 
-async fn generate_local_write_file_from_repair_body(
+async fn generate_planned_local_write_file(
     settings: &ActiveModelSettings,
     project_model: Option<&str>,
     input: &CoCreateInput,
@@ -560,11 +564,20 @@ async fn generate_local_write_file_from_repair_body(
     mentioned_files: &[DialogueContextItem],
     previous_reply: &str,
 ) -> Result<Option<ParsedCoCreateResponse>, String> {
-    let Some(path) = infer_local_write_file_path_from_request(input) else {
+    let Some(plan) = infer_local_write_file_plan_from_request(input) else {
+        audit_local_write_planner(
+            "skipped",
+            None,
+            input,
+            previous_reply,
+            Some("无法从用户请求推断目标文件路径"),
+        );
         return Ok(None);
     };
+    audit_local_write_planner("planned", Some(&plan), input, previous_reply, None);
     let mut repair_input = clone_cocreation_input(input);
-    repair_input.user_input = build_document_body_repair_user_input(input, previous_reply, &path);
+    repair_input.user_input =
+        build_document_body_repair_user_input(input, previous_reply, &plan.path);
     let content = generate_document_body_with_model(
         settings,
         project_model,
@@ -579,21 +592,28 @@ async fn generate_local_write_file_from_repair_body(
     .await?;
     let content = sanitize_generated_document_body(&content);
     if !looks_like_standalone_document_body(&content) {
+        audit_local_write_planner(
+            "rejected-body",
+            Some(&plan),
+            input,
+            previous_reply,
+            Some("模型没有返回可直接保存的正文"),
+        );
         return Ok(None);
     }
-    let library = infer_local_write_library_from_request(input);
+    audit_local_write_planner("body-ready", Some(&plan), input, previous_reply, None);
     Ok(Some(ParsedCoCreateResponse {
         reply: format!(
             "已生成正文，并保存到{}文件 `{}`。",
-            local_write_library_label(library),
-            path
+            local_write_library_label(plan.library),
+            plan.path
         ),
         edits: Vec::new(),
         memories: Vec::new(),
         file_operations: vec![ModelFileOperation {
             action: "writeFile".to_string(),
-            library: library.to_string(),
-            path,
+            library: plan.library.to_string(),
+            path: plan.path,
             new_name: None,
             content: Some(content),
         }],
@@ -796,10 +816,73 @@ fn local_write_library_label(library: &str) -> &'static str {
     }
 }
 
-fn infer_local_write_file_path_from_request(input: &CoCreateInput) -> Option<String> {
+fn infer_local_write_file_plan_from_request(input: &CoCreateInput) -> Option<LocalWriteFilePlan> {
     let text = input.user_input.trim();
     let filename = infer_requested_document_filename(text)?;
-    Some(ensure_editable_document_extension(&filename))
+    Some(LocalWriteFilePlan {
+        library: infer_local_write_library_from_request(input),
+        path: ensure_editable_document_extension(&filename),
+    })
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalWritePlannerAudit<'a> {
+    timestamp: String,
+    stage: &'a str,
+    library: Option<&'a str>,
+    path: Option<&'a str>,
+    user_input: &'a str,
+    reply_kind: &'a str,
+    reason: Option<&'a str>,
+}
+
+fn audit_local_write_planner(
+    stage: &str,
+    plan: Option<&LocalWriteFilePlan>,
+    input: &CoCreateInput,
+    previous_reply: &str,
+    reason: Option<&str>,
+) {
+    let Ok(data_dir) = wridian_data_dir() else {
+        return;
+    };
+    let runtime = runtime_root(&data_dir);
+    if fs::create_dir_all(&runtime).is_err() {
+        return;
+    }
+    let audit = LocalWritePlannerAudit {
+        timestamp: crate::runtime::iso_timestamp(),
+        stage,
+        library: plan.map(|plan| plan.library),
+        path: plan.map(|plan| plan.path.as_str()),
+        user_input: input.user_input.trim(),
+        reply_kind: local_write_reply_kind(previous_reply),
+        reason,
+    };
+    let Ok(line) = serde_json::to_string(&audit) else {
+        return;
+    };
+    if let Ok(mut file) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(runtime.join("cocreation-local-write-planner.jsonl"))
+    {
+        let _ = writeln!(file, "{line}");
+    }
+}
+
+fn local_write_reply_kind(reply: &str) -> &'static str {
+    let stripped = strip_file_tree_write_claim_lines(reply);
+    if looks_like_standalone_document_body(&stripped) {
+        "body"
+    } else if reply_claims_file_tree_write(reply) {
+        "claim"
+    } else if normalize_match_text(reply).contains("重点推进") {
+        "summary"
+    } else {
+        "other"
+    }
 }
 
 fn infer_requested_document_filename(text: &str) -> Option<String> {
@@ -3745,6 +3828,7 @@ mod tests {
         .expect("parse");
 
         assert!(!reply_can_seed_local_file_operation(&parsed.reply));
+        assert_eq!(local_write_reply_kind(&parsed.reply), "summary");
     }
 
     #[test]
@@ -3761,10 +3845,51 @@ mod tests {
             context_items: Vec::new(),
         };
 
-        assert_eq!(
-            infer_local_write_file_path_from_request(&input),
-            Some("第2集.md".to_string())
-        );
+        let plan = infer_local_write_file_plan_from_request(&input).expect("plan");
+        assert_eq!(plan.path, "第2集.md");
+    }
+
+    #[test]
+    fn exact_user_screenshot_request_plans_local_work_file() {
+        let input = CoCreateInput {
+            request_id: None,
+            source_path: "D:/works/测试/第1集.docx".to_string(),
+            title: "第1集.docx".to_string(),
+            content: "第一集".to_string(),
+            draft_kind: Some("screenplay".to_string()),
+            user_input: "根据第1集剧情，续写第2集，在作品库新建个第2集文档".to_string(),
+            selected_text: None,
+            selected_model_id: None,
+            context_items: Vec::new(),
+        };
+
+        let plan = infer_local_write_file_plan_from_request(&input).expect("plan local write");
+
+        assert_eq!(plan.library, "works");
+        assert_eq!(plan.path, "第2集.md");
+    }
+
+    #[test]
+    fn summary_fake_done_request_is_repairable_by_local_write_plan() {
+        let input = CoCreateInput {
+            request_id: None,
+            source_path: "D:/works/测试/第1集.docx".to_string(),
+            title: "第1集.docx".to_string(),
+            content: "第一集".to_string(),
+            draft_kind: Some("screenplay".to_string()),
+            user_input: "根据第1集剧情，续写第2集，在作品库新建个第2集文档".to_string(),
+            selected_text: None,
+            selected_model_id: None,
+            context_items: Vec::new(),
+        };
+        let parsed = parse_cocreation_model_output(
+            r#"{"reply":"已根据第1集剧情续写第2集，保存至作品库。本集承接上一集，重点推进：\n\n1. 菩提祖师登场\n2. 牛魔王继续逃亡","edits":[],"fileOperations":[],"memories":[]}"#,
+        )
+        .expect("parse");
+
+        assert!(should_repair_missing_file_operations(&input, &parsed));
+        assert!(infer_local_write_file_plan_from_request(&input).is_some());
+        assert!(!reply_can_seed_local_file_operation(&parsed.reply));
     }
 
     #[test]

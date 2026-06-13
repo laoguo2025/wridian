@@ -188,16 +188,24 @@ async function testFakeSavedNewEpisodeFallback(page, fixture) {
   const before = await page.evaluate(() => window.__WRIDIAN_E2E__.getState().editorContent);
   await runMockedPrompt(page, {
     text: "根据第1集剧情，续写第4集，在作品库里新建个文档保存",
-    response: {
-      reply: "已根据第1集剧情续写第4集，新建 `works/第4集.docx` 保存。\n\n## 第4集\n\n主角走进新的冲突，车站广播再次响起。",
-      edits: [{
-        target: "主角",
-        replacement: "## 第4集\n\n主角走进新的冲突，车站广播再次响起。",
-        rationale: "错误地把新文档内容当成当前正文修改",
-      }],
-      fileOperations: [],
-      memories: [{ branch: "drama", title: "第2集", summary: "不应在 fallback 前写入记忆", reason: "测试", sourcePath: "第1集.md" }],
-    },
+    response: [
+      {
+        reply: "已根据第1集剧情续写第4集，新建 `works/第4集.docx` 保存。\n\n## 第4集\n\n主角走进新的冲突，车站广播再次响起。",
+        edits: [{
+          target: "主角",
+          replacement: "## 第4集\n\n主角走进新的冲突，车站广播再次响起。",
+          rationale: "错误地把新文档内容当成当前正文修改",
+        }],
+        fileOperations: [],
+        memories: [{ branch: "drama", title: "第2集", summary: "不应在 fallback 前写入记忆", reason: "测试", sourcePath: "第1集.md" }],
+      },
+      {
+        reply: "## 第4集\n\n主角走进新的冲突，车站广播再次响起。",
+        edits: [],
+        fileOperations: [],
+        memories: [],
+      },
+    ],
   });
   await waitForTreePath(page, "files", targetPath);
   await page.getByRole("button", { name: /^第4集/i }).waitFor({ timeout: 10_000 });
@@ -227,20 +235,22 @@ async function testSummaryStyleReplyDoesNotCreateWrongEpisode(page, fixture) {
   await page.getByRole("button", { name: "作品库", exact: true }).click();
   const targetPath = path.join(fixture.worksRoot, "测试", "第2集.md");
   const before = await page.evaluate(() => window.__WRIDIAN_E2E__.getState().editorContent);
-  await page.evaluate((output) => window.__WRIDIAN_E2E__.setNextCocreation(JSON.stringify(output)), {
-    reply: "## 第2集\n\n1-1日，外，旧车站。\n\n▲主角攥着那张写有警告的车票，雨水顺着站牌往下淌。\n\n广播里响起陌生人的声音：第二班车已经进站，但上车的人不会再回来。\n\n▲主角抬头，看见站台尽头站着一个和自己一模一样的人。",
-    edits: [],
-    fileOperations: [],
-    memories: [],
-  });
   await runMockedPrompt(page, {
-    text: "根据第1集剧情，续写第2集，在作品库里新建个文档保存",
-    response: {
-      reply: "已根据第1集剧情，续写第2集，在作品库里新建个文档保存。本集承接上一集的悬念，重点推进：\n\n1. **主角抉择**：主角被迫面对代价\n2. **反派施压**：危机继续升级\n\n文风和格式完全延续前一集的短剧脚本规范。",
-      edits: [],
-      fileOperations: [],
-      memories: [],
-    },
+    text: "根据第1集剧情，续写第2集，在作品库新建个第2集文档",
+    response: [
+      {
+        reply: "已根据第1集剧情，续写第2集，在作品库里新建个文档保存。本集承接上一集的悬念，重点推进：\n\n1. **主角抉择**：主角被迫面对代价\n2. **反派施压**：危机继续升级\n\n文风和格式完全延续前一集的短剧脚本规范。",
+        edits: [],
+        fileOperations: [],
+        memories: [],
+      },
+      {
+        reply: "## 第2集\n\n1-1日，外，旧车站。\n\n▲主角攥着那张写有警告的车票，雨水顺着站牌往下淌。\n\n广播里响起陌生人的声音：第二班车已经进站，但上车的人不会再回来。\n\n▲主角抬头，看见站台尽头站着一个和自己一模一样的人。",
+        edits: [],
+        fileOperations: [],
+        memories: [],
+      },
+    ],
   });
   await waitForTreePath(page, "files", targetPath);
   const content = await readFile(targetPath, "utf8");
@@ -296,7 +306,10 @@ async function testSelectionToPromptAndSend(page) {
 }
 
 async function runMockedPrompt(page, { text, response }) {
-  await page.evaluate((output) => window.__WRIDIAN_E2E__.setNextCocreation(JSON.stringify(output)), response);
+  const responses = Array.isArray(response) ? response : [response];
+  for (const output of responses) {
+    await page.evaluate((queued) => window.__WRIDIAN_E2E__.setNextCocreation(JSON.stringify(queued)), output);
+  }
   await page.evaluate((promptText) => window.__WRIDIAN_E2E__.sendPrompt(promptText), text);
   await page.getByText(text).last().waitFor({ timeout: 10_000 });
 }
