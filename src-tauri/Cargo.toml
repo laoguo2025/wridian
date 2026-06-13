@@ -1,6 +1,6 @@
 [package]
 name = "wridian"
-version = "0.0.8"
+version = "0.0.9"
 description = "A local-first writing memory desktop app"
 authors = ["Wridian"]
 edition = "2021"
