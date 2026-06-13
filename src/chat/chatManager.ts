@@ -222,7 +222,7 @@ export function useChatManager({
           sessionId: sessionIdRef.current,
         }),
       );
-      onDraftEdits(createPendingDraftEdits(response.edits, input.contextPills), shouldAutoApplyDraftEdits(input.text));
+      onDraftEdits(createPendingDraftEdits(response.edits, input), shouldAutoApplyDraftEdits(input.text));
       if (response.fileOperations.some((operation) => operation.ok)) {
         onWorkspaceChanged?.();
       }
@@ -432,15 +432,81 @@ function compactPlainText(text: string, maxChars: number) {
   return text.split(/\s+/).filter(Boolean).join(" ").slice(0, maxChars);
 }
 
-function createPendingDraftEdits(edits: CoCreateEdit[], contextPills: PromptContextPill[]): ChatDraftEdit[] {
+function createPendingDraftEdits(edits: CoCreateEdit[], input: SendChatPromptInput): ChatDraftEdit[] {
   const createdAt = Date.now();
-  const selectedRangePill = contextPills.find((pill) => pill.kind === "selection" && pill.range);
-  return edits.map((edit, index) => ({
-    ...edit,
-    id: `edit-${createdAt}-${index}`,
-    sourceRange: selectedRangePill?.value.trim() === edit.target.trim() ? selectedRangePill.range : undefined,
-    status: "pending" as const,
-  }));
+  const selectedRangePill = input.contextPills.find((pill) => pill.kind === "selection" && pill.range);
+  return edits.map((edit, index) => {
+    const selectedSourceRange = selectedRangePill?.value.trim() === edit.target.trim()
+      ? selectedRangePill.range
+      : undefined;
+    const openingFallback = selectedSourceRange
+      ? null
+      : createOpeningRewriteFallback(edit, input, selectedRangePill);
+    return {
+      ...edit,
+      id: `edit-${createdAt}-${index}`,
+      sourceRange: selectedSourceRange ?? openingFallback?.sourceRange,
+      status: "pending" as const,
+      target: openingFallback?.target ?? edit.target,
+    };
+  });
+}
+
+function createOpeningRewriteFallback(
+  edit: CoCreateEdit,
+  input: SendChatPromptInput,
+  selectedRangePill?: PromptContextPill,
+): { sourceRange: PromptContextRange; target: string } | null {
+  if (hasUniqueOccurrence(input.content, edit.target)) return null;
+
+  if (selectedRangePill?.range && isRewriteIntent(input.text)) {
+    const target = input.content.slice(selectedRangePill.range.start, selectedRangePill.range.end);
+    if (target.trim()) {
+      return { sourceRange: selectedRangePill.range, target };
+    }
+  }
+
+  if (!isOpeningRewriteIntent(input.text)) return null;
+  const openingRange = findOpeningRewriteRange(input.content, edit.target.length);
+  if (!openingRange) return null;
+  const target = input.content.slice(openingRange.start, openingRange.end);
+  return target.trim() ? { sourceRange: openingRange, target } : null;
+}
+
+function isRewriteIntent(text: string) {
+  return /重写|改写|润色|修改|优化|修正|增强|改成|改为|调整/.test(text);
+}
+
+function isOpeningRewriteIntent(text: string) {
+  return isRewriteIntent(text) && /开头|开场|开篇|开幕|开局|开头段落|开场段落|第一段|前几段/.test(text);
+}
+
+function hasUniqueOccurrence(content: string, target: string) {
+  if (!target) return false;
+  const first = content.indexOf(target);
+  if (first < 0) return false;
+  return content.indexOf(target, first + Math.max(1, target.length)) < 0;
+}
+
+function findOpeningRewriteRange(content: string, modelTargetLength: number): PromptContextRange | null {
+  if (!content.trim()) return null;
+  const start = 0;
+  const desiredLength = Math.min(1200, Math.max(180, modelTargetLength || 520));
+  const minimumParagraphLength = Math.min(desiredLength, 240);
+  const blankLinePattern = /\n\s*\n/g;
+  let blankLineMatch: RegExpExecArray | null;
+  while ((blankLineMatch = blankLinePattern.exec(content))) {
+    const end = blankLineMatch.index;
+    if (end - start >= minimumParagraphLength) {
+      return { start, end };
+    }
+  }
+
+  const desiredEnd = Math.min(content.length, desiredLength);
+  const maxEnd = Math.min(content.length, Math.max(desiredEnd, 720));
+  const lineBreak = content.indexOf("\n", desiredEnd);
+  const end = lineBreak >= 0 && lineBreak + 1 <= maxEnd ? lineBreak + 1 : maxEnd;
+  return end > start ? { start, end } : null;
 }
 
 function createLocalLiteralReplacePlan(input: SendChatPromptInput): LocalLiteralReplacePlan | null {
