@@ -2,6 +2,7 @@ mod bridge;
 mod chat_persistence;
 mod cocreation;
 mod creative_skills;
+mod docx_xml;
 mod e2e;
 mod knowledge_graph;
 mod knowledge_ops;

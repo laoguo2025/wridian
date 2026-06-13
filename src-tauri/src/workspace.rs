@@ -531,6 +531,7 @@ fn resolve_existing_relative_workspace_node(
     relative_path: &str,
 ) -> Result<PathBuf, String> {
     let target = resolve_relative_workspace_target(root, relative_path)?;
+    reject_link_or_reparse_node(&target, "文件树节点")?;
     let canonical = target
         .canonicalize()
         .map_err(|error| format!("文件树节点不存在：{error}"))?;
@@ -834,6 +835,7 @@ fn resolve_allowed_existing_node(data_dir: &Path, raw_path: &str) -> Result<Path
     if !(path.is_file() || path.is_dir()) {
         return Err("文件或文件夹不存在。".to_string());
     }
+    reject_link_or_reparse_node(&path, "文件树节点")?;
     if path.is_file() && !is_supported_workspace_file(&path) {
         return Err("只能操作 Wridian 文件树支持显示的常见文件。".to_string());
     }
@@ -845,6 +847,15 @@ fn resolve_allowed_existing_node(data_dir: &Path, raw_path: &str) -> Result<Path
     } else {
         Err("文件不在当前 Wridian 工作目录内。".to_string())
     }
+}
+
+fn reject_link_or_reparse_node(path: &Path, label: &str) -> Result<(), String> {
+    let metadata =
+        fs::symlink_metadata(path).map_err(|error| format!("{label}路径信息读取失败：{error}"))?;
+    if is_symlink_or_reparse(&metadata) {
+        return Err(format!("{label}不能是链接或重解析点。"));
+    }
+    Ok(())
 }
 
 pub(crate) fn allowed_work_roots(data_dir: &Path) -> Result<Vec<PathBuf>, String> {
@@ -1102,7 +1113,7 @@ fn write_docx_plain_text(path: &Path, content: &str) -> Result<(), String> {
     }
     drop(archive);
 
-    let document = minimal_docx_document_xml(content);
+    let document = crate::docx_xml::minimal_docx_document_xml(content);
     let mut output = Cursor::new(Vec::new());
     {
         let mut writer = zip::ZipWriter::new(&mut output);
@@ -1211,38 +1222,6 @@ fn plain_text_from_xml(xml: &str) -> String {
         }
     }
     decode_xml_text(&output)
-}
-
-fn minimal_docx_document_xml(content: &str) -> String {
-    let paragraphs = if content.is_empty() {
-        vec![String::new()]
-    } else {
-        content
-            .split('\n')
-            .map(ToOwned::to_owned)
-            .collect::<Vec<_>>()
-    };
-    let body = paragraphs
-        .iter()
-        .map(|paragraph| {
-            format!(
-                "<w:p><w:r><w:t>{}</w:t></w:r></w:p>",
-                encode_xml_text(paragraph)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("");
-    format!(
-        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{body}<w:sectPr/></w:body></w:document>"#
-    )
-}
-
-fn encode_xml_text(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
 }
 
 fn decode_xml_text(text: &str) -> String {
@@ -1557,6 +1536,34 @@ mod tests {
     }
 
     #[test]
+    fn workspace_existing_node_operations_reject_link_targets_when_available() {
+        let data_dir = temp_data_dir("existing-link-target");
+        let work_root = data_dir.join("user-works");
+        fs::create_dir_all(&work_root).expect("create work root");
+        let real_file = work_root.join("real.md");
+        let link_file = work_root.join("linked.md");
+        fs::write(&real_file, "正文").expect("write real file");
+        if create_file_link(&real_file, &link_file).is_err() {
+            return;
+        }
+        fs::create_dir_all(crate::runtime::runtime_root(&data_dir)).expect("create runtime");
+        fs::write(
+            workspace_config_path(&data_dir),
+            serde_json::json!({
+                "schemaVersion": 1,
+                "activeWorkRoot": work_root.to_string_lossy()
+            })
+            .to_string(),
+        )
+        .expect("write workspace config");
+        let root = workspace_library_root(&data_dir, "works").expect("work root");
+
+        assert!(resolve_existing_relative_workspace_node(&root, "linked.md").is_err());
+        assert!(resolve_allowed_existing_node(&data_dir, &link_file.to_string_lossy()).is_err());
+        assert!(real_file.exists());
+    }
+
+    #[test]
     fn workspace_info_uses_default_knowledge_root_without_user_selection() {
         let data_dir = temp_data_dir("default-knowledge-root");
         crate::runtime::ensure_workspace(&data_dir).expect("ensure workspace");
@@ -1679,7 +1686,7 @@ mod tests {
     }
 
     fn write_minimal_test_docx(path: &Path, content: &str) -> Result<(), String> {
-        write_test_docx_document_xml(path, &minimal_docx_document_xml(content))
+        write_test_docx_document_xml(path, &crate::docx_xml::minimal_docx_document_xml(content))
     }
 
     fn write_test_docx_document_xml(path: &Path, document_xml: &str) -> Result<(), String> {
@@ -1710,8 +1717,18 @@ mod tests {
         std::os::windows::fs::symlink_dir(target, link)
     }
 
+    #[cfg(windows)]
+    fn create_file_link(target: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::windows::fs::symlink_file(target, link)
+    }
+
     #[cfg(unix)]
     fn create_dir_link(target: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(target, link)
+    }
+
+    #[cfg(unix)]
+    fn create_file_link(target: &Path, link: &Path) -> std::io::Result<()> {
         std::os::unix::fs::symlink(target, link)
     }
 }

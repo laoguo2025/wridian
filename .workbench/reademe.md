@@ -92,3 +92,4 @@
   - `.workbench/governance/2026-06-14-chat-direct-content-write-order.md`
   - `.workbench/governance/2026-06-14-clean-document-body-repair-context.md`
   - `.workbench/governance/2026-06-14-real-mimo-episode-file-creation.md`
+  - `.workbench/governance/2026-06-14-code-health-review-fixes.md`

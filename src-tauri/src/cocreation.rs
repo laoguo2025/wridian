@@ -726,21 +726,18 @@ async fn generate_planned_local_write_file(
         .await
         {
             Ok(content) => content,
-            Err(error)
-                if previous_reply.trim().is_empty()
-                    || error.contains("模型返回了空回复")
-                    || error.contains("缺少可解析文本内容") =>
-            {
+            Err(error) => {
                 audit_local_write_planner(
-                    "body-fallback",
+                    "body-missing",
                     Some(&plan),
                     input,
                     previous_reply,
                     Some(&error),
                 );
-                build_local_fallback_document_body(input, &plan.path)
+                return Err(format!(
+                    "模型没有返回可直接保存的新文档正文，Wridian 已停止写入。请重新发送或补充目标正文。{error}"
+                ));
             }
-            Err(error) => return Err(error),
         }
     };
     let content = sanitize_generated_document_body(&content);
@@ -774,35 +771,6 @@ async fn generate_planned_local_write_file(
             content: Some(content),
         }],
     }))
-}
-
-fn build_local_fallback_document_body(input: &CoCreateInput, path: &str) -> String {
-    let title = path
-        .rsplit_once('/')
-        .map(|(_, name)| name)
-        .unwrap_or(path)
-        .trim_end_matches(".markdown")
-        .trim_end_matches(".docx")
-        .trim_end_matches(".txt")
-        .trim_end_matches(".md")
-        .trim();
-    let title = if title.is_empty() {
-        "新建文档"
-    } else {
-        title
-    };
-    let source = compact_text(&input.content, 3200);
-    let source_block = if source.trim().is_empty() {
-        "当前稿件正文未读取到内容。".to_string()
-    } else {
-        source
-    };
-    format!(
-        "## {title}\n\n> 本文件由 Wridian 根据当前打开的 `{}` 和你的请求创建。模型未返回可直接保存的正文，已先保存可继续编辑的草稿底稿。\n\n### 原请求\n\n{}\n\n### 参考正文\n\n{}",
-        input.title.trim(),
-        input.user_input.trim(),
-        source_block
-    )
 }
 
 fn clone_cocreation_input(input: &CoCreateInput) -> CoCreateInput {

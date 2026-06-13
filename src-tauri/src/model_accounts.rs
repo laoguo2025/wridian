@@ -44,8 +44,12 @@ const ANTHROPIC_SONNET_MODEL_ENV: &str = "WRIDIAN_ANTHROPIC_SONNET_MODEL";
 const ANTHROPIC_OPUS_MODEL_ENV: &str = "WRIDIAN_ANTHROPIC_OPUS_MODEL";
 const GOOGLE_OAUTH_DEFAULT_CLIENT_ID_PROJECT_NUM: &str = "681255809395";
 const GOOGLE_OAUTH_DEFAULT_CLIENT_ID_HASH: &str = "oo8ft2oprdrnp9e3aqf6av3hmdib135j";
-const GOOGLE_OAUTH_DEFAULT_CLIENT_SECRET_PREFIX: &str = "GOCSPX";
-const GOOGLE_OAUTH_DEFAULT_CLIENT_SECRET_PARTS: &[&str] = &["4uHgMPm", "1o7Sk", "geV6Cu5clXFsxl"];
+// Google desktop OAuth clients are public clients. The packaged value is a
+// compatibility fallback for Gemini CLI / Code Assist style login, not a user
+// secret; WRIDIAN_GOOGLE_OAUTH_CLIENT_SECRET still overrides it.
+const GOOGLE_OAUTH_PUBLIC_DESKTOP_CLIENT_CREDENTIAL_PREFIX: &str = "GOCSPX";
+const GOOGLE_OAUTH_PUBLIC_DESKTOP_CLIENT_CREDENTIAL_PARTS: &[&str] =
+    &["4uHgMPm", "1o7Sk", "geV6Cu5clXFsxl"];
 const GOOGLE_OAUTH_AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_OAUTH_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_OAUTH_USERINFO_ENDPOINT: &str = "https://www.googleapis.com/oauth2/v1/userinfo";
@@ -1654,8 +1658,8 @@ fn google_oauth_default_client_id() -> String {
 fn google_oauth_default_client_secret() -> String {
     format!(
         "{}-{}",
-        GOOGLE_OAUTH_DEFAULT_CLIENT_SECRET_PREFIX,
-        GOOGLE_OAUTH_DEFAULT_CLIENT_SECRET_PARTS.join("-")
+        GOOGLE_OAUTH_PUBLIC_DESKTOP_CLIENT_CREDENTIAL_PREFIX,
+        GOOGLE_OAUTH_PUBLIC_DESKTOP_CLIENT_CREDENTIAL_PARTS.join("-")
     )
 }
 
@@ -3080,7 +3084,7 @@ mod tests {
             .starts_with(GOOGLE_OAUTH_DEFAULT_CLIENT_ID_PROJECT_NUM));
         assert!(config
             .client_secret
-            .starts_with(GOOGLE_OAUTH_DEFAULT_CLIENT_SECRET_PREFIX));
+            .starts_with(GOOGLE_OAUTH_PUBLIC_DESKTOP_CLIENT_CREDENTIAL_PREFIX));
     }
 
     #[test]
