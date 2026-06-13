@@ -1,23 +1,22 @@
-# 2026-06-13 applied edit visual state
+# 2026-06-13 inline diff visual state correction
 
 ## Scope
 
-- Make automatically applied draft edits visible in the editor after the text has already been changed.
+- Restore the expected inline diff review state for chat-driven draft edits.
 
 ## Root Cause
 
-- Explicit edit requests auto-applied safe edits directly to `editorContent` and only retained the undo snapshot.
-- The inline diff renderer only displayed pending edits, so users could see "撤销修改" but not where the draft changed.
+- The previous applied-edit visual state wrote safe edits directly into `editorContent` and rendered only a green applied highlight.
+- That removed the expected red deletion, green insertion, and per-edit confirm/cancel buttons from the draft editor.
 
 ## Changes
 
-- Added an applied-edit visual state separate from pending edits.
-- Auto-applied and manually accepted edits now record replacement ranges after the content change.
-- The draft editor renders applied replacements with a green highlight and keeps the original text in the hover title.
-- Pending and applied diff displays do not show rationale text inline; the editor should emphasize the changed text itself.
-- Chat edit requests default to the currently open file. When no edit can be safely located in that file, the chat error asks the user to confirm the correct file is open.
-- Manual typing, file switching, and undo clear the applied highlight state.
-- Updated the project map with the durable visual-state behavior.
+- Chat edit requests still default to the currently open file.
+- Safe matches now stay as pending edits and render in the draft editor as inline diff: red deletion, green insertion, and confirm/cancel buttons.
+- No direct write happens until the user confirms one edit or all edits.
+- Removed the applied green-only highlight state.
+- When no edit can be safely located in the current file, the chat error asks the user to confirm the correct file is open.
+- Updated the project map with the durable inline diff behavior.
 
 ## Verification
 
@@ -25,9 +24,10 @@
 - `powershell -ExecutionPolicy Bypass -File scripts\cargo-msvc.ps1 check --manifest-path src-tauri\Cargo.toml`: passed.
 - `cmd.exe` with Visual Studio `vcvars64.bat`, then `npm run tauri -- build`: passed.
 - Updated local artifacts:
-  - `release\Wridian-0.0.8-x64-setup.exe`, SHA256 `8762A2238BE2F66929ECB97A1719754F32386DBF7278FF9C3A4FC9B3B6F5E2F4`
-  - `release\Wridian-0.0.8-test.exe`, SHA256 `01ED5EB4C9D36F93DF162C70BB801069948D1169F94998374504EBC9EC4C50BD`
+  - `release\Wridian-0.0.8-x64-setup.exe`, SHA256 `AA9CE099CB287EF9A263BF5997374C0A49132C14530F5B3538FCEA730D209401`
+  - `release\Wridian-0.0.8-test.exe`, SHA256 `D15811A58E7E423DE1E352578800FF7F0E3AB26883EFCF8F5C7983B51F11561F`
+- Follow-up correction after user screenshot: restore pending inline diff as the visual state before confirmation.
 
 ## Rollback
 
-- Revert this task commit to restore the prior behavior where auto-applied edits only exposed "撤销修改".
+- Revert the correction commit to return to the green-only applied highlight behavior, which is not the desired UX.

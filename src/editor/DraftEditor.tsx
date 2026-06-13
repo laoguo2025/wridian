@@ -13,16 +13,7 @@ export type TextSelection = {
   end: number;
 };
 
-export type AppliedDraftEdit = {
-  end: number;
-  id: string;
-  replacement: string;
-  start: number;
-  target: string;
-};
-
 export function DraftEditor({
-  appliedEdits,
   content,
   editorRef,
   edits,
@@ -33,7 +24,6 @@ export function DraftEditor({
   onSelectionActionDismiss,
   onSelectionChange,
 }: {
-  appliedEdits?: AppliedDraftEdit[];
   content: string;
   editorRef: RefObject<HTMLDivElement | null>;
   edits: DraftEdit[];
@@ -44,15 +34,15 @@ export function DraftEditor({
   onSelectionActionDismiss?: () => void;
   onSelectionChange: () => void;
 }) {
-  const chunks = buildDraftEditorChunks(content, edits, appliedEdits ?? []);
+  const chunks = buildDraftSuggestionChunks(content, edits);
 
   useEffect(() => {
     const editor = editorRef.current;
     if (!editor || edits.length) return;
-    if (!(appliedEdits ?? []).length && editor.innerText !== content) {
+    if (editor.innerText !== content) {
       editor.innerText = content;
     }
-  }, [appliedEdits, content, editorRef, edits.length]);
+  }, [content, editorRef, edits.length]);
 
   return (
     <div
@@ -75,17 +65,6 @@ export function DraftEditor({
       {chunks.map((chunk, index) => {
         if (chunk.kind === "text") {
           return <span key={`text-${index}`}>{chunk.text}</span>;
-        }
-        if (chunk.kind === "applied") {
-          return (
-            <span
-              className="inline-applied-edit"
-              key={chunk.edit.id}
-              title={`原文：${chunk.edit.target}`}
-            >
-              {chunk.text}
-            </span>
-          );
         }
         return (
           <span className="inline-edit" key={chunk.edit.id}>
@@ -150,39 +129,7 @@ export function setContentEditableCaret(root: HTMLElement | null, offset: number
 
 type DraftSuggestionChunk =
   | { kind: "text"; text: string }
-  | { kind: "applied"; edit: AppliedDraftEdit; text: string }
   | { kind: "edit"; edit: DraftEdit };
-
-function buildDraftEditorChunks(
-  content: string,
-  edits: DraftEdit[],
-  appliedEdits: AppliedDraftEdit[],
-): DraftSuggestionChunk[] {
-  if (!edits.length && appliedEdits.length) {
-    return buildAppliedEditChunks(content, appliedEdits);
-  }
-  return buildDraftSuggestionChunks(content, edits);
-}
-
-function buildAppliedEditChunks(content: string, appliedEdits: AppliedDraftEdit[]): DraftSuggestionChunk[] {
-  const chunks: DraftSuggestionChunk[] = [];
-  let cursor = 0;
-  for (const edit of [...appliedEdits].sort((left, right) => left.start - right.start)) {
-    const start = Math.max(0, Math.min(edit.start, content.length));
-    const end = Math.max(start, Math.min(edit.end, content.length));
-    if (start < cursor || end <= start) continue;
-    if (content.slice(start, end) !== edit.replacement) continue;
-    if (start > cursor) {
-      chunks.push({ kind: "text", text: content.slice(cursor, start) });
-    }
-    chunks.push({ kind: "applied", edit, text: content.slice(start, end) });
-    cursor = end;
-  }
-  if (cursor < content.length) {
-    chunks.push({ kind: "text", text: content.slice(cursor) });
-  }
-  return chunks.length ? chunks : [{ kind: "text", text: content }];
-}
 
 function buildDraftSuggestionChunks(content: string, edits: DraftEdit[]): DraftSuggestionChunk[] {
   const matches = createDraftReplaceGuardReport(content, edits).matches;

@@ -1093,15 +1093,6 @@ button {
   display: inline;
 }
 
-.inline-applied-edit {
-  display: inline;
-  background: rgba(45, 145, 82, 0.22);
-  color: color-mix(in srgb, var(--text-body), #2d9152 20%);
-  border-radius: 3px;
-  box-decoration-break: clone;
-  -webkit-box-decoration-break: clone;
-}
-
 .inline-diff {
   display: inline;
 }
