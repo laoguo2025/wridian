@@ -292,7 +292,7 @@ async fn run_cocreation(
             });
         }
     }
-    let model_output = await_cancellable(
+    let model_output = match await_cancellable(
         request_id,
         cocreate_with_model(
             &settings,
@@ -306,7 +306,50 @@ async fn run_cocreation(
             &mentioned_files,
         ),
     )
-    .await?;
+    .await
+    {
+        Ok(output) => output,
+        Err(error)
+            if error.contains("模型返回了空回复")
+                && infer_local_write_file_plan_from_request(&input).is_some() =>
+        {
+            if let Some(model_output) = await_cancellable(
+                request_id,
+                generate_planned_local_write_file(
+                    &settings,
+                    project_model.as_deref(),
+                    &input,
+                    &memories_used,
+                    &active_context,
+                    &active_project_context,
+                    &rule_route_context,
+                    &file_tree_slot.block,
+                    &mentioned_files,
+                    "",
+                ),
+            )
+            .await?
+            {
+                check_cocreation_cancelled(request_id)?;
+                let mut model_output =
+                    route_new_work_files_to_current_folder(&data_dir, &input, model_output);
+                let file_operations =
+                    apply_model_file_operations(&data_dir, &model_output.file_operations);
+                model_output.reply = model_output.reply.trim().to_string();
+
+                return Ok(CoCreateResponse {
+                    context_load_status,
+                    reply: model_output.reply,
+                    edits: Vec::new(),
+                    file_operations,
+                    memories_used,
+                    memories_written: Vec::new(),
+                });
+            }
+            return Err(error);
+        }
+        Err(error) => return Err(error),
+    };
     check_cocreation_cancelled(request_id)?;
     let model_output = await_cancellable(
         request_id,
@@ -683,15 +726,19 @@ async fn generate_planned_local_write_file(
         .await
         {
             Ok(content) => content,
-            Err(error) if previous_reply.trim().is_empty() => {
+            Err(error)
+                if previous_reply.trim().is_empty()
+                    || error.contains("模型返回了空回复")
+                    || error.contains("缺少可解析文本内容") =>
+            {
                 audit_local_write_planner(
-                    "body-error",
+                    "body-fallback",
                     Some(&plan),
                     input,
                     previous_reply,
                     Some(&error),
                 );
-                return Ok(None);
+                build_local_fallback_document_body(input, &plan.path)
             }
             Err(error) => return Err(error),
         }
@@ -729,6 +776,35 @@ async fn generate_planned_local_write_file(
     }))
 }
 
+fn build_local_fallback_document_body(input: &CoCreateInput, path: &str) -> String {
+    let title = path
+        .rsplit_once('/')
+        .map(|(_, name)| name)
+        .unwrap_or(path)
+        .trim_end_matches(".markdown")
+        .trim_end_matches(".docx")
+        .trim_end_matches(".txt")
+        .trim_end_matches(".md")
+        .trim();
+    let title = if title.is_empty() {
+        "新建文档"
+    } else {
+        title
+    };
+    let source = compact_text(&input.content, 3200);
+    let source_block = if source.trim().is_empty() {
+        "当前稿件正文未读取到内容。".to_string()
+    } else {
+        source
+    };
+    format!(
+        "## {title}\n\n> 本文件由 Wridian 根据当前打开的 `{}` 和你的请求创建。模型未返回可直接保存的正文，已先保存可继续编辑的草稿底稿。\n\n### 原请求\n\n{}\n\n### 参考正文\n\n{}",
+        input.title.trim(),
+        input.user_input.trim(),
+        source_block
+    )
+}
+
 fn clone_cocreation_input(input: &CoCreateInput) -> CoCreateInput {
     CoCreateInput {
         request_id: input.request_id.clone(),
@@ -762,6 +838,20 @@ async fn generate_document_body_with_model(
     match settings.protocol.as_str() {
         "openai-compatible" => {
             generate_document_body_with_openai_compatible(
+                settings,
+                project_model,
+                input,
+                memories,
+                active_context,
+                active_project_context,
+                rule_route_context,
+                file_tree,
+                mentioned_files,
+            )
+            .await
+        }
+        "anthropic" => {
+            generate_document_body_with_anthropic(
                 settings,
                 project_model,
                 input,
@@ -853,6 +943,71 @@ async fn generate_document_body_with_openai_compatible(
         ));
     }
     read_model_response_text(&body)
+}
+
+async fn generate_document_body_with_anthropic(
+    settings: &ActiveModelSettings,
+    project_model: Option<&str>,
+    input: &CoCreateInput,
+    memories: &[String],
+    active_context: &str,
+    active_project_context: &str,
+    rule_route_context: &RuleRouteContext,
+    file_tree: &str,
+    mentioned_files: &[DialogueContextItem],
+) -> Result<String, String> {
+    let url = anthropic_messages_url(&settings.base_url);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(90))
+        .build()
+        .map_err(|error| format!("正文生成客户端创建失败：{error}"))?;
+    let request = apply_anthropic_auth_headers(
+        client.post(url).header("anthropic-version", "2023-06-01"),
+        settings,
+    );
+    let response = request
+        .json(&json!({
+            "model": project_model.unwrap_or(&settings.model),
+            "system": document_body_system_prompt(),
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": build_document_body_prompt(
+                                input,
+                                memories,
+                                active_context,
+                                active_project_context,
+                                rule_route_context,
+                                file_tree,
+                                mentioned_files
+                            )
+                        }
+                    ]
+                }
+            ],
+            "max_tokens": 4096,
+            "temperature": 0.85,
+            "stream": false
+        }))
+        .send()
+        .await
+        .map_err(|error| format!("正文生成请求失败：{error}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("正文生成响应读取失败：{error}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "正文生成失败：HTTP {} {}",
+            status.as_u16(),
+            response_body_summary(&body)
+        ));
+    }
+    read_anthropic_response_text(&body)
 }
 
 fn document_body_system_prompt() -> &'static str {
