@@ -235,6 +235,23 @@ async fn run_cocreation(
     )
     .await?;
     check_cocreation_cancelled(request_id)?;
+    let model_output = await_cancellable(
+        request_id,
+        repair_missing_file_operations_for_file_requests(
+            &settings,
+            project_model.as_deref(),
+            &input,
+            &memories_used,
+            &active_context,
+            &active_project_context,
+            &rule_route_context,
+            &file_tree_slot.block,
+            &mentioned_files,
+            model_output,
+        ),
+    )
+    .await?;
+    check_cocreation_cancelled(request_id)?;
     let model_output = route_current_file_writes_to_edits(&data_dir, &input, model_output);
     let mut model_output = route_new_work_files_to_current_folder(&data_dir, &input, model_output);
 
@@ -418,6 +435,65 @@ async fn cocreate_with_model(
         }
         _ => unreachable!("protocol checked before dispatch"),
     }
+}
+
+async fn repair_missing_file_operations_for_file_requests(
+    settings: &ActiveModelSettings,
+    project_model: Option<&str>,
+    input: &CoCreateInput,
+    memories: &[String],
+    active_context: &str,
+    active_project_context: &str,
+    rule_route_context: &RuleRouteContext,
+    file_tree: &str,
+    mentioned_files: &[DialogueContextItem],
+    parsed: ParsedCoCreateResponse,
+) -> Result<ParsedCoCreateResponse, String> {
+    if !should_repair_missing_file_operations(input, &parsed) {
+        return Ok(parsed);
+    }
+    let mut repair_input = clone_cocreation_input(input);
+    repair_input.user_input = build_file_operation_repair_user_input(input, &parsed.reply);
+    match cocreate_with_model(
+        settings,
+        project_model,
+        &repair_input,
+        memories,
+        active_context,
+        active_project_context,
+        rule_route_context,
+        file_tree,
+        mentioned_files,
+    )
+    .await
+    {
+        Ok(repaired) if !repaired.file_operations.is_empty() => Ok(repaired),
+        _ => Ok(reject_missing_file_operations_for_file_requests(
+            input, parsed,
+        )),
+    }
+}
+
+fn clone_cocreation_input(input: &CoCreateInput) -> CoCreateInput {
+    CoCreateInput {
+        request_id: input.request_id.clone(),
+        source_path: input.source_path.clone(),
+        title: input.title.clone(),
+        content: input.content.clone(),
+        draft_kind: input.draft_kind.clone(),
+        user_input: input.user_input.clone(),
+        selected_text: input.selected_text.clone(),
+        selected_model_id: input.selected_model_id.clone(),
+        context_items: input.context_items.clone(),
+    }
+}
+
+fn build_file_operation_repair_user_input(input: &CoCreateInput, previous_reply: &str) -> String {
+    format!(
+        "上一轮回复声称已经新建或写入文件，但 fileOperations 为空，Wridian 实际没有执行任何文件树操作。请基于同一当前稿件和同一用户请求，重新只返回可执行 JSON：reply 简短说明，edits 为空，memories 为空，fileOperations 必须包含实际需要的新建文件操作。用户原请求：{}\n上一轮回复：{}\n如果用户没有指定扩展名，新建文档默认使用 .md；如果用户要求放在新建文档里，使用 writeFile 写入完整初始内容；不要再只在 reply 里说已新建。",
+        input.user_input.trim(),
+        previous_reply.trim()
+    )
 }
 
 async fn cocreate_with_openai_oauth(
@@ -1011,7 +1087,7 @@ fn build_cocreation_prompt(
 
     let source_label = prompt_source_label(&input.source_path, &input.title);
     format!(
-        "稿件类型：{}\n当前文件：{}\n来源路径：{}\n\n上下文编译顺序：当前稿件/选区 → 作品库和知识库文件树 → 规则路由 → 项目记忆 → 最近对话现场 → 压缩记忆 → 已选知识卡 → 点名文件 → 技能规则 → 用户请求。每个槽位独立预算，超预算时按此优先级裁剪，不把作品记忆、知识卡、规则路由和技能规则混写。\n\n规则路由协议：WRIDIAN.md、AGENT.md、AGENTS.md 定义当前库内的长期行动规则；index.md 和 hot.md 定义当前库的导航与近期上下文。规则路由只说明如何工作和如何定位资料，不等于把知识卡写入作品记忆。\n\n技能工作流协议：当 [9 技能规则] 非空时，所选技能必须按可执行工作流处理，不得只输出泛泛建议。先确认输入和扫描范围，再给出产物清单；需要落地文件时必须返回 fileOperations；完成后在 reply 中说明质量检查结果和回滚方式。技能产物优先写入当前库内相对路径：作品拆解进入知识库 02拆解报告，知识卡进入知识库 03-07，作者/大神 skill 进入知识库 08大神蒸馏，知识库体检进入 00知识库治理。不能验证来源、关联、frontmatter 或可分发性时，不得声称完成，只能输出待补缺口。\n\n编辑回复协议：只有当用户明确要求修改、重写、润色、替换、整理当前稿件正文、改成某版本或删除正文内容时，才返回 edits；普通聊天、询问原因、让给建议或比较方案时 edits 必须为空。用户明确要求改正文时，不要给多个候选方案让用户选择；直接给唯一改稿结果。Wridian 会自动写入能安全定位的 edits，并保留撤销。reply 只简短说明已整理的重点；不要说“我给你两个方向/挑一个/确认后再改”，不要把 replacement 长篇贴到 reply 里。\n\n文件树权限协议：用户在对话中提到作品库或知识库文件树内的文件时，Wridian 可以在当前库内读取该文件内容，并可通过 fileOperations 新建文件、创建文件夹、重命名或移到回收站。无需默认展示文件内容给用户；需要说明时只说明操作结果。\n\n文件树操作协议：如需操作文件树，必须在 fileOperations 数组里返回操作，不要只在 reply 里描述。只允许相对路径，不允许绝对路径或 ..。action 只能是 writeFile、createFolder、rename、trash；library 只能是 works 或 knowledge；writeFile 只能用于新建不存在的 md、txt、docx 文件并写入初始内容；对已有文件内容执行新增、修改、删除时，只有用户明确要求改正文才返回 edits，新建含内容文件除外；rename 需要 newName；writeFile 需要 content；trash 表示移到用户本机系统回收站，不创建库内 .wridian-trash。\n\n输出格式：必须返回 json object，字段为 reply、edits、fileOperations、memories。\n\n[1 当前稿件与选区]\n{}\n\n[2 作品库和知识库文件树]\n{}\n\n[3 规则路由]\n{}\n\n[4 项目记忆]\n{}\n\n[5 最近对话现场]\n{}\n\n[6 压缩记忆]\n{}\n\n[7 已选知识卡]\n{}\n\n[8 点名文件]\n{}\n\n[9 技能规则]\n{}\n\n[10 用户请求]\n{}",
+        "稿件类型：{}\n当前文件：{}\n来源路径：{}\n\n上下文编译顺序：当前稿件/选区 → 作品库和知识库文件树 → 规则路由 → 项目记忆 → 最近对话现场 → 压缩记忆 → 已选知识卡 → 点名文件 → 技能规则 → 用户请求。每个槽位独立预算，超预算时按此优先级裁剪，不把作品记忆、知识卡、规则路由和技能规则混写。\n\n规则路由协议：WRIDIAN.md、AGENT.md、AGENTS.md 定义当前库内的长期行动规则；index.md 和 hot.md 定义当前库的导航与近期上下文。规则路由只说明如何工作和如何定位资料，不等于把知识卡写入作品记忆。\n\n技能工作流协议：当 [9 技能规则] 非空时，所选技能必须按可执行工作流处理，不得只输出泛泛建议。先确认输入和扫描范围，再给出产物清单；需要落地文件时必须返回 fileOperations；完成后在 reply 中说明质量检查结果和回滚方式。技能产物优先写入当前库内相对路径：作品拆解进入知识库 02拆解报告，知识卡进入知识库 03-07，作者/大神 skill 进入知识库 08大神蒸馏，知识库体检进入 00知识库治理。不能验证来源、关联、frontmatter 或可分发性时，不得声称完成，只能输出待补缺口。\n\n编辑回复协议：只有当用户明确要求修改、重写、润色、替换、整理当前稿件正文、改成某版本或删除正文内容时，才返回 edits；普通聊天、询问原因、让给建议或比较方案时 edits 必须为空。用户明确要求改正文时，不要给多个候选方案让用户选择；直接给唯一改稿结果。Wridian 会自动写入能安全定位的 edits，并保留撤销。reply 只简短说明已整理的重点；不要说“我给你两个方向/挑一个/确认后再改”，不要把 replacement 长篇贴到 reply 里。\n\n文件树权限协议：用户在对话中提到作品库或知识库文件树内的文件时，Wridian 可以在当前库内读取该文件内容，并可通过 fileOperations 新建文件、创建文件夹、重命名或移到回收站。无需默认展示文件内容给用户；需要说明时只说明操作结果。\n\n文件树操作协议：如需操作文件树，必须在 fileOperations 数组里返回操作，不要只在 reply 里描述。只允许相对路径，不允许绝对路径或 ..。action 只能是 writeFile、createFolder、rename、trash；library 只能是 works 或 knowledge；writeFile 只能用于新建不存在的 md、txt、docx 文件并写入初始内容；对已有文件内容执行新增、修改、删除时，只有用户明确要求改正文才返回 edits，新建含内容文件除外；rename 需要 newName；writeFile 需要 content；trash 表示移到用户本机系统回收站，不创建库内 .wridian-trash。禁止在 fileOperations 为空时说“已新建/已创建/已写入/已保存为某文件”；这种回复会被 Wridian 视为未执行。\n\n输出格式：必须返回 json object，字段为 reply、edits、fileOperations、memories。\n\n[1 当前稿件与选区]\n{}\n\n[2 作品库和知识库文件树]\n{}\n\n[3 规则路由]\n{}\n\n[4 项目记忆]\n{}\n\n[5 最近对话现场]\n{}\n\n[6 压缩记忆]\n{}\n\n[7 已选知识卡]\n{}\n\n[8 点名文件]\n{}\n\n[9 技能规则]\n{}\n\n[10 用户请求]\n{}",
         draft_kind,
         input.title,
         source_label,
@@ -1409,6 +1485,86 @@ fn model_operation_targets_path(
 
 fn canonical_existing_path(path: &Path) -> Option<PathBuf> {
     path.canonicalize().ok()
+}
+
+fn reject_missing_file_operations_for_file_requests(
+    input: &CoCreateInput,
+    mut parsed: ParsedCoCreateResponse,
+) -> ParsedCoCreateResponse {
+    if !should_repair_missing_file_operations(input, &parsed) {
+        return parsed;
+    }
+    parsed.reply =
+        "这次模型只在回复里声称已新建文件，但没有返回可执行的文件树操作；Wridian 已拦截这条假成功回复，没有写入任何文件。请重新发送一次新建文件请求。".to_string();
+    parsed.edits.clear();
+    parsed.memories.clear();
+    parsed
+}
+
+fn should_repair_missing_file_operations(
+    input: &CoCreateInput,
+    parsed: &ParsedCoCreateResponse,
+) -> bool {
+    parsed.file_operations.is_empty()
+        && user_requested_file_tree_write(input)
+        && reply_claims_file_tree_write(&parsed.reply)
+}
+
+fn user_requested_file_tree_write(input: &CoCreateInput) -> bool {
+    let text = normalize_match_text(&input.user_input);
+    if text.is_empty() {
+        return false;
+    }
+    let has_create_intent = [
+        "新建", "创建", "新增", "生成", "写入", "放到", "放在", "保存",
+    ]
+    .iter()
+    .any(|keyword| text.contains(keyword));
+    let has_file_target = [
+        "文件",
+        "文档",
+        "文件树",
+        "作品库",
+        "知识库",
+        "md",
+        "markdown",
+        "docx",
+        "txt",
+    ]
+    .iter()
+    .any(|keyword| text.contains(keyword));
+    has_create_intent && has_file_target
+}
+
+fn reply_claims_file_tree_write(reply: &str) -> bool {
+    let text = normalize_match_text(reply);
+    if text.is_empty() {
+        return false;
+    }
+    let claims_done = [
+        "已新建",
+        "已创建",
+        "已写入",
+        "已保存",
+        "新建为",
+        "创建为",
+        "写入到",
+    ]
+    .iter()
+    .any(|keyword| text.contains(keyword));
+    let mentions_file = [
+        "works/",
+        "knowledge/",
+        ".md",
+        ".markdown",
+        ".docx",
+        ".txt",
+        "文件",
+        "文档",
+    ]
+    .iter()
+    .any(|keyword| text.contains(keyword));
+    claims_done && mentions_file
 }
 
 fn route_new_work_files_to_current_folder(
@@ -2946,6 +3102,84 @@ mod tests {
         assert!(!work_root.join("第2集.md").exists());
         assert!(!reply.contains("works/第2集.md"));
         assert!(reply.contains("测试/第2集.md"));
+    }
+
+    #[test]
+    fn fake_file_creation_reply_without_file_operations_is_rejected() {
+        let input = CoCreateInput {
+            request_id: None,
+            source_path: "D:/works/测试/第1集.docx".to_string(),
+            title: "第1集.docx".to_string(),
+            content: "第一集".to_string(),
+            draft_kind: Some("screenplay".to_string()),
+            user_input: "根据第1集剧情，续写第2集，放在新建文档里".to_string(),
+            selected_text: None,
+            selected_model_id: None,
+            context_items: Vec::new(),
+        };
+        let parsed = parse_cocreation_model_output(
+            r#"{"reply":"已根据第1集剧情续写第2集。剧本已新建为 `works/第2集.docx`。","edits":[],"fileOperations":[],"memories":[{"branch":"drama","title":"第2集","summary":"假成功","reason":"测试","sourcePath":"第1集.docx"}]}"#,
+        )
+        .expect("parse");
+
+        assert!(should_repair_missing_file_operations(&input, &parsed));
+        let rejected = reject_missing_file_operations_for_file_requests(&input, parsed);
+
+        assert!(!rejected.reply.contains("works/第2集.docx"));
+        assert!(rejected.reply.contains("没有写入任何文件"));
+        assert!(rejected.file_operations.is_empty());
+        assert!(rejected.edits.is_empty());
+        assert!(rejected.memories.is_empty());
+    }
+
+    #[test]
+    fn normal_reply_without_file_operations_is_not_rejected() {
+        let input = CoCreateInput {
+            request_id: None,
+            source_path: "D:/works/测试/第1集.docx".to_string(),
+            title: "第1集.docx".to_string(),
+            content: "第一集".to_string(),
+            draft_kind: Some("screenplay".to_string()),
+            user_input: "第1集节奏怎么样".to_string(),
+            selected_text: None,
+            selected_model_id: None,
+            context_items: Vec::new(),
+        };
+        let parsed = parse_cocreation_model_output(
+            r#"{"reply":"第1集节奏偏快，可以加强转场。","edits":[],"fileOperations":[],"memories":[]}"#,
+        )
+        .expect("parse");
+
+        assert!(!should_repair_missing_file_operations(&input, &parsed));
+        let kept = reject_missing_file_operations_for_file_requests(&input, parsed);
+
+        assert_eq!(kept.reply, "第1集节奏偏快，可以加强转场。");
+        assert!(kept.file_operations.is_empty());
+    }
+
+    #[test]
+    fn file_operation_reply_is_not_rejected() {
+        let input = CoCreateInput {
+            request_id: None,
+            source_path: "D:/works/测试/第1集.docx".to_string(),
+            title: "第1集.docx".to_string(),
+            content: "第一集".to_string(),
+            draft_kind: Some("screenplay".to_string()),
+            user_input: "根据第1集剧情，续写第2集，放在新建文档里".to_string(),
+            selected_text: None,
+            selected_model_id: None,
+            context_items: Vec::new(),
+        };
+        let parsed = parse_cocreation_model_output(
+            r#"{"reply":"已新建第2集。","edits":[],"fileOperations":[{"action":"writeFile","library":"works","path":"第2集.md","content":"第二集"}],"memories":[]}"#,
+        )
+        .expect("parse");
+
+        assert!(!should_repair_missing_file_operations(&input, &parsed));
+        let kept = reject_missing_file_operations_for_file_requests(&input, parsed);
+
+        assert_eq!(kept.file_operations.len(), 1);
+        assert_eq!(kept.file_operations[0].path, "第2集.md");
     }
 
     #[test]
