@@ -1071,6 +1071,7 @@ function App() {
         window.__WRIDIAN_E2E__ = {
           getState: () => ({
             chatError: chatManager.error,
+            chatPending: chatManager.pending,
             editorContent: editorContentRef.current,
             pendingEdits: pendingEdits.filter((edit) => edit.status === "pending"),
             prompt,

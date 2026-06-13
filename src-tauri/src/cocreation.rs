@@ -224,6 +224,9 @@ async fn run_cocreation(
         &input.context_items,
     )?;
     check_cocreation_cancelled(request_id)?;
+    if let Some(response) = apply_direct_local_write_without_model(&data_dir, &input)? {
+        return Ok(response);
+    }
     let selected_model_id = input.selected_model_id.clone();
     let settings_data_dir = data_dir.clone();
     let settings = if crate::e2e::has_queued_cocreation_output(&settings_data_dir) {
@@ -254,6 +257,41 @@ async fn run_cocreation(
         &file_tree_slot,
         &mentioned_files,
     );
+    if should_plan_local_write_before_model(&input) {
+        if let Some(model_output) = await_cancellable(
+            request_id,
+            generate_planned_local_write_file(
+                &settings,
+                project_model.as_deref(),
+                &input,
+                &memories_used,
+                &active_context,
+                &active_project_context,
+                &rule_route_context,
+                &file_tree_slot.block,
+                &mentioned_files,
+                "",
+            ),
+        )
+        .await?
+        {
+            check_cocreation_cancelled(request_id)?;
+            let mut model_output =
+                route_new_work_files_to_current_folder(&data_dir, &input, model_output);
+            let file_operations =
+                apply_model_file_operations(&data_dir, &model_output.file_operations);
+            model_output.reply = model_output.reply.trim().to_string();
+
+            return Ok(CoCreateResponse {
+                context_load_status,
+                reply: model_output.reply,
+                edits: Vec::new(),
+                file_operations,
+                memories_used,
+                memories_written: Vec::new(),
+            });
+        }
+    }
     let model_output = await_cancellable(
         request_id,
         cocreate_with_model(
@@ -496,6 +534,53 @@ fn e2e_mock_model_settings() -> ActiveModelSettings {
     }
 }
 
+fn apply_direct_local_write_without_model(
+    data_dir: &Path,
+    input: &CoCreateInput,
+) -> Result<Option<CoCreateResponse>, String> {
+    if infer_direct_write_content_from_request(input).is_none() {
+        return Ok(None);
+    }
+    let Some(mut parsed) = build_direct_local_write_response(input) else {
+        return Ok(None);
+    };
+    parsed = route_new_work_files_to_current_folder(data_dir, input, parsed);
+    let file_operations = apply_model_file_operations(data_dir, &parsed.file_operations);
+    Ok(Some(CoCreateResponse {
+        context_load_status: Vec::new(),
+        reply: parsed.reply,
+        edits: Vec::new(),
+        file_operations,
+        memories_used: Vec::new(),
+        memories_written: Vec::new(),
+    }))
+}
+
+fn build_direct_local_write_response(input: &CoCreateInput) -> Option<ParsedCoCreateResponse> {
+    let plan = infer_local_write_file_plan_from_request(input)?;
+    let content =
+        sanitize_generated_document_body(&infer_direct_write_content_from_request(input)?);
+    if content.trim().is_empty() || looks_like_instruction_rather_than_body(&content) {
+        return None;
+    }
+    Some(ParsedCoCreateResponse {
+        reply: format!(
+            "已写入{}文件 `{}`。",
+            local_write_library_label(plan.library),
+            plan.path
+        ),
+        edits: Vec::new(),
+        memories: Vec::new(),
+        file_operations: vec![ModelFileOperation {
+            action: "writeFile".to_string(),
+            library: plan.library.to_string(),
+            path: plan.path,
+            new_name: None,
+            content: Some(content),
+        }],
+    })
+}
+
 async fn repair_missing_file_operations_for_file_requests(
     settings: &ActiveModelSettings,
     project_model: Option<&str>,
@@ -575,23 +660,47 @@ async fn generate_planned_local_write_file(
         return Ok(None);
     };
     audit_local_write_planner("planned", Some(&plan), input, previous_reply, None);
-    let mut repair_input = clone_cocreation_input(input);
-    repair_input.user_input =
-        build_document_body_repair_user_input(input, previous_reply, &plan.path);
-    let content = generate_document_body_with_model(
-        settings,
-        project_model,
-        &repair_input,
-        memories,
-        active_context,
-        active_project_context,
-        rule_route_context,
-        file_tree,
-        mentioned_files,
-    )
-    .await?;
+    let mut direct_content = false;
+    let content = if let Some(content) = infer_direct_write_content_from_request(input) {
+        direct_content = true;
+        audit_local_write_planner("direct-content", Some(&plan), input, previous_reply, None);
+        content
+    } else {
+        let mut repair_input = clone_cocreation_input(input);
+        repair_input.user_input =
+            build_document_body_repair_user_input(input, previous_reply, &plan.path);
+        match generate_document_body_with_model(
+            settings,
+            project_model,
+            &repair_input,
+            memories,
+            active_context,
+            active_project_context,
+            rule_route_context,
+            file_tree,
+            mentioned_files,
+        )
+        .await
+        {
+            Ok(content) => content,
+            Err(error) if previous_reply.trim().is_empty() => {
+                audit_local_write_planner(
+                    "body-error",
+                    Some(&plan),
+                    input,
+                    previous_reply,
+                    Some(&error),
+                );
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        }
+    };
     let content = sanitize_generated_document_body(&content);
-    if !looks_like_standalone_document_body(&content) {
+    if content.trim().is_empty()
+        || (!direct_content && !looks_like_standalone_document_body(&content))
+        || (direct_content && looks_like_instruction_rather_than_body(&content))
+    {
         audit_local_write_planner(
             "rejected-body",
             Some(&plan),
@@ -819,10 +928,130 @@ fn local_write_library_label(library: &str) -> &'static str {
 fn infer_local_write_file_plan_from_request(input: &CoCreateInput) -> Option<LocalWriteFilePlan> {
     let text = input.user_input.trim();
     let filename = infer_requested_document_filename(text)?;
+    let path = if let Some(parent) = infer_requested_parent_folder(text) {
+        format!(
+            "{}/{}",
+            parent.trim_matches('/'),
+            ensure_editable_document_extension(&filename)
+        )
+    } else {
+        ensure_editable_document_extension(&filename)
+    };
     Some(LocalWriteFilePlan {
         library: infer_local_write_library_from_request(input),
-        path: ensure_editable_document_extension(&filename),
+        path,
     })
+}
+
+fn infer_requested_parent_folder(text: &str) -> Option<String> {
+    for marker in ["作品库的", "知识库的", "作品库/"] {
+        let Some(start) = text.find(marker) else {
+            continue;
+        };
+        let after = &text[start + marker.len()..];
+        let Some(end) = after.find('里').or_else(|| after.find("中新建")) else {
+            continue;
+        };
+        let value = after[..end].trim().trim_matches('/').trim();
+        if !value.is_empty() && !looks_like_editable_document_filename(value) {
+            return Some(sanitize_relative_path_fragment(value));
+        }
+    }
+    None
+}
+
+fn sanitize_relative_path_fragment(value: &str) -> String {
+    value
+        .replace('\\', "/")
+        .split('/')
+        .map(|part| {
+            part.chars()
+                .filter(|ch| !matches!(ch, ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+                .collect::<String>()
+        })
+        .filter(|part| !part.trim().is_empty() && part != "." && part != "..")
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn should_plan_local_write_before_model(input: &CoCreateInput) -> bool {
+    if infer_local_write_file_plan_from_request(input).is_none() {
+        return false;
+    }
+    infer_direct_write_content_from_request(input).is_some()
+}
+
+fn infer_direct_write_content_from_request(input: &CoCreateInput) -> Option<String> {
+    let text = input.user_input.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let content = extract_content_after_keywords(
+        text,
+        &[
+            "内容写成",
+            "内容写为",
+            "内容写",
+            "内容是",
+            "内容为",
+            "写入内容",
+            "写入",
+            "写上",
+            "里面写",
+            "文档里写",
+            "文件里写",
+        ],
+    )?;
+    let content = strip_trailing_file_target_phrase(&content);
+    let content = content.trim();
+    if content.is_empty() || looks_like_instruction_rather_than_body(content) {
+        None
+    } else {
+        Some(content.to_string())
+    }
+}
+
+fn extract_content_after_keywords(text: &str, keywords: &[&str]) -> Option<String> {
+    keywords.iter().find_map(|keyword| {
+        let start = text.find(keyword)? + keyword.len();
+        take_content_tail(&text[start..])
+    })
+}
+
+fn take_content_tail(text: &str) -> Option<String> {
+    let value = text
+        .trim_start_matches(|ch: char| ch.is_whitespace() || "：:，,。".contains(ch))
+        .trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn strip_trailing_file_target_phrase(content: &str) -> String {
+    let mut value = content.trim().to_string();
+    for marker in [
+        "，保存",
+        ",保存",
+        "。保存",
+        " 保存",
+        "，放到",
+        ",放到",
+        "。放到",
+    ] {
+        if let Some(index) = value.find(marker) {
+            value.truncate(index);
+            break;
+        }
+    }
+    value
+}
+
+fn looks_like_instruction_rather_than_body(content: &str) -> bool {
+    let normalized = normalize_match_text(content);
+    normalized.contains("新建")
+        || normalized.contains("创建")
+        || normalized.contains("作品库")
+        || normalized.contains("知识库")
+        || normalized.contains("续写")
+        || normalized.contains("根据第")
 }
 
 #[derive(Debug, Serialize)]
@@ -891,10 +1120,34 @@ fn infer_requested_document_filename(text: &str) -> Option<String> {
     {
         return Some(named);
     }
+    if let Some(named) = extract_name_after_keywords(text, &["新建", "创建", "新增"]) {
+        if looks_like_editable_document_filename(&named) {
+            return Some(named);
+        }
+    }
+    if let Some(named) = extract_first_editable_document_filename(text) {
+        return Some(named);
+    }
     if let Some(episode) = infer_next_episode_filename(text) {
         return Some(episode);
     }
     extract_quoted_document_name(text)
+}
+
+fn looks_like_editable_document_filename(value: &str) -> bool {
+    let lower = value.trim().to_lowercase();
+    lower.ends_with(".md")
+        || lower.ends_with(".markdown")
+        || lower.ends_with(".txt")
+        || lower.ends_with(".docx")
+}
+
+fn extract_first_editable_document_filename(text: &str) -> Option<String> {
+    text.split(|ch: char| ch.is_whitespace() || "，。,；;：:（）()[]【】「」『』“”\"'".contains(ch))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .find(|value| looks_like_editable_document_filename(value))
+        .map(ToOwned::to_owned)
 }
 
 fn infer_next_episode_filename(text: &str) -> Option<String> {
@@ -948,7 +1201,7 @@ fn take_filename_token(text: &str) -> Option<String> {
     let value = text
         .trim_start()
         .chars()
-        .take_while(|ch| !ch.is_whitespace() && !"，。,.；;：:".contains(*ch))
+        .take_while(|ch| !ch.is_whitespace() && !"，。,；;：:".contains(*ch))
         .take(80)
         .collect::<String>()
         .trim()
@@ -3890,6 +4143,67 @@ mod tests {
         assert!(should_repair_missing_file_operations(&input, &parsed));
         assert!(infer_local_write_file_plan_from_request(&input).is_some());
         assert!(!reply_can_seed_local_file_operation(&parsed.reply));
+    }
+
+    #[test]
+    fn direct_create_with_content_extracts_body_from_user_request() {
+        let input = CoCreateInput {
+            request_id: None,
+            source_path: "D:/works/测试/第1集.docx".to_string(),
+            title: "第1集.docx".to_string(),
+            content: "第一集".to_string(),
+            draft_kind: Some("screenplay".to_string()),
+            user_input: "在作品库新建早上好.md，内容写早上好".to_string(),
+            selected_text: None,
+            selected_model_id: None,
+            context_items: Vec::new(),
+        };
+
+        assert_eq!(
+            infer_local_write_file_plan_from_request(&input).map(|plan| plan.path),
+            Some("早上好.md".to_string())
+        );
+        assert_eq!(
+            infer_direct_write_content_from_request(&input),
+            Some("早上好".to_string())
+        );
+    }
+
+    #[test]
+    fn direct_create_with_content_keeps_named_parent_folder() {
+        let input = CoCreateInput {
+            request_id: None,
+            source_path: "D:/works/测试/第1集.docx".to_string(),
+            title: "第1集.docx".to_string(),
+            content: "第一集".to_string(),
+            draft_kind: Some("screenplay".to_string()),
+            user_input: "在作品库的 测试项目 里新建 带内容.md，内容写早上好".to_string(),
+            selected_text: None,
+            selected_model_id: None,
+            context_items: Vec::new(),
+        };
+
+        assert_eq!(
+            infer_local_write_file_plan_from_request(&input).map(|plan| plan.path),
+            Some("测试项目/带内容.md".to_string())
+        );
+    }
+
+    #[test]
+    fn direct_content_does_not_treat_episode_instruction_as_body() {
+        let input = CoCreateInput {
+            request_id: None,
+            source_path: "D:/works/测试/第1集.docx".to_string(),
+            title: "第1集.docx".to_string(),
+            content: "第一集".to_string(),
+            draft_kind: Some("screenplay".to_string()),
+            user_input: "根据第1集剧情，续写第2集，在作品库新建个第2集文档".to_string(),
+            selected_text: None,
+            selected_model_id: None,
+            context_items: Vec::new(),
+        };
+
+        assert_eq!(infer_direct_write_content_from_request(&input), None);
     }
 
     #[test]

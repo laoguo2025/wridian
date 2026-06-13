@@ -115,12 +115,15 @@ async function testConversationDrivenFileTreeEditing(page, fixture, library) {
   const stamp = Date.now();
   const folderName = `${isKnowledge ? "知识" : "作品"}对话测试-${stamp}`;
   const fileName = "对话新建.md";
+  const directContentName = "带内容.md";
   const renamedName = "对话改名.md";
   const folderRel = folderName;
   const fileRel = `${folderName}/${fileName}`;
+  const directContentRel = `${folderName}/${directContentName}`;
   const renamedRel = `${folderName}/${renamedName}`;
   const folderPath = path.join(root, folderName);
   const filePath = path.join(root, folderName, fileName);
+  const directContentPath = path.join(root, folderName, directContentName);
   const renamedPath = path.join(root, folderName, renamedName);
 
   if (isKnowledge) {
@@ -154,6 +157,20 @@ async function testConversationDrivenFileTreeEditing(page, fixture, library) {
   await waitForTreePath(page, treeStateKey, filePath);
   await page.getByRole("button", { name: /^对话新建/i }).waitFor({ timeout: 10_000 });
   if (!existsSync(filePath)) throw new Error(`${libraryLabel} file was not created by chat: ${filePath}`);
+
+  if (!isKnowledge) {
+    await runPromptWithoutMock(
+      page,
+      `在${libraryLabel}的 ${folderName} 里新建 ${directContentName}，内容写早上好`,
+    );
+    await waitForTreePath(page, treeStateKey, directContentPath);
+    await page.getByRole("button", { name: /^带内容/i }).waitFor({ timeout: 10_000 });
+    const directContent = await readFile(directContentPath, "utf8");
+    if (directContent.trim() !== "早上好") {
+      throw new Error(`${libraryLabel} direct content write failed: ${directContent}`);
+    }
+    await page.getByText(`${libraryLabel} / ${directContentRel}`).waitFor({ timeout: 10_000 });
+  }
 
   await runMockedPrompt(page, {
     text: `把${libraryLabel}里的 ${fileName} 重命名为 ${renamedName}`,
@@ -310,8 +327,18 @@ async function runMockedPrompt(page, { text, response }) {
   for (const output of responses) {
     await page.evaluate((queued) => window.__WRIDIAN_E2E__.setNextCocreation(JSON.stringify(queued)), output);
   }
+  await runPromptWithoutMock(page, text);
+}
+
+async function runPromptWithoutMock(page, text) {
+  await waitForChatIdle(page);
   await page.evaluate((promptText) => window.__WRIDIAN_E2E__.sendPrompt(promptText), text);
   await page.getByText(text).last().waitFor({ timeout: 10_000 });
+  await waitForChatIdle(page);
+}
+
+async function waitForChatIdle(page) {
+  await page.waitForFunction(() => window.__WRIDIAN_E2E__?.getState?.().chatPending === false, null, { timeout: 20_000 });
 }
 
 async function waitForTreePath(page, treeStateKey, targetPath) {

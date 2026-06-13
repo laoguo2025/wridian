@@ -89,3 +89,4 @@
   - `.workbench/governance/2026-06-14-chat-summary-reply-file-write-guard.md`
   - `.workbench/governance/2026-06-14-exact-docx-episode-chat-e2e.md`
   - `.workbench/governance/2026-06-14-real-model-document-body-repair.md`
+  - `.workbench/governance/2026-06-14-chat-direct-content-write-order.md`
