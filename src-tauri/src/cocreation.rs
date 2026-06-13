@@ -1391,12 +1391,14 @@ fn model_operation_targets_path(
     operation: &ModelFileOperation,
     expected: &Path,
 ) -> bool {
+    let relative_path =
+        normalize_model_operation_relative_path(&operation.library, &operation.path);
     let Ok(root) = crate::workspace::workspace_library_root_for_audit(data_dir, &operation.library)
     else {
         return false;
     };
     let Ok(target) =
-        crate::workspace::resolve_relative_workspace_target_for_audit(&root, &operation.path)
+        crate::workspace::resolve_relative_workspace_target_for_audit(&root, &relative_path)
     else {
         return false;
     };
@@ -1423,7 +1425,7 @@ fn apply_model_file_operation(
 ) -> AppliedFileOperation {
     let action = operation.action.trim().to_string();
     let library = operation.library.trim().to_string();
-    let path = operation.path.trim().to_string();
+    let path = normalize_model_operation_relative_path(&library, &operation.path);
     let before = file_operation_snapshot(data_dir, &library, &path);
     let result = match action.as_str() {
         "writeFile" => apply_workspace_write_file(
@@ -1467,8 +1469,26 @@ fn apply_model_file_operation(
             message: error,
         },
     };
-    audit_model_file_operation(data_dir, operation, &before, &applied);
+    audit_model_file_operation(data_dir, operation.new_name.as_deref(), &before, &applied);
     applied
+}
+
+fn normalize_model_operation_relative_path(library: &str, path: &str) -> String {
+    let mut normalized = path.trim().replace('\\', "/");
+    while let Some(stripped) = normalized.strip_prefix("./") {
+        normalized = stripped.to_string();
+    }
+    let prefixes: &[&str] = match library.trim() {
+        "works" => &["works/", "作品库/"],
+        "knowledge" => &["knowledge/", "知识库/"],
+        _ => &[],
+    };
+    for prefix in prefixes {
+        if let Some(stripped) = normalized.strip_prefix(prefix) {
+            return stripped.trim_start_matches('/').to_string();
+        }
+    }
+    normalized
 }
 
 #[derive(Debug, Serialize)]
@@ -1574,7 +1594,7 @@ fn file_operation_snapshot(
 
 fn audit_model_file_operation(
     data_dir: &Path,
-    operation: &ModelFileOperation,
+    new_name: Option<&str>,
     before: &FileOperationSnapshot,
     applied: &AppliedFileOperation,
 ) {
@@ -1587,7 +1607,7 @@ fn audit_model_file_operation(
         action: applied.action.as_str(),
         library: applied.library.as_str(),
         path: applied.path.as_str(),
-        new_name: operation.new_name.as_deref(),
+        new_name,
         ok: applied.ok,
         message: applied.message.as_str(),
         before: before.clone(),
@@ -1909,16 +1929,22 @@ fn recover_malformed_cocreation_response(
     payload: &str,
     parse_error: &serde_json::Error,
 ) -> ParsedCoCreateResponse {
+    let file_operations = extract_cocreation_file_operations_lossy(payload)
+        .or_else(|| extract_cocreation_file_operations_lossy(output))
+        .unwrap_or_default();
     let reply = extract_json_string_field(payload, "reply")
         .or_else(|| extract_json_string_field(output, "reply"))
+        .or_else(|| (!file_operations.is_empty()).then(|| "已按你的要求处理文件树。".to_string()))
         .or_else(|| extract_first_meaningful_text(output))
-        .unwrap_or_else(|| format!("模型回复格式不完整，已作为普通回复显示。原解析错误：{parse_error}"));
+        .unwrap_or_else(|| {
+            format!("模型回复格式不完整，已作为普通回复显示。原解析错误：{parse_error}")
+        });
     ParsedCoCreateResponse {
         reply,
         edits: extract_cocreation_edits_lossy(payload)
             .or_else(|| extract_cocreation_edits_lossy(output))
             .unwrap_or_default(),
-        file_operations: Vec::new(),
+        file_operations,
         memories: Vec::new(),
     }
 }
@@ -1993,7 +2019,11 @@ fn read_json_string_lossy(input: &str) -> Option<String> {
         output.push(char);
     }
     let text = output.trim().to_string();
-    if text.is_empty() { None } else { Some(text) }
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
 }
 
 fn extract_cocreation_edits_lossy(payload: &str) -> Option<Vec<CoCreateEdit>> {
@@ -2002,7 +2032,10 @@ fn extract_cocreation_edits_lossy(payload: &str) -> Option<Vec<CoCreateEdit>> {
     for object in extract_json_objects_lossy(&edits_payload) {
         let target = extract_json_string_field(&object, "target")?;
         let replacement = extract_json_string_field(&object, "replacement")?;
-        if target.trim().is_empty() || replacement.trim().is_empty() || target.trim() == replacement.trim() {
+        if target.trim().is_empty()
+            || replacement.trim().is_empty()
+            || target.trim() == replacement.trim()
+        {
             continue;
         }
         edits.push(CoCreateEdit {
@@ -2013,7 +2046,48 @@ fn extract_cocreation_edits_lossy(payload: &str) -> Option<Vec<CoCreateEdit>> {
                 .filter(|text| !text.is_empty()),
         });
     }
-    if edits.is_empty() { None } else { Some(edits) }
+    if edits.is_empty() {
+        None
+    } else {
+        Some(edits)
+    }
+}
+
+fn extract_cocreation_file_operations_lossy(payload: &str) -> Option<Vec<ModelFileOperation>> {
+    let operations_payload = extract_json_array_field_lossy(payload, "fileOperations")?;
+    let mut operations = Vec::new();
+    for object in extract_json_objects_lossy(&operations_payload) {
+        let Some(action) = extract_json_string_field(&object, "action") else {
+            continue;
+        };
+        let Some(library) = extract_json_string_field(&object, "library") else {
+            continue;
+        };
+        let Some(path) = extract_json_string_field(&object, "path") else {
+            continue;
+        };
+        let action = action.trim().to_string();
+        let library = library.trim().to_string();
+        let path = path.trim().to_string();
+        if action.is_empty() || library.is_empty() || path.is_empty() {
+            continue;
+        }
+        operations.push(ModelFileOperation {
+            action,
+            library,
+            path,
+            new_name: extract_json_string_field(&object, "newName")
+                .map(|text| text.trim().to_string())
+                .filter(|text| !text.is_empty()),
+            content: extract_json_string_field(&object, "content")
+                .map(|text| text.trim().to_string()),
+        });
+    }
+    if operations.is_empty() {
+        None
+    } else {
+        Some(operations)
+    }
 }
 
 fn extract_json_array_field_lossy(payload: &str, field: &str) -> Option<String> {
@@ -2135,7 +2209,11 @@ fn extract_loose_fenced_json_payload(output: &str) -> Option<String> {
     let after_fence = lower
         .strip_prefix("```json")
         .map(|_| &trimmed["```json".len()..])
-        .or_else(|| lower.strip_prefix("``` json").map(|_| &trimmed["``` json".len()..]))?;
+        .or_else(|| {
+            lower
+                .strip_prefix("``` json")
+                .map(|_| &trimmed["``` json".len()..])
+        })?;
     extract_balanced_json_payload(after_fence)
 }
 
@@ -2257,6 +2335,20 @@ mod tests {
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).expect("create temp data dir");
         path
+    }
+
+    fn write_test_workspace_config(data_dir: &Path, work_root: &Path, knowledge_root: &Path) {
+        fs::create_dir_all(crate::runtime::runtime_root(data_dir)).expect("create runtime");
+        fs::write(
+            crate::runtime::workspace_config_path(data_dir),
+            serde_json::json!({
+                "schemaVersion": 1,
+                "activeWorkRoot": work_root.to_string_lossy(),
+                "knowledgeRoot": knowledge_root.to_string_lossy()
+            })
+            .to_string(),
+        )
+        .expect("write workspace config");
     }
 
     fn empty_rule_route_context() -> RuleRouteContext {
@@ -2594,17 +2686,7 @@ mod tests {
         let knowledge_root = data_dir.join("knowledge");
         fs::create_dir_all(&work_root).expect("create works");
         fs::create_dir_all(&knowledge_root).expect("create knowledge");
-        fs::create_dir_all(crate::runtime::runtime_root(&data_dir)).expect("create runtime");
-        fs::write(
-            crate::runtime::workspace_config_path(&data_dir),
-            serde_json::json!({
-                "schemaVersion": 1,
-                "activeWorkRoot": work_root.to_string_lossy(),
-                "knowledgeRoot": knowledge_root.to_string_lossy()
-            })
-            .to_string(),
-        )
-        .expect("write workspace config");
+        write_test_workspace_config(&data_dir, &work_root, &knowledge_root);
         let parsed = parse_cocreation_model_output(
             r#"{"reply":"已创建。","edits":[],"fileOperations":[{"action":"writeFile","library":"works","path":"测试/新场景.md","content":"第一场"}],"memories":[]}"#,
         )
@@ -2636,16 +2718,7 @@ mod tests {
         fs::create_dir_all(&knowledge_root).expect("create knowledge");
         let current_path = work_root.join("晚.md");
         fs::write(&current_path, "旧内容").expect("write current");
-        fs::write(
-            crate::runtime::workspace_config_path(&data_dir),
-            serde_json::json!({
-                "schemaVersion": 1,
-                "activeWorkRoot": work_root.to_string_lossy(),
-                "knowledgeRoot": knowledge_root.to_string_lossy()
-            })
-            .to_string(),
-        )
-        .expect("write workspace config");
+        write_test_workspace_config(&data_dir, &work_root, &knowledge_root);
         let input = CoCreateInput {
             request_id: None,
             source_path: current_path.to_string_lossy().into_owned(),
@@ -2686,18 +2759,8 @@ mod tests {
         let knowledge_root = data_dir.join("knowledge");
         fs::create_dir_all(&work_root).expect("create works");
         fs::create_dir_all(&knowledge_root).expect("create knowledge");
-        fs::create_dir_all(crate::runtime::runtime_root(&data_dir)).expect("create runtime");
         fs::write(work_root.join("已有.md"), "原内容").expect("write existing");
-        fs::write(
-            crate::runtime::workspace_config_path(&data_dir),
-            serde_json::json!({
-                "schemaVersion": 1,
-                "activeWorkRoot": work_root.to_string_lossy(),
-                "knowledgeRoot": knowledge_root.to_string_lossy()
-            })
-            .to_string(),
-        )
-        .expect("write workspace config");
+        write_test_workspace_config(&data_dir, &work_root, &knowledge_root);
         let parsed = parse_cocreation_model_output(
             r#"{"reply":"已处理。","edits":[],"fileOperations":[{"action":"writeFile","library":"works","path":"已有.md","content":"新内容"}],"memories":[]}"#,
         )
@@ -2712,6 +2775,35 @@ mod tests {
             fs::read_to_string(work_root.join("已有.md")).expect("read existing"),
             "原内容"
         );
+    }
+
+    #[test]
+    fn file_operation_strips_library_prefix_from_relative_path() {
+        let data_dir = temp_data_dir("file-ops-strip-library-prefix");
+        let work_root = data_dir.join("works");
+        let knowledge_root = data_dir.join("knowledge");
+        fs::create_dir_all(&work_root).expect("create works");
+        fs::create_dir_all(&knowledge_root).expect("create knowledge");
+        write_test_workspace_config(&data_dir, &work_root, &knowledge_root);
+        let parsed = parse_cocreation_model_output(
+            r#"{"reply":"已创建。","edits":[],"fileOperations":[{"action":"writeFile","library":"works","path":"works/第2集.md","content":"第二集正文"}],"memories":[]}"#,
+        )
+        .expect("parse");
+
+        let results = apply_model_file_operations(&data_dir, &parsed.file_operations);
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].ok);
+        assert_eq!(results[0].path, "第2集.md");
+        assert_eq!(
+            fs::read_to_string(work_root.join("第2集.md")).expect("read written"),
+            "第二集正文"
+        );
+        assert!(!work_root.join("works").join("第2集.md").exists());
+        let audit_path =
+            crate::runtime::runtime_root(&data_dir).join("model-file-operations.jsonl");
+        let audit = fs::read_to_string(audit_path).expect("read operation audit");
+        assert!(audit.contains(r#""path":"第2集.md""#));
     }
 
     #[test]
@@ -2956,10 +3048,8 @@ mod tests {
 
     #[test]
     fn parse_cocreation_model_output_recovers_broken_json_payload_as_reply() {
-        let parsed = parse_cocreation_model_output(
-            "```json\n{\"reply\":\"好\",\"edits\":[}\n```",
-        )
-        .expect("broken structured output should not break chat");
+        let parsed = parse_cocreation_model_output("```json\n{\"reply\":\"好\",\"edits\":[}\n```")
+            .expect("broken structured output should not break chat");
 
         assert_eq!(parsed.reply, "好");
         assert!(parsed.edits.is_empty());
@@ -3009,6 +3099,43 @@ mod tests {
         assert_eq!(parsed.edits[0].target, "角色：牛魔王，铁扇公主，观音菩萨");
         assert!(parsed.edits[0].replacement.contains("沙和尚"));
         assert!(parsed.edits[1].replacement.contains("妄动无明"));
+    }
+
+    #[test]
+    fn parse_cocreation_model_output_recovers_malformed_json_file_operations() {
+        let parsed = parse_cocreation_model_output(
+            r#"```json
+{
+  "reply": "已根据第1集剧情续写第2集，并新建到作品库。",
+  "edits": [],
+  "fileOperations": [
+    {
+      "action": "writeFile",
+      "library": "works",
+      "path": "works/第2集.md",
+      "content": "第2集
+
+开场：人物继续追查上一集留下的线索。
+对白："这事不能拖。"
+"
+    }
+  ],
+  "memories": []
+}
+```"#,
+        )
+        .expect("malformed file operation should be recovered");
+
+        assert!(parsed.reply.contains("第2集"));
+        assert_eq!(parsed.file_operations.len(), 1);
+        assert_eq!(parsed.file_operations[0].action, "writeFile");
+        assert_eq!(parsed.file_operations[0].library, "works");
+        assert_eq!(parsed.file_operations[0].path, "works/第2集.md");
+        assert!(parsed.file_operations[0]
+            .content
+            .as_deref()
+            .unwrap_or_default()
+            .contains("开场"));
     }
 
     #[test]
