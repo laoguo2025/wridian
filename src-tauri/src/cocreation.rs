@@ -1868,6 +1868,11 @@ fn parse_cocreation_model_output(output: &str) -> Result<ParsedCoCreateResponse,
         Ok(parsed) => parsed,
         Err(_) => {
             let Some(payload) = extract_json_payload(trimmed) else {
+                if looks_like_structured_cocreation_output(trimmed) {
+                    return Ok(recover_malformed_cocreation_response(
+                        trimmed, trimmed, None,
+                    ));
+                }
                 return Ok(plain_text_cocreation_response(trimmed));
             };
             match serde_json::from_str(&payload) {
@@ -1876,7 +1881,7 @@ fn parse_cocreation_model_output(output: &str) -> Result<ParsedCoCreateResponse,
                     return Ok(recover_malformed_cocreation_response(
                         trimmed,
                         &payload,
-                        &parse_error,
+                        Some(&parse_error),
                     ));
                 }
             }
@@ -1927,7 +1932,7 @@ fn plain_text_cocreation_response(output: &str) -> ParsedCoCreateResponse {
 fn recover_malformed_cocreation_response(
     output: &str,
     payload: &str,
-    parse_error: &serde_json::Error,
+    parse_error: Option<&serde_json::Error>,
 ) -> ParsedCoCreateResponse {
     let file_operations = extract_cocreation_file_operations_lossy(payload)
         .or_else(|| extract_cocreation_file_operations_lossy(output))
@@ -1937,7 +1942,9 @@ fn recover_malformed_cocreation_response(
         .or_else(|| (!file_operations.is_empty()).then(|| "已按你的要求处理文件树。".to_string()))
         .or_else(|| extract_first_meaningful_text(output))
         .unwrap_or_else(|| {
-            format!("模型回复格式不完整，已作为普通回复显示。原解析错误：{parse_error}")
+            parse_error
+                .map(|error| format!("模型回复格式不完整，已作为普通回复显示。原解析错误：{error}"))
+                .unwrap_or_else(|| "模型回复格式不完整，已隐藏原始结构化内容。".to_string())
         });
     ParsedCoCreateResponse {
         reply,
@@ -1947,6 +1954,13 @@ fn recover_malformed_cocreation_response(
         file_operations,
         memories: Vec::new(),
     }
+}
+
+fn looks_like_structured_cocreation_output(output: &str) -> bool {
+    output.contains("\"reply\"")
+        || output.contains("\"edits\"")
+        || output.contains("\"fileOperations\"")
+        || output.contains("\"memories\"")
 }
 
 fn extract_first_meaningful_text(output: &str) -> Option<String> {
@@ -2127,7 +2141,7 @@ fn extract_json_array_field_lossy(payload: &str, field: &str) -> Option<String> 
             _ => {}
         }
     }
-    None
+    (depth > 0).then(|| array.to_string())
 }
 
 fn extract_json_objects_lossy(array_payload: &str) -> Vec<String> {
@@ -3136,6 +3150,59 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("开场"));
+    }
+
+    #[test]
+    fn parse_cocreation_model_output_recovers_unclosed_structured_file_operation() {
+        let parsed = parse_cocreation_model_output(
+            r#"`json
+{
+  "reply": "第2集已根据第1集剧情续写完成。",
+  "edits": [],
+  "fileOperations": [
+    {
+      "action": "writeFile",
+      "library": "works",
+      "path": "第2集.docx",
+      "content": "第2集\n\n开场：牛魔王踏上旅途。"
+    }
+  ],
+  "memories": [
+"#,
+        )
+        .expect("unclosed structured output should recover file operation");
+
+        assert_eq!(parsed.reply, "第2集已根据第1集剧情续写完成。");
+        assert_eq!(parsed.file_operations.len(), 1);
+        assert_eq!(parsed.file_operations[0].action, "writeFile");
+        assert_eq!(parsed.file_operations[0].library, "works");
+        assert_eq!(parsed.file_operations[0].path, "第2集.docx");
+        assert!(parsed.file_operations[0]
+            .content
+            .as_deref()
+            .unwrap_or_default()
+            .contains("开场"));
+        assert!(!parsed.reply.contains("fileOperations"));
+    }
+
+    #[test]
+    fn parse_cocreation_model_output_hides_unrecoverable_structured_payload() {
+        let parsed = parse_cocreation_model_output(
+            r#"``json
+{
+  "reply": "处理中",
+  "edits": [],
+  "fileOperations": [
+    {
+      "action": "writeFile",
+      "library": "works"
+"#,
+        )
+        .expect("unrecoverable structured output should be hidden");
+
+        assert_eq!(parsed.reply, "处理中");
+        assert!(parsed.file_operations.is_empty());
+        assert!(!parsed.reply.contains("fileOperations"));
     }
 
     #[test]
