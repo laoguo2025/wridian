@@ -14,8 +14,8 @@
 
 - Added document-level `selectionchange`, `pointerup`, and `keyup` listeners, with a requestAnimationFrame-delayed read of the current draft selection.
 - Reused the same delayed selection refresh path from the draft editor.
-- Malformed structured output now recovers a visible `reply` when possible and degrades to a plain chat response with no edits/file operations/memories.
-- Added parser tests for broken JSON payloads and unescaped quotes in `reply`.
+- Malformed structured output now recovers a visible `reply` when possible and also recovers `edits` from JSON-looking code blocks so explicit edit requests still reach the draft replacement pipeline.
+- Added parser tests for broken JSON payloads, unescaped quotes in `reply`, and screenshot-style malformed JSON edits.
 - Updated the project map with the durable selection action behavior.
 
 ## Verification
@@ -27,6 +27,9 @@
 - Updated local artifacts:
   - `release\Wridian-0.0.8-x64-setup.exe`, SHA256 `F24B8B4C9EC58C203D4F2D3DF379B21AD5793C5ABFCE5BBD278F4152F0EE28D1`
   - `release\Wridian-0.0.8-test.exe`, SHA256 `4E6D4DD7F56106C589B1F7BD414AF296B293096596EA8BDB2FC9532BC25D8930`
+- Rebuilt after malformed JSON edit recovery update:
+  - `release\Wridian-0.0.8-x64-setup.exe`, SHA256 `01C9589D5167C7CE69B11CA6B01C674D723AFABD545ED8A13AFB7ACFDAA20A51`
+  - `release\Wridian-0.0.8-test.exe`, SHA256 `E35D8CA5EFC3ECE8704B9BD59E3EFD11FA1F436E054E2896560D8338967735F0`
 
 ## Rollback
 

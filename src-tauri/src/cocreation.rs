@@ -1913,7 +1913,14 @@ fn recover_malformed_cocreation_response(
         .or_else(|| extract_json_string_field(output, "reply"))
         .or_else(|| extract_first_meaningful_text(output))
         .unwrap_or_else(|| format!("模型回复格式不完整，已作为普通回复显示。原解析错误：{parse_error}"));
-    plain_text_cocreation_response(&reply)
+    ParsedCoCreateResponse {
+        reply,
+        edits: extract_cocreation_edits_lossy(payload)
+            .or_else(|| extract_cocreation_edits_lossy(output))
+            .unwrap_or_default(),
+        file_operations: Vec::new(),
+        memories: Vec::new(),
+    }
 }
 
 fn extract_first_meaningful_text(output: &str) -> Option<String> {
@@ -1987,6 +1994,112 @@ fn read_json_string_lossy(input: &str) -> Option<String> {
     }
     let text = output.trim().to_string();
     if text.is_empty() { None } else { Some(text) }
+}
+
+fn extract_cocreation_edits_lossy(payload: &str) -> Option<Vec<CoCreateEdit>> {
+    let edits_payload = extract_json_array_field_lossy(payload, "edits")?;
+    let mut edits = Vec::new();
+    for object in extract_json_objects_lossy(&edits_payload) {
+        let target = extract_json_string_field(&object, "target")?;
+        let replacement = extract_json_string_field(&object, "replacement")?;
+        if target.trim().is_empty() || replacement.trim().is_empty() || target.trim() == replacement.trim() {
+            continue;
+        }
+        edits.push(CoCreateEdit {
+            target: target.trim().to_string(),
+            replacement: replacement.trim().to_string(),
+            rationale: extract_json_string_field(&object, "rationale")
+                .map(|text| text.trim().to_string())
+                .filter(|text| !text.is_empty()),
+        });
+    }
+    if edits.is_empty() { None } else { Some(edits) }
+}
+
+fn extract_json_array_field_lossy(payload: &str, field: &str) -> Option<String> {
+    let key = format!("\"{field}\"");
+    let key_start = payload.find(&key)?;
+    let after_key = &payload[key_start + key.len()..];
+    let colon = after_key.find(':')?;
+    let after_colon = after_key[colon + 1..].trim_start();
+    let bracket_start = after_colon.find('[')?;
+    let array = &after_colon[bracket_start..];
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut depth = 0usize;
+    for (index, char) in array.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if char == '\\' {
+                escaped = true;
+            } else if char == '"' {
+                let rest = array[index + char.len_utf8()..].trim_start();
+                if rest.starts_with(',') || rest.starts_with('}') || rest.starts_with(']') {
+                    in_string = false;
+                }
+            }
+            continue;
+        }
+        match char {
+            '"' => in_string = true,
+            '[' => depth += 1,
+            ']' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(array[..=index].to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn extract_json_objects_lossy(array_payload: &str) -> Vec<String> {
+    let mut objects = Vec::new();
+    let mut object_start: Option<usize> = None;
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (index, char) in array_payload.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if char == '\\' {
+                escaped = true;
+            } else if char == '"' {
+                let rest = array_payload[index + char.len_utf8()..].trim_start();
+                if rest.starts_with(':')
+                    || rest.starts_with(',')
+                    || rest.starts_with('}')
+                    || rest.starts_with(']')
+                {
+                    in_string = false;
+                }
+            }
+            continue;
+        }
+        match char {
+            '"' => in_string = true,
+            '{' => {
+                if depth == 0 {
+                    object_start = Some(index);
+                }
+                depth += 1;
+            }
+            '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    if let Some(start) = object_start.take() {
+                        objects.push(array_payload[start..=index].to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    objects
 }
 
 fn extract_json_payload(output: &str) -> Option<String> {
@@ -2865,6 +2978,37 @@ mod tests {
         assert!(parsed.reply.contains("这段可以重写成更生活化的版本"));
         assert!(parsed.reply.contains("肉片厚薄不均"));
         assert!(parsed.edits.is_empty());
+    }
+
+    #[test]
+    fn parse_cocreation_model_output_recovers_malformed_json_edits() {
+        let parsed = parse_cocreation_model_output(
+            r#"```json
+{
+  "reply": "已根据要求，将剧本中所有牛魔王相关角色、称谓、关系及场景替换为沙和尚。",
+  "edits": [
+    {
+      "target": "角色：牛魔王，铁扇公主，观音菩萨",
+      "replacement": "角色：沙和尚，老伴一老沙，夫人一师妹/妻子，观音菩萨",
+      "rationale": "调整角色称谓"
+    },
+    {
+      "target": "灵山罗汉（双手合十，面无表情）：阿弥陀佛，牛魔，你具顽不灵，阻碍三界因果",
+      "replacement": "灵山罗汉（双手合十，面无表情）：阿弥陀佛，沙和尚，你凡心未泯，妄动无明",
+      "rationale": "调整对白"
+    }
+  ],
+  "memories": []
+}
+```"#,
+        )
+        .expect("malformed code block should still recover edits");
+
+        assert!(parsed.reply.contains("已根据要求"));
+        assert_eq!(parsed.edits.len(), 2);
+        assert_eq!(parsed.edits[0].target, "角色：牛魔王，铁扇公主，观音菩萨");
+        assert!(parsed.edits[0].replacement.contains("沙和尚"));
+        assert!(parsed.edits[1].replacement.contains("妄动无明"));
     }
 
     #[test]
