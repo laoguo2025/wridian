@@ -2912,17 +2912,85 @@ fn route_current_file_writes_to_edits(
                 .is_some()
             && model_operation_targets_path(data_dir, &operation, &source_path)
         {
-            parsed.edits.push(CoCreateEdit {
-                target: input.content.clone(),
-                replacement: operation.content.unwrap_or_default(),
-                rationale: Some("根据当前打开文件的原文生成待确认修改。".to_string()),
-            });
-            continue;
+            // 局部性检查：只有当新内容与当前正文存在足够重叠（属于一次“修订”而非完全替换的
+            // 另一篇文档）时，才把它转成 inline edit。重叠过低说明模型其实把当前文件当成了
+            // 别的文件来写，此时保留为 writeFile 操作——apply_workspace_write_file 会拒绝覆写
+            // 已存在文件，从而把决定权留给用户，而不是静默替换正文。
+            let original = input.content.trim();
+            let replacement = operation
+                .content
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or_default();
+            if content_resembles_local_revision(original, replacement) {
+                parsed.edits.push(CoCreateEdit {
+                    target: input.content.clone(),
+                    replacement: operation.content.unwrap_or_default(),
+                    rationale: Some("根据当前打开文件的原文生成待确认修改。".to_string()),
+                });
+                continue;
+            }
         }
         routed_operations.push(operation);
     }
     parsed.file_operations = routed_operations;
     parsed
+}
+
+/// 判断 `replacement` 是否像对 `original` 的一次局部修订，而不是一篇完全不同的新文档。
+///
+/// 使用规范化字符序列的 bigram 集合的 Jaccard 相似度。中文以字符为单位的 bigram、
+/// 西文按字符的 bigram 都能稳定工作，混合语言也不影响。阈值经验值：共享少量常用片段
+/// 的修订普遍高于 0.08，而主题/语言完全不同（英文大纲 vs 中文小说）的文档接近 0。
+fn content_resembles_local_revision(original: &str, replacement: &str) -> bool {
+    const MIN_CHARS: usize = 4;
+    const REVISION_THRESHOLD: f64 = 0.08;
+    let original_norm = normalize_for_locality(original);
+    let replacement_norm = normalize_for_locality(replacement);
+    // 太短的原文无法可靠判断 bigram 重叠，保守按“可能修订”处理。
+    if original_norm.chars().count() < MIN_CHARS || replacement_norm.chars().count() < MIN_CHARS {
+        return true;
+    }
+    let a = char_bigram_set(&original_norm);
+    let b = char_bigram_set(&replacement_norm);
+    if a.is_empty() || b.is_empty() {
+        return true;
+    }
+    let intersection = a.iter().filter(|gram| b.contains(gram)).count();
+    let union = a.len() + b.len() - intersection;
+    if union == 0 {
+        return true;
+    }
+    let similarity = intersection as f64 / union as f64;
+    similarity >= REVISION_THRESHOLD
+}
+
+fn normalize_for_locality(text: &str) -> String {
+    text.trim()
+        // 去掉空白与常见标点，只保留能承载语义的字符。
+        .chars()
+        .filter(|ch| {
+            ch.is_alphanumeric()
+                && !matches!(
+                    ch,
+                    '_' | '-' | '·' | '—' | '、' | '，' | '。' | '：' | '；' | '！' | '？'
+                        | '“' | '”' | '‘' | '’' | '（' | '）' | '《' | '》' | ',' | '.' | ':'
+                        | ';' | '!' | '?' | '"' | '\'' | '(' | ')'
+                )
+        })
+        .flat_map(|ch| ch.to_lowercase())
+        .collect()
+}
+
+fn char_bigram_set(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() < 2 {
+        return Vec::new();
+    }
+    chars
+        .windows(2)
+        .map(|window| format!("{}{}", window[0], window[1]))
+        .collect()
 }
 
 fn model_operation_targets_path(
@@ -4799,6 +4867,113 @@ mod tests {
         assert_eq!(
             fs::read_to_string(current_path).expect("read current"),
             "旧内容"
+        );
+    }
+
+    #[test]
+    fn disjoint_document_write_to_current_file_is_not_routed_to_edit() {
+        // 新内容与原文没有任何重叠：英文提纲 vs 中文小说。应当保留为 writeFile 操作，
+        // 而不是静默替换正文；apply_workspace_write_file 会因为目标已存在而拒绝覆写。
+        let data_dir = temp_data_dir("disjoint-write-not-routed");
+        let work_root = data_dir.join("works");
+        let knowledge_root = data_dir.join("knowledge");
+        fs::create_dir_all(&work_root).expect("create works");
+        fs::create_dir_all(&knowledge_root).expect("create knowledge");
+        let current_path = work_root.join("晚.md");
+        let original_body = "夜晚的城市安静下来，霓虹灯一盏接一盏熄灭。";
+        fs::write(&current_path, original_body).expect("write current");
+        write_test_workspace_config(&data_dir, &work_root, &knowledge_root);
+        let input = CoCreateInput {
+            request_id: None,
+            source_path: current_path.to_string_lossy().into_owned(),
+            title: "晚.md".to_string(),
+            content: original_body.to_string(),
+            draft_kind: Some("prose".to_string()),
+            user_input: "改写".to_string(),
+            selected_text: None,
+            selected_model_id: None,
+            context_items: Vec::new(),
+        };
+        let parsed = parse_cocreation_model_output(
+            r#"{"reply":"给出修改方案。","edits":[],"fileOperations":[{"action":"writeFile","library":"works","path":"晚.md","content":"PROJECT OUTLINE chapter one two three four five"}],"memories":[]}"#,
+        )
+        .expect("parse");
+
+        let routed = route_current_file_writes_to_edits(&data_dir, &input, parsed);
+
+        assert!(
+            routed.edits.is_empty(),
+            "disjoint document must not be converted to an inline edit"
+        );
+        assert_eq!(
+            routed.file_operations.len(),
+            1,
+            "disjoint document must stay as a writeFile operation"
+        );
+        assert_eq!(
+            fs::read_to_string(&current_path).expect("read current"),
+            original_body,
+            "current file body must remain untouched"
+        );
+    }
+
+    #[test]
+    fn short_original_still_routes_to_edit() {
+        // 原文过短无法可靠度量重叠，按“可能修订”处理，沿用旧行为。
+        let data_dir = temp_data_dir("short-original-routes");
+        let work_root = data_dir.join("works");
+        let knowledge_root = data_dir.join("knowledge");
+        fs::create_dir_all(&work_root).expect("create works");
+        fs::create_dir_all(&knowledge_root).expect("create knowledge");
+        let current_path = work_root.join("便签.md");
+        fs::write(&current_path, "买").expect("write current");
+        write_test_workspace_config(&data_dir, &work_root, &knowledge_root);
+        let input = CoCreateInput {
+            request_id: None,
+            source_path: current_path.to_string_lossy().into_owned(),
+            title: "便签.md".to_string(),
+            content: "买".to_string(),
+            draft_kind: Some("prose".to_string()),
+            user_input: "补充".to_string(),
+            selected_text: None,
+            selected_model_id: None,
+            context_items: Vec::new(),
+        };
+        let parsed = parse_cocreation_model_output(
+            r#"{"reply":"已补。","edits":[],"fileOperations":[{"action":"writeFile","library":"works","path":"便签.md","content":"买牛奶和面包"}],"memories":[]}"#,
+        )
+        .expect("parse");
+
+        let routed = route_current_file_writes_to_edits(&data_dir, &input, parsed);
+
+        assert_eq!(routed.edits.len(), 1);
+        assert!(routed.file_operations.is_empty());
+    }
+
+    #[test]
+    fn content_resembles_local_revision_flags_overlapping_replacement() {
+        // 重叠：典型润色，应判为修订。
+        assert!(content_resembles_local_revision(
+            "她在月色里关上门，回头看了一眼。",
+            "她在月色里关上门，回头又看了一眼那盏灯。"
+        ));
+        // 完全不相干：中文 vs 英文，不应判为修订。
+        assert!(!content_resembles_local_revision(
+            "夜晚的城市安静下来。",
+            "PROJECT OUTLINE chapter one two three"
+        ));
+        // 任意一方过短：保守判为修订。
+        assert!(content_resembles_local_revision("短", "完全不相关的很长内容"));
+        assert!(content_resembles_local_revision("完全不相关的很长内容", "短"));
+    }
+
+    #[test]
+    fn char_bigram_set_handles_short_and_normal_input() {
+        assert!(char_bigram_set("a").is_empty());
+        assert_eq!(char_bigram_set("ab"), vec!["ab".to_string()]);
+        assert_eq!(
+            char_bigram_set("abc"),
+            vec!["ab".to_string(), "bc".to_string()]
         );
     }
 
