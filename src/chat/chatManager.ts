@@ -24,10 +24,8 @@ export type ChatDraftEdit = CoCreateEdit & {
   status: "pending" | "accepted" | "rejected";
 };
 
-export type LocalLiteralReplacePlan = {
-  edits: ChatDraftEdit[];
-  from: string;
-  to: string;
+type DraftEditCandidate = CoCreateEdit & {
+  sourceRange?: PromptContextRange;
 };
 
 export type SendChatPromptInput = {
@@ -154,38 +152,6 @@ export function useChatManager({
       }),
     );
 
-    const localLiteralReplace = createLocalLiteralReplacePlan(input);
-    if (localLiteralReplace) {
-      const assistantReply = localLiteralReplace.edits.length
-        ? `已在当前打开文件中找到 ${localLiteralReplace.edits.length} 处「${localLiteralReplace.from}」，将精确替换为「${localLiteralReplace.to}」。请在正文内联 diff 中确认后写入。`
-        : `当前正文或选区里没有找到「${localLiteralReplace.from}」，未生成修改。`;
-      const messagesWithAssistant = [...messagesWithUser, createAssistantChatMessage(assistantReply)];
-      messagesRef.current = messagesWithAssistant;
-      setMessages(messagesWithAssistant);
-      void persistChat(
-        messagesWithAssistant,
-        input,
-        projectIdRef.current,
-        sessionIdRef.current,
-        parentSessionIdRef.current,
-        forkedFromMessageIdRef.current,
-        setError,
-        buildActiveContext({
-          assistantReply,
-          input,
-          messages: messagesWithAssistant,
-          sessionId: sessionIdRef.current,
-        }),
-      );
-      if (localLiteralReplace.edits.length) {
-        onDraftEdits(localLiteralReplace.edits, true);
-      }
-      activeRequestIdRef.current = "";
-      pendingRef.current = false;
-      setPending(false);
-      return true;
-    }
-
     try {
       const response = await requestCocreation({
         sourcePath: input.sourcePath,
@@ -228,7 +194,8 @@ export function useChatManager({
       );
       const fileOperations = response.fileOperations;
       const draftEdits = fileOperations.length || isExplicitNewDocumentRequest(input.text) ? [] : response.edits;
-      onDraftEdits(createPendingDraftEdits(draftEdits, input), shouldAutoApplyDraftEdits(input.text));
+      const pendingDraftEdits = createPendingDraftEdits(draftEdits, input);
+      onDraftEdits(pendingDraftEdits, pendingDraftEdits.length > 0);
       if (fileOperations.some((operation) => operation.ok)) {
         onWorkspaceChanged?.();
       }
@@ -441,10 +408,11 @@ function compactPlainText(text: string, maxChars: number) {
 function createPendingDraftEdits(edits: CoCreateEdit[], input: SendChatPromptInput): ChatDraftEdit[] {
   const createdAt = Date.now();
   const selectedRangePill = input.contextPills.find((pill) => pill.kind === "selection" && pill.range);
-  return edits.map((edit, index) => {
-    const selectedSourceRange = selectedRangePill?.value.trim() === edit.target.trim()
+  const candidates = expandRepeatedLiteralEdits(edits, input, selectedRangePill);
+  return candidates.map((edit, index) => {
+    const selectedSourceRange = edit.sourceRange ?? (selectedRangePill?.value.trim() === edit.target.trim()
       ? selectedRangePill.range
-      : undefined;
+      : undefined);
     const openingFallback = selectedSourceRange
       ? null
       : createOpeningRewriteFallback(edit, input, selectedRangePill);
@@ -455,6 +423,30 @@ function createPendingDraftEdits(edits: CoCreateEdit[], input: SendChatPromptInp
       status: "pending" as const,
       target: openingFallback?.target ?? edit.target,
     };
+  });
+}
+
+function expandRepeatedLiteralEdits(
+  edits: CoCreateEdit[],
+  input: SendChatPromptInput,
+  selectedRangePill?: PromptContextPill,
+): DraftEditCandidate[] {
+  if (!isAllOccurrencesEditIntent(input.text)) return edits;
+  const selectedRange = selectedRangePill?.range;
+  const selectedValue = selectedRangePill?.value.trim() ? selectedRangePill.value : "";
+  const useSelectionScope = Boolean(shouldScopeEditToSelection(input.text) && selectedValue && selectedRange);
+  const content = useSelectionScope ? selectedValue : input.content;
+  const baseOffset = useSelectionScope && selectedRange ? selectedRange.start : 0;
+  return edits.flatMap((edit) => {
+    const target = edit.target.trim();
+    if (!canExpandRepeatedLiteralEdit(edit, target)) return [edit];
+    const ranges = findLiteralRanges(content, target);
+    if (ranges.length <= 1) return [edit];
+    return ranges.map((range) => ({
+      ...edit,
+      sourceRange: { start: baseOffset + range.start, end: baseOffset + range.end },
+      target,
+    }));
   });
 }
 
@@ -526,56 +518,6 @@ function normalizeIntentText(text: string) {
   return text.trim().replace(/\s+/g, "");
 }
 
-function createLocalLiteralReplacePlan(input: SendChatPromptInput): LocalLiteralReplacePlan | null {
-  const parsed = parseLiteralReplaceIntent(input.text);
-  if (!parsed) return null;
-  const selectedRangePill = input.contextPills.find((pill) => pill.kind === "selection" && pill.range);
-  const content = selectedRangePill?.value.trim() ? selectedRangePill.value : input.content;
-  const baseOffset = selectedRangePill?.range ? selectedRangePill.range.start : 0;
-  const ranges = findLiteralRanges(content, parsed.from);
-  const createdAt = Date.now();
-  return {
-    edits: ranges.map((range, index) => ({
-      id: `literal-replace-${createdAt}-${index}`,
-      rationale: "按用户明确字面替换指令生成",
-      replacement: parsed.to,
-      sourceRange: { start: baseOffset + range.start, end: baseOffset + range.end },
-      status: "pending" as const,
-      target: parsed.from,
-    })),
-    from: parsed.from,
-    to: parsed.to,
-  };
-}
-
-function parseLiteralReplaceIntent(input: string): { from: string; to: string } | null {
-  const normalized = input.trim().replace(/[“”]/g, "\"").replace(/[‘’]/g, "'");
-  const patterns = [
-    /^(?:请)?(?:把|将)\s*["'「『《]?(.+?)["'」』》]?\s*(?:全部|都|全都|统一)?\s*(?:改成|改为|换成|替换为|替换成)\s*["'「『《]?(.+?)["'」』》]?\s*$/,
-    /^(?:请)?(?:将|把)?\s*["'「『《]?(.+?)["'」』》]?\s*(?:全部|都|全都|统一)?\s*(?:替换为|替换成|改成|改为|换成)\s*["'「『《]?(.+?)["'」』》]?\s*$/,
-  ];
-  for (const pattern of patterns) {
-    const match = normalized.match(pattern);
-    if (!match) continue;
-    const from = cleanupLiteralReplaceTerm(match[1]);
-    const to = cleanupLiteralReplaceTerm(match[2]);
-    if (from && to && from !== to && from.length <= 80 && to.length <= 80) {
-      return { from, to };
-    }
-  }
-  return null;
-}
-
-function cleanupLiteralReplaceTerm(term: string) {
-  return term
-    .trim()
-    .replace(/^(?:所有|全部|都|全都|正文中|文中|当前文件中|当前正文中|当前打开文件中|的)+/g, "")
-    .replace(/(?:全部|都|全都|统一|这个词|这个名字|这个称呼|这几个字|这些字|所有出现处|出现处|在当前文件中|在当前正文中|在正文中|在文中)+$/g, "")
-    .trim()
-    .replace(/^["'「『《]+|["'」』》。！!，,、；;：:\s]+$/g, "")
-    .trim();
-}
-
 function findLiteralRanges(content: string, target: string) {
   const ranges: Array<{ start: number; end: number }> = [];
   if (!target) return ranges;
@@ -587,16 +529,26 @@ function findLiteralRanges(content: string, target: string) {
   return ranges;
 }
 
-function shouldAutoApplyDraftEdits(userInput: string) {
-  const input = userInput.trim();
-  if (!input) return false;
-  if (/建议|方案|思路|为什么|怎么回事|原因|比较|评价|分析|解释/.test(input) && !/改成|换成|替换|删掉|删除|重写|改写/.test(input)) {
-    return false;
-  }
-  if (/重写|改写|润色|修改|更改|替换|改成|换成|删掉|删除|合并|拆分|修正/.test(input)) {
-    return true;
-  }
-  return /整理|优化|批量/.test(input) && /正文|稿件|原文|内容|这段|两段|选中|对白|句子|段落|修改|替换|删除/.test(input);
+function isAllOccurrencesEditIntent(text: string) {
+  const normalized = normalizeIntentText(text);
+  return /全部|全都|都|所有|统一|每个|每处|所有出现处|出现处/.test(normalized);
+}
+
+function shouldScopeEditToSelection(text: string) {
+  const normalized = normalizeIntentText(text);
+  return /选中|选区|这段|这几段|这部分|这一段|刚才划选|我划选/.test(normalized);
+}
+
+function canExpandRepeatedLiteralEdit(edit: CoCreateEdit, target: string) {
+  return Boolean(
+    target
+      && target === edit.target
+      && target.length <= 80
+      && !target.includes("\n")
+      && edit.replacement.trim()
+      && edit.replacement.length <= 400
+      && !edit.replacement.includes("\n\n"),
+  );
 }
 
 function isAbortError(error: unknown) {

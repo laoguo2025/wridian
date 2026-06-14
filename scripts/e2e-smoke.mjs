@@ -38,6 +38,8 @@ async function main() {
   await page.locator(".chat-markdown-table-wrap table").first().waitFor({ timeout: 10_000 });
 
   await testSelectionToPromptAndSend(page);
+  await testModelFreeSemanticDraftEdit(page);
+  await testOrderedModelFileWrite(page, fixture);
 
   await page.evaluate(() => window.__WRIDIAN_E2E__.setNextCocreation(JSON.stringify({
     reply: "已生成 1 处待确认正文修改。",
@@ -59,6 +61,50 @@ async function main() {
   );
   await browser.close();
   console.log(JSON.stringify({ ok: true, fixture, screenshotPath }, null, 2));
+}
+
+async function testModelFreeSemanticDraftEdit(page) {
+  await runMockedPrompt(page, {
+    text: "把第1集里的牛魔王都改成猪八戒",
+    response: {
+      reply: "已识别为正文批量替换，生成 2 处待确认修改。",
+      edits: [{ target: "牛魔王", replacement: "猪八戒", rationale: "按用户要求统一角色名" }],
+      fileOperations: [],
+      memories: [],
+    },
+  });
+  await page.waitForFunction(() => {
+    const pending = window.__WRIDIAN_E2E__.getState().pendingEdits || [];
+    return pending.filter((edit) => edit.target === "牛魔王" && edit.replacement === "猪八戒").length === 2;
+  }, null, { timeout: 10_000 });
+  const inlineDeleted = await page.locator(".inline-diff del").filter({ hasText: "牛魔王" }).count();
+  const inlineInserted = await page.locator(".inline-diff ins").filter({ hasText: "猪八戒" }).count();
+  if (inlineDeleted < 2 || inlineInserted < 2) {
+    throw new Error(`Model-free semantic edit did not render repeated diffs: del=${inlineDeleted}, ins=${inlineInserted}`);
+  }
+}
+
+async function testOrderedModelFileWrite(page, fixture) {
+  const targetPath = path.join(fixture.worksRoot, "测试", "第2集-顺序测试.md");
+  await runMockedPrompt(page, {
+    text: "按顺序处理：先判断我的意图，再读取第1集正文和作品库文件树，然后续写第2集，在作品库新建第2集-顺序测试文档保存",
+    response: {
+      reply: "已按顺序完成：识别续写并新建作品库文档。",
+      edits: [],
+      fileOperations: [{
+        action: "writeFile",
+        library: "works",
+        path: "测试/第2集-顺序测试.md",
+        content: "## 第2集-顺序测试\n\n猪八戒接过金箍棒，发现广播声来自火焰山深处。",
+      }],
+      memories: [],
+    },
+  });
+  await waitForTreePath(page, "files", targetPath);
+  const content = await readFile(targetPath, "utf8");
+  if (!content.includes("## 第2集-顺序测试") || !content.includes("广播声来自火焰山深处")) {
+    throw new Error(`Ordered model file write saved wrong content: ${content}`);
+  }
 }
 
 async function testFileTreeEditing(page, fixture) {

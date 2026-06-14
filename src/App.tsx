@@ -447,6 +447,9 @@ function App() {
     if (!override) {
       setPrompt("");
       updatePromptPills([]);
+      draftSelectionRef.current = { start: 0, end: 0 };
+      setSelectionActionPosition(null);
+      window.getSelection()?.removeAllRanges();
     }
     setMemoryOpen(false);
     await chatManager.sendPrompt({

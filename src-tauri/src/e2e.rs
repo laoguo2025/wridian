@@ -68,7 +68,7 @@ pub(crate) fn wridian_e2e_prepare_fixture(
     let first_draft = project_dir.join("第1集.docx");
     write_minimal_docx(
         &first_draft,
-        "# 第1集\n\n主角在雨夜进入旧车站，发现墙上写着一句警告：不要相信第二班车。\n",
+        "# 第1集\n\n主角在雨夜进入旧车站，发现墙上写着一句警告：不要相信第二班车。\n\n牛魔王攥着金箍棒冲出火焰山。\n\n牛魔王没有回头，只听见广播再次响起。\n",
     )?;
     write_file(
         &knowledge_root.join("角色卡.md"),
