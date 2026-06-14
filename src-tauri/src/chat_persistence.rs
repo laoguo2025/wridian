@@ -1,3 +1,4 @@
+use crate::atomic_write::atomic_write_text;
 use crate::runtime::{ensure_workspace, runtime_root, wridian_data_dir};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -167,7 +168,7 @@ pub(crate) fn wridian_save_chat_transcript(
 
     let file_name = format!("{}.md", sanitize_file_name(&input.session_id));
     let path = chat_dir.join(file_name);
-    fs::write(&path, render_chat_transcript(&input))
+    atomic_write_text(&path, &render_chat_transcript(&input))
         .map_err(|error| format!("聊天记录写入失败：{error}"))?;
     write_chat_session_state(&chat_dir, &input)?;
     write_active_context_files(&data_dir, &chat_dir, input.active_context.as_ref())?;
@@ -279,9 +280,9 @@ fn write_chat_session_state(
     let sessions_dir = chat_dir.join("sessions");
     fs::create_dir_all(&sessions_dir).map_err(|error| format!("对话树目录创建失败：{error}"))?;
     let session_path = sessions_dir.join(format!("{}.json", sanitize_file_name(&input.session_id)));
-    fs::write(
-        session_path,
-        serde_json::to_string_pretty(&state)
+    atomic_write_text(
+        &session_path,
+        &serde_json::to_string_pretty(&state)
             .map_err(|error| format!("对话树序列化失败：{error}"))?,
     )
     .map_err(|error| format!("对话树写入失败：{error}"))?;
@@ -305,9 +306,9 @@ fn write_chat_session_state(
         .insert(scope_key, input.session_id.clone());
     index.schema_version = chat_session_index_schema_version();
     index.updated_at = updated_at;
-    fs::write(
-        index_path,
-        serde_json::to_string_pretty(&index)
+    atomic_write_text(
+        &index_path,
+        &serde_json::to_string_pretty(&index)
             .map_err(|error| format!("对话索引序列化失败：{error}"))?,
     )
     .map_err(|error| format!("对话索引写入失败：{error}"))?;
@@ -358,15 +359,15 @@ fn write_active_context_files(
     let Some(active_context) = active_context else {
         return Ok(());
     };
-    fs::write(
-        runtime_root(data_dir).join("active-context.json"),
-        serde_json::to_string_pretty(active_context)
+    atomic_write_text(
+        &runtime_root(data_dir).join("active-context.json"),
+        &serde_json::to_string_pretty(active_context)
             .map_err(|error| format!("当前现场序列化失败：{error}"))?,
     )
     .map_err(|error| format!("当前现场写入失败：{error}"))?;
-    fs::write(
-        chat_dir.join("compact-summary.md"),
-        compact_summary_from_active_context(Some(active_context)),
+    atomic_write_text(
+        &chat_dir.join("compact-summary.md"),
+        &compact_summary_from_active_context(Some(active_context)),
     )
     .map_err(|error| format!("创作交接卡写入失败：{error}"))?;
     Ok(())

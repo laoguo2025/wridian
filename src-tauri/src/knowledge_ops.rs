@@ -1,3 +1,4 @@
+use crate::atomic_write::atomic_write_text;
 use crate::metadata_index::{read_library_metadata_index, MetadataFile, MetadataLibraryIndex};
 use crate::path_safety::is_symlink_or_reparse;
 use crate::runtime::{ensure_workspace, iso_timestamp, wridian_data_dir};
@@ -468,7 +469,7 @@ fn safe_write_knowledge_file(
     let target = resolve_knowledge_target(root, path, label)?;
     ensure_safe_knowledge_parent(root, &target, label)?;
     ensure_safe_knowledge_write_target(root, &target, label)?;
-    fs::write(target, content).map_err(|error| format!("{label}写入失败：{error}"))
+    atomic_write_text(&target, content).map_err(|error| format!("{label}写入失败：{error}"))
 }
 
 fn safe_create_knowledge_dir(root: &Path, path: &Path, label: &str) -> Result<(), String> {

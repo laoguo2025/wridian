@@ -1,3 +1,4 @@
+use crate::atomic_write::atomic_write_text;
 use crate::path_safety::safe_child_path;
 use crate::runtime::{ensure_workspace, wridian_data_dir};
 use crate::workspace::{resolved_knowledge_root, works_root};
@@ -63,7 +64,7 @@ pub(crate) fn wridian_apply_bridge_relation(
     })?;
     let update = apply_frontmatter_relation(&content, spec.field, &value);
     if update.inserted {
-        fs::write(&target_path, update.content).map_err(|error| {
+        atomic_write_text(&target_path, &update.content).map_err(|error| {
             format!(
                 "桥接关系写入目标文件失败（{}）：{error}",
                 target_path.to_string_lossy()

@@ -1,3 +1,4 @@
+use crate::atomic_write::atomic_write_text;
 use crate::path_safety::safe_child_path;
 use crate::runtime::{ensure_workspace, memory_folder_path, wridian_data_dir};
 use crate::workspace::{read_active_work_root, resolved_knowledge_root};
@@ -251,7 +252,7 @@ fn save_memory_tree_file(data_dir: &Path, path: &str, content: &str) -> Result<(
             return Err("只能编辑记忆树或知识库里的 Markdown 文件。".to_string());
         }
     }
-    fs::write(target, content).map_err(|error| format!("记忆树文件写入失败：{error}"))
+    atomic_write_text(&target, content).map_err(|error| format!("记忆树文件写入失败：{error}"))
 }
 
 fn delete_memory_tree_file(data_dir: &Path, path: &str) -> Result<(), String> {
@@ -385,7 +386,7 @@ fn write_memory_tree_file_if_missing(path: &Path, content: &str) -> Result<(), S
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| format!("记忆树目录创建失败：{error}"))?;
     }
-    fs::write(path, content).map_err(|error| format!("记忆树文件创建失败：{error}"))
+    atomic_write_text(path, content).map_err(|error| format!("记忆树文件创建失败：{error}"))
 }
 
 fn memory_tree_files_root(data_dir: &Path) -> PathBuf {
@@ -513,7 +514,7 @@ fn run_legacy_memory_migration_once(root: &Path) -> Result<(), String> {
         return Ok(());
     }
     migrate_legacy_memory_files(root)?;
-    fs::write(&marker, crate::runtime::iso_timestamp())
+    atomic_write_text(&marker, &crate::runtime::iso_timestamp())
         .map_err(|error| format!("记忆树迁移标记写入失败：{error}"))
 }
 
@@ -547,7 +548,7 @@ fn copy_legacy_if_target_empty(source: &Path, target: &Path) -> Result<(), Strin
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent).map_err(|error| format!("记忆树迁移目录创建失败：{error}"))?;
     }
-    fs::write(target, content).map_err(|error| format!("记忆树迁移写入失败：{error}"))
+    atomic_write_text(target, &content).map_err(|error| format!("记忆树迁移写入失败：{error}"))
 }
 
 #[cfg(test)]
@@ -995,7 +996,7 @@ fn write_memory_leaf(data_dir: &Path, leaf: &MemoryLeafDraft) -> Result<PathBuf,
         crate::runtime::iso_timestamp(),
         if reason.trim().is_empty() { "模型从本轮对话中提取出可复用长期记忆。" } else { reason.trim() }
     );
-    fs::write(&path, content).map_err(|error| format!("叶子写入失败：{error}"))?;
+    atomic_write_text(&path, &content).map_err(|error| format!("叶子写入失败：{error}"))?;
     Ok(path)
 }
 

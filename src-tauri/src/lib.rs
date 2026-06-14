@@ -1,3 +1,4 @@
+mod atomic_write;
 mod bridge;
 mod chat_persistence;
 mod cocreation;

@@ -1,3 +1,4 @@
+use crate::atomic_write::atomic_write_text;
 use crate::path_safety::{is_symlink_or_reparse, safe_child_path};
 use crate::runtime::{
     default_knowledge_root, ensure_workspace, iso_timestamp, vault_root, workspace_config_path,
@@ -228,7 +229,7 @@ pub(crate) fn wridian_create_work_file(input: CreateNodeInput) -> Result<Workspa
     let parent = resolve_allowed_folder(&data_dir, input.library.as_deref(), &input.parent_path)?;
     let file_name = normalize_file_name(&input.name)?;
     let path = unique_child_path(&parent, &file_name);
-    fs::write(&path, "").map_err(|error| format!("文件创建失败：{error}"))?;
+    atomic_write_text(&path, "").map_err(|error| format!("文件创建失败：{error}"))?;
     workspace_info(&data_dir)
 }
 
@@ -573,7 +574,7 @@ fn write_workspace_roots_config(
         "knowledgeRoot": knowledge_root.map(|root| root.to_string_lossy().into_owned())
     }))
     .map_err(|error| error.to_string())?;
-    fs::write(workspace_config_path(data_dir), config)
+    atomic_write_text(&workspace_config_path(data_dir), &config)
         .map_err(|error| format!("Wridian 工作区配置写入失败：{error}"))
 }
 
@@ -1041,7 +1042,7 @@ fn write_editable_file_content(path: &Path, content: &str) -> Result<(), String>
         }
         return write_new_docx_plain_text(path, content);
     }
-    fs::write(path, content).map_err(|error| format!("文件保存失败：{error}"))
+    atomic_write_text(path, content).map_err(|error| format!("文件保存失败：{error}"))
 }
 
 fn workspace_preview_type(path: &Path) -> String {
@@ -1146,7 +1147,23 @@ fn write_docx_plain_text(path: &Path, content: &str) -> Result<(), String> {
     }
     drop(archive);
 
-    let document = crate::docx_xml::minimal_docx_document_xml(content);
+    // 读出原 word/document.xml 以保留段落级格式（标题样式/字符样式）。
+    let mut original_document = String::new();
+    let mut original_loaded = false;
+    for (name, data) in &files {
+        if name == "word/document.xml" {
+            original_document = String::from_utf8_lossy(data).into_owned();
+            original_loaded = true;
+            break;
+        }
+    }
+    let document = if original_loaded {
+        // 解析失败（异常/损坏文档）时回退到最小化构造，保证不破坏现有保存行为。
+        crate::docx_xml::round_trip_document_xml(&original_document, content)
+            .unwrap_or_else(|_| crate::docx_xml::minimal_docx_document_xml(content))
+    } else {
+        crate::docx_xml::minimal_docx_document_xml(content)
+    };
     let mut output = Cursor::new(Vec::new());
     {
         let mut writer = zip::ZipWriter::new(&mut output);
