@@ -246,7 +246,7 @@ async function testConversationDrivenFileTreeEditing(page, fixture, library) {
     if (directContent.trim() !== "早上好") {
       throw new Error(`${libraryLabel} direct content write failed: ${directContent}`);
     }
-    await page.getByText(`${libraryLabel} / ${directContentRel}`).waitFor({ timeout: 10_000 });
+    await assertSuccessfulFileOperationsHidden(page);
   }
 
   await runMockedPrompt(page, {
@@ -273,7 +273,14 @@ async function testConversationDrivenFileTreeEditing(page, fixture, library) {
   });
   await waitForTreePathGone(page, treeStateKey, renamedPath);
   if (existsSync(renamedPath)) throw new Error(`${libraryLabel} file was not trashed by chat: ${renamedPath}`);
-  await page.getByText(`${libraryLabel} / ${renamedRel}`).waitFor({ timeout: 10_000 });
+  await assertSuccessfulFileOperationsHidden(page);
+}
+
+async function assertSuccessfulFileOperationsHidden(page) {
+  const visibleSuccessBlocks = await page.locator(".chat-tool-result.ok").count();
+  if (visibleSuccessBlocks) {
+    throw new Error(`Successful file operation blocks should be hidden, found ${visibleSuccessBlocks}`);
+  }
 }
 
 async function testFakeSavedNewEpisodeFallback(page, fixture) {

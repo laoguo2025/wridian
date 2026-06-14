@@ -803,9 +803,12 @@ function renderInlineMarkdown(text: string): ReactNode[] {
 }
 
 function FileOperationBlocks({ operations }: { operations: CoCreateFileOperation[] }) {
+  const visibleOperations = operations.filter((operation) => !operation.ok);
+  if (!visibleOperations.length) return null;
+
   return (
     <div className="chat-tool-results" aria-label="文件操作结果">
-      {operations.map((operation, index) => (
+      {visibleOperations.map((operation, index) => (
         <div
           className={`chat-tool-result ${operation.ok ? "ok" : "error"}`}
           key={`${operation.action}:${operation.library}:${operation.path}:${index}`}
