@@ -20,6 +20,7 @@ use crate::workspace::{
     is_supported_text_preview_file, read_active_work_root, read_workspace_text_content,
     resolved_knowledge_root,
 };
+use chrono::Local;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -502,6 +503,20 @@ async fn cocreate_with_model(
         return ensure_parsed_cocreation_response(parse_cocreation_model_output(&mock_output)?);
     }
     ensure_supported_protocol(&settings.protocol)?;
+    if should_use_plain_chat_response(input) {
+        return cocreate_plain_chat_with_model(
+            settings,
+            project_model,
+            input,
+            memories,
+            active_context,
+            active_project_context,
+            rule_route_context,
+            file_tree,
+            mentioned_files,
+        )
+        .await;
+    }
     if is_openai_oauth_settings(settings) {
         return cocreate_with_openai_oauth(
             settings,
@@ -561,6 +576,74 @@ async fn cocreate_with_model(
         }
         _ => unreachable!("protocol checked before dispatch"),
     }
+}
+
+async fn cocreate_plain_chat_with_model(
+    settings: &ActiveModelSettings,
+    project_model: Option<&str>,
+    input: &CoCreateInput,
+    memories: &[String],
+    active_context: &str,
+    active_project_context: &str,
+    rule_route_context: &RuleRouteContext,
+    file_tree: &str,
+    mentioned_files: &[DialogueContextItem],
+) -> Result<ParsedCoCreateResponse, String> {
+    let content = match settings.protocol.as_str() {
+        "anthropic" => {
+            plain_chat_with_anthropic(
+                settings,
+                project_model,
+                input,
+                memories,
+                active_context,
+                active_project_context,
+                rule_route_context,
+                file_tree,
+                mentioned_files,
+            )
+            .await?
+        }
+        "google" => {
+            plain_chat_with_gemini(
+                settings,
+                project_model,
+                input,
+                memories,
+                active_context,
+                active_project_context,
+                rule_route_context,
+                file_tree,
+                mentioned_files,
+            )
+            .await?
+        }
+        "openai-compatible" => {
+            plain_chat_with_openai_compatible(
+                settings,
+                project_model,
+                input,
+                memories,
+                active_context,
+                active_project_context,
+                rule_route_context,
+                file_tree,
+                mentioned_files,
+            )
+            .await?
+        }
+        _ => unreachable!("protocol checked before dispatch"),
+    };
+    let reply = sanitize_plain_chat_reply(&content);
+    if reply.trim().is_empty() {
+        return Err("模型返回了空回复。".to_string());
+    }
+    Ok(ParsedCoCreateResponse {
+        reply,
+        edits: Vec::new(),
+        file_operations: Vec::new(),
+        memories: Vec::new(),
+    })
 }
 
 fn e2e_mock_model_settings() -> ActiveModelSettings {
@@ -913,6 +996,60 @@ async fn generate_document_body_with_openai_compatible(
     read_model_response_text(&body)
 }
 
+async fn plain_chat_with_openai_compatible(
+    settings: &ActiveModelSettings,
+    project_model: Option<&str>,
+    input: &CoCreateInput,
+    memories: &[String],
+    active_context: &str,
+    active_project_context: &str,
+    rule_route_context: &RuleRouteContext,
+    file_tree: &str,
+    mentioned_files: &[DialogueContextItem],
+) -> Result<String, String> {
+    let url = openai_chat_completions_url(&settings.base_url);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(90))
+        .build()
+        .map_err(|error| format!("对话客户端创建失败：{error}"))?;
+    let messages = json!([
+        {
+            "role": "system",
+            "content": plain_chat_system_prompt()
+        },
+        {
+            "role": "user",
+            "content": build_plain_chat_prompt(input, memories, active_context, active_project_context, rule_route_context, file_tree, mentioned_files)
+        }
+    ]);
+    let response = client
+        .post(url)
+        .bearer_auth(&settings.api_key)
+        .json(&openai_compatible_chat_body(
+            settings,
+            project_model.unwrap_or(&settings.model),
+            messages,
+            4096,
+            0.7,
+        ))
+        .send()
+        .await
+        .map_err(|error| format!("对话请求失败：{error}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("对话响应读取失败：{error}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "对话请求失败：HTTP {} {}",
+            status.as_u16(),
+            response_body_summary(&body)
+        ));
+    }
+    read_model_response_text(&body)
+}
+
 async fn generate_document_body_with_anthropic(
     settings: &ActiveModelSettings,
     project_model: Option<&str>,
@@ -978,8 +1115,217 @@ async fn generate_document_body_with_anthropic(
     read_anthropic_response_text(&body)
 }
 
+async fn plain_chat_with_anthropic(
+    settings: &ActiveModelSettings,
+    project_model: Option<&str>,
+    input: &CoCreateInput,
+    memories: &[String],
+    active_context: &str,
+    active_project_context: &str,
+    rule_route_context: &RuleRouteContext,
+    file_tree: &str,
+    mentioned_files: &[DialogueContextItem],
+) -> Result<String, String> {
+    let url = anthropic_messages_url(&settings.base_url);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(90))
+        .build()
+        .map_err(|error| format!("对话客户端创建失败：{error}"))?;
+    let request = apply_anthropic_auth_headers(
+        client.post(url).header("anthropic-version", "2023-06-01"),
+        settings,
+    );
+    let response = request
+        .json(&json!({
+            "model": project_model.unwrap_or(&settings.model),
+            "system": plain_chat_system_prompt(),
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": build_plain_chat_prompt(input, memories, active_context, active_project_context, rule_route_context, file_tree, mentioned_files)
+                        }
+                    ]
+                }
+            ],
+            "max_tokens": 4096,
+            "temperature": 0.7,
+            "stream": false
+        }))
+        .send()
+        .await
+        .map_err(|error| format!("对话请求失败：{error}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("对话响应读取失败：{error}"))?;
+    audit_model_response_body("anthropic-plain-chat", &body);
+    if !status.is_success() {
+        return Err(format!(
+            "对话请求失败：HTTP {} {}",
+            status.as_u16(),
+            response_body_summary(&body)
+        ));
+    }
+    read_anthropic_response_text(&body)
+}
+
 fn document_body_system_prompt() -> &'static str {
     "你是短剧/小说正文续写助手。本轮只输出可直接保存进新文档的正文，不输出 JSON，不输出解释，不输出总结，不输出“已保存/已新建/我将/以下是”。"
+}
+
+fn plain_chat_system_prompt() -> &'static str {
+    "你是 Wridian 写作助手。本轮只做普通对话回答，不修改正文，不操作文件树，不沉淀记忆。直接输出 Markdown 预览友好的完整回答；不要输出 JSON；不要声称已新建、已保存、已修改或已删除文件。"
+}
+
+fn build_plain_chat_prompt(
+    input: &CoCreateInput,
+    memories: &[String],
+    active_context: &str,
+    active_project_context: &str,
+    rule_route_context: &RuleRouteContext,
+    file_tree: &str,
+    mentioned_files: &[DialogueContextItem],
+) -> String {
+    let current_draft_slot = build_current_draft_slot(input);
+    let project_mode_slot = build_text_slot(
+        "project-mode",
+        "项目记忆",
+        active_project_context,
+        BUDGET_PROJECT_CONTEXT_CHARS,
+        "未启用项目记忆。",
+    );
+    let active_context_slot = build_text_slot(
+        "active-context",
+        "当前现场",
+        active_context,
+        BUDGET_ACTIVE_CONTEXT_CHARS,
+        "暂无当前现场。",
+    );
+    let mut rule_route_slot = build_text_slot(
+        "rule-router",
+        "规则路由",
+        &rule_route_context.block,
+        BUDGET_RULE_ROUTE_CHARS,
+        "暂无 WRIDIAN.md / AGENT.md / index.md 规则路由。",
+    );
+    rule_route_slot.status.item_count = rule_route_context.item_count;
+    rule_route_slot.status.truncated =
+        rule_route_slot.status.truncated || rule_route_context.truncated;
+    let mentioned_file_refs: Vec<&DialogueContextItem> = mentioned_files.iter().collect();
+    let file_context_slot = build_combined_context_items_slot(
+        "mentioned-files",
+        "点名文件",
+        &filter_context_items(input, ContextItemSlot::File),
+        &mentioned_file_refs,
+        BUDGET_MENTIONED_FILE_ITEM_CHARS,
+        BUDGET_MENTIONED_FILE_TOTAL_CHARS,
+    );
+    let knowledge_slot = build_context_items_slot(
+        "explicit-knowledge-cards",
+        "已选知识卡",
+        &filter_context_items(input, ContextItemSlot::Knowledge),
+        BUDGET_EXPLICIT_ITEM_CHARS,
+        BUDGET_EXPLICIT_TOTAL_CHARS,
+    );
+    format!(
+        "稿件类型：{}\n当前文件：{}\n来源路径：{}\n\n你正在回答用户的普通写作问题。上下文只用于理解，不代表要修改正文或操作文件。\n\n输出要求：\n- 直接输出完整 Markdown 回答。\n- 不要输出 JSON object，不要输出 reply/edits/fileOperations/memories 字段。\n- 不要只给标题；如果用户要求人物关系图、表格、清单或梳理，必须给出可读的完整内容。\n- 不修改正文，不创建、重命名、删除或保存任何文件，不要声称已经执行文件操作。\n\n[当前稿件与选区]\n{}\n\n[作品库和知识库文件树]\n{}\n\n[规则路由]\n{}\n\n[项目记忆]\n{}\n\n[最近对话现场]\n{}\n\n[压缩记忆]\n{}\n\n[已选知识卡]\n{}\n\n[点名文件]\n{}\n\n[用户请求]\n{}",
+        match input.draft_kind.as_deref() {
+            Some("screenplay") => "短剧/剧本稿件",
+            _ => "小说/散文稿件",
+        },
+        input.title,
+        prompt_source_label(&input.source_path, &input.title),
+        current_draft_slot.block,
+        compact_text(file_tree, BUDGET_FILE_TREE_CHARS),
+        rule_route_slot.block,
+        project_mode_slot.block,
+        active_context_slot.block,
+        build_memory_slot(memories).block,
+        knowledge_slot.block,
+        file_context_slot.block,
+        input.user_input.trim()
+    )
+}
+
+fn sanitize_plain_chat_reply(content: &str) -> String {
+    let stripped = strip_wrapping_code_fence(content).trim().to_string();
+    if looks_like_structured_cocreation_output(&stripped) {
+        if let Ok(parsed) = parse_cocreation_model_output(&stripped) {
+            if !parsed.reply.trim().is_empty()
+                && parsed.edits.is_empty()
+                && parsed.file_operations.is_empty()
+            {
+                return parsed.reply.trim().to_string();
+            }
+        }
+    }
+    stripped
+}
+
+fn should_use_plain_chat_response(input: &CoCreateInput) -> bool {
+    let text = normalize_match_text(&input.user_input);
+    if text.is_empty() {
+        return false;
+    }
+    if user_requested_file_tree_write(input) || user_requested_draft_edit(input) {
+        return false;
+    }
+    [
+        "列出",
+        "人物关系",
+        "关系图",
+        "表格",
+        "清单",
+        "列表",
+        "梳理",
+        "总结",
+        "分析",
+        "解释",
+        "说明",
+        "评价",
+        "建议",
+        "怎么看",
+        "是什么",
+        "为什么",
+    ]
+    .iter()
+    .any(|keyword| text.contains(keyword))
+}
+
+fn user_requested_draft_edit(input: &CoCreateInput) -> bool {
+    let text = normalize_match_text(&input.user_input);
+    if text.is_empty() {
+        return false;
+    }
+    let has_edit_verb = [
+        "修改", "改写", "重写", "润色", "替换", "整理", "调整", "删掉", "删除", "扩写", "缩写",
+        "续写", "补写", "加入", "添加",
+    ]
+    .iter()
+    .any(|keyword| text.contains(keyword));
+    if !has_edit_verb {
+        return false;
+    }
+    [
+        "正文",
+        "当前稿件",
+        "当前文件",
+        "这段",
+        "选中",
+        "原文",
+        "文中",
+        "对白",
+        "台词",
+        "场景",
+        "第1集",
+        "第2集",
+    ]
+    .iter()
+    .any(|keyword| text.contains(keyword))
 }
 
 fn build_document_body_prompt(
@@ -1642,6 +1988,7 @@ async fn cocreate_with_anthropic(
         false,
     )
     .await?;
+    audit_model_response_body("anthropic-cocreation", &body);
     let content = match read_anthropic_response_text(&body) {
         Err(error) if is_anthropic_compatible_parse_error(&error) => {
             let body = send_anthropic_cocreation_request(
@@ -1657,11 +2004,39 @@ async fn cocreate_with_anthropic(
                 true,
             )
             .await?;
+            audit_model_response_body("anthropic-cocreation-retry", &body);
             read_anthropic_response_text(&body)?
         }
         result => result?,
     };
-    ensure_parsed_cocreation_response(parse_cocreation_model_output(&content)?)
+    let parsed = ensure_parsed_cocreation_response(parse_cocreation_model_output(&content)?)?;
+    if should_complete_short_reply(input, &parsed) {
+        let completion_input = build_short_reply_completion_input(input, &parsed.reply);
+        let body = send_anthropic_cocreation_request(
+            settings,
+            project_model,
+            &completion_input,
+            memories,
+            active_context,
+            active_project_context,
+            rule_route_context,
+            file_tree,
+            mentioned_files,
+            false,
+        )
+        .await?;
+        audit_model_response_body("anthropic-short-reply-completion", &body);
+        if let Ok(content) = read_anthropic_response_text(&body) {
+            if let Ok(completed) =
+                ensure_parsed_cocreation_response(parse_cocreation_model_output(&content)?)
+            {
+                if completed.reply.trim().chars().count() > parsed.reply.trim().chars().count() {
+                    return Ok(completed);
+                }
+            }
+        }
+    }
+    Ok(parsed)
 }
 
 async fn send_anthropic_cocreation_request(
@@ -1700,7 +2075,7 @@ async fn send_anthropic_cocreation_request(
                     ]
                 }
             ],
-            "max_tokens": 2048,
+            "max_tokens": 4096,
             "temperature": 0.7,
             "stream": stream
         }))
@@ -1797,6 +2172,79 @@ async fn cocreate_with_gemini(
     ensure_parsed_cocreation_response(parse_cocreation_model_output(&content)?)
 }
 
+async fn plain_chat_with_gemini(
+    settings: &ActiveModelSettings,
+    project_model: Option<&str>,
+    input: &CoCreateInput,
+    memories: &[String],
+    active_context: &str,
+    active_project_context: &str,
+    rule_route_context: &RuleRouteContext,
+    file_tree: &str,
+    mentioned_files: &[DialogueContextItem],
+) -> Result<String, String> {
+    let model = project_model.unwrap_or(&settings.model);
+    if is_google_gemini_oauth_settings(settings) {
+        return plain_chat_with_google_gemini_cloudcode(
+            settings,
+            model,
+            input,
+            memories,
+            active_context,
+            active_project_context,
+            rule_route_context,
+            file_tree,
+            mentioned_files,
+        )
+        .await;
+    }
+    let url = gemini_generate_content_url(&settings.base_url, model);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(90))
+        .build()
+        .map_err(|error| format!("对话客户端创建失败：{error}"))?;
+    let mut request = client.post(url);
+    if settings.auth_style == "oauth_external" {
+        request = request.bearer_auth(&settings.api_key);
+    } else {
+        request = request.header("x-goog-api-key", &settings.api_key);
+    }
+    let response = request
+        .json(&json!({
+            "systemInstruction": {
+                "parts": [{ "text": plain_chat_system_prompt() }]
+            },
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        { "text": build_plain_chat_prompt(input, memories, active_context, active_project_context, rule_route_context, file_tree, mentioned_files) }
+                    ]
+                }
+            ],
+            "generationConfig": {
+                "maxOutputTokens": GEMINI_DEFAULT_MAX_OUTPUT_TOKENS,
+                "temperature": 0.7
+            }
+        }))
+        .send()
+        .await
+        .map_err(|error| format!("对话请求失败：{error}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("对话响应读取失败：{error}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "对话请求失败：HTTP {} {}",
+            status.as_u16(),
+            response_body_summary(&body)
+        ));
+    }
+    read_gemini_response_text(&body)
+}
+
 async fn cocreate_with_google_gemini_cloudcode(
     settings: &ActiveModelSettings,
     model: &str,
@@ -1838,6 +2286,47 @@ async fn cocreate_with_google_gemini_cloudcode(
     let body = serde_json::to_string(&response).map_err(|error| error.to_string())?;
     let content = read_gemini_response_text(&body)?;
     ensure_parsed_cocreation_response(parse_cocreation_model_output(&content)?)
+}
+
+async fn plain_chat_with_google_gemini_cloudcode(
+    settings: &ActiveModelSettings,
+    model: &str,
+    input: &CoCreateInput,
+    memories: &[String],
+    active_context: &str,
+    active_project_context: &str,
+    rule_route_context: &RuleRouteContext,
+    file_tree: &str,
+    mentioned_files: &[DialogueContextItem],
+) -> Result<String, String> {
+    let project_id = ensure_google_gemini_oauth_project_id(&settings.api_key, model).await?;
+    let inner_request = json!({
+        "systemInstruction": {
+            "parts": [{ "text": plain_chat_system_prompt() }]
+        },
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    { "text": build_plain_chat_prompt(input, memories, active_context, active_project_context, rule_route_context, file_tree, mentioned_files) }
+                ]
+            }
+        ],
+        "generationConfig": {
+            "maxOutputTokens": GEMINI_DEFAULT_MAX_OUTPUT_TOKENS,
+            "temperature": 0.7
+        }
+    });
+    let body = google_gemini_cloudcode_request_body(&project_id, model, inner_request);
+    let response = post_google_code_assist_json(
+        &google_gemini_cloudcode_generate_content_url(),
+        &body,
+        &settings.api_key,
+        model,
+    )
+    .await?;
+    let body = serde_json::to_string(&response).map_err(|error| error.to_string())?;
+    read_gemini_response_text(&body)
 }
 
 fn read_active_context(data_dir: &Path) -> String {
@@ -3189,6 +3678,98 @@ fn plain_text_cocreation_response(output: &str) -> ParsedCoCreateResponse {
         edits: Vec::new(),
         file_operations: Vec::new(),
         memories: Vec::new(),
+    }
+}
+
+fn should_complete_short_reply(input: &CoCreateInput, parsed: &ParsedCoCreateResponse) -> bool {
+    if !parsed.edits.is_empty() || !parsed.file_operations.is_empty() {
+        return false;
+    }
+    let reply = parsed.reply.trim();
+    if reply.chars().count() >= 120 {
+        return false;
+    }
+    let user_text = normalize_match_text(&input.user_input);
+    let asks_for_structured_output = [
+        "列出",
+        "人物关系",
+        "关系图",
+        "表格",
+        "清单",
+        "列表",
+        "梳理",
+        "总结",
+    ]
+    .iter()
+    .any(|keyword| user_text.contains(keyword));
+    asks_for_structured_output && reply.lines().count() <= 4
+}
+
+fn build_short_reply_completion_input(input: &CoCreateInput, partial_reply: &str) -> CoCreateInput {
+    let mut completion_input = clone_cocreation_input(input);
+    completion_input.user_input = format!(
+        "上一轮回复明显没有完成，只输出了开头。请基于同一个当前稿件和同一个用户请求，重新输出完整回答。\n\n用户原请求：{}\n\n上一轮不完整回复：{}\n\n要求：直接给完整内容；不要只给标题；如果是人物关系图，至少列出主要角色、关系、冲突和立场。",
+        input.user_input.trim(),
+        partial_reply.trim()
+    );
+    completion_input
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelResponseAudit<'a> {
+    timestamp: String,
+    stage: &'a str,
+    body_chars: usize,
+    text_chars: Option<usize>,
+    stop_reason: Option<String>,
+    preview: String,
+}
+
+fn audit_model_response_body(stage: &str, body: &str) {
+    let Ok(data_dir) = wridian_data_dir() else {
+        return;
+    };
+    let runtime = runtime_root(&data_dir);
+    if fs::create_dir_all(&runtime).is_err() {
+        return;
+    }
+    let text = read_anthropic_response_text(body)
+        .ok()
+        .or_else(|| read_model_response_text(body).ok());
+    let stop_reason = serde_json::from_str::<Value>(body).ok().and_then(|value| {
+        value
+            .get("stop_reason")
+            .or_else(|| value.get("stopReason"))
+            .or_else(|| value.get("finish_reason"))
+            .or_else(|| {
+                value
+                    .get("choices")
+                    .and_then(Value::as_array)
+                    .and_then(|choices| choices.first())
+                    .and_then(|choice| choice.get("finish_reason"))
+            })
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+    });
+    let preview_source = text.as_deref().unwrap_or(body);
+    let audit = ModelResponseAudit {
+        timestamp: Local::now().to_rfc3339(),
+        stage,
+        body_chars: body.chars().count(),
+        text_chars: text.as_ref().map(|value| value.chars().count()),
+        stop_reason,
+        preview: compact_text(preview_source, 500),
+    };
+    let Ok(line) = serde_json::to_string(&audit) else {
+        return;
+    };
+    if let Ok(mut file) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(runtime.join("model-response-audit.jsonl"))
+    {
+        let _ = writeln!(file, "{line}");
     }
 }
 
@@ -4631,6 +5212,71 @@ mod tests {
             model_id: "openai-compatible::model-a".to_string(),
             extra_env,
         }
+    }
+
+    #[test]
+    fn relationship_graph_request_uses_plain_chat_response() {
+        let input = CoCreateInput {
+            request_id: None,
+            source_path: "第1集.docx".to_string(),
+            title: "第1集.docx".to_string(),
+            content: "第1集\n角色：牛魔王，铁扇公主，观音菩萨".to_string(),
+            draft_kind: Some("screenplay".to_string()),
+            user_input: "列出第1集的人物关系图".to_string(),
+            selected_text: None,
+            selected_model_id: None,
+            context_items: Vec::new(),
+        };
+
+        assert!(should_use_plain_chat_response(&input));
+        let prompt = build_plain_chat_prompt(
+            &input,
+            &[],
+            "",
+            "",
+            &empty_rule_route_context(),
+            "- works: 第1集.docx",
+            &[],
+        );
+        assert!(prompt.contains("直接输出完整 Markdown 回答"));
+        assert!(!prompt.contains("必须返回 json object"));
+        assert!(!prompt.contains("fileOperations 数组"));
+    }
+
+    #[test]
+    fn file_write_request_does_not_use_plain_chat_response() {
+        let input = CoCreateInput {
+            request_id: None,
+            source_path: "第1集.docx".to_string(),
+            title: "第1集.docx".to_string(),
+            content: "第1集".to_string(),
+            draft_kind: Some("screenplay".to_string()),
+            user_input: "根据第1集剧情，续写第2集，在作品库新建个文档保存".to_string(),
+            selected_text: None,
+            selected_model_id: None,
+            context_items: Vec::new(),
+        };
+
+        assert!(!should_use_plain_chat_response(&input));
+        assert!(user_requested_file_tree_write(&input));
+    }
+
+    #[test]
+    fn draft_edit_request_does_not_use_plain_chat_response() {
+        let input = CoCreateInput {
+            request_id: None,
+            source_path: "第1集.docx".to_string(),
+            title: "第1集.docx".to_string(),
+            content: "第1集".to_string(),
+            draft_kind: Some("screenplay".to_string()),
+            user_input: "把当前正文润色一下".to_string(),
+            selected_text: None,
+            selected_model_id: None,
+            context_items: Vec::new(),
+        };
+
+        assert!(!should_use_plain_chat_response(&input));
+        assert!(user_requested_draft_edit(&input));
     }
 
     #[test]
