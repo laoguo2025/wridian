@@ -97,3 +97,4 @@
   - `.workbench/governance/2026-06-14-package-0.0.9-code-health-followup.md`
   - `.workbench/governance/2026-06-14-chat-edit-resend-and-new-docx-write.md`
   - `.workbench/governance/2026-06-14-hide-successful-file-operation-blocks.md`
+  - `.workbench/governance/2026-06-14-deterministic-bulk-replace-routing.md`

@@ -28,6 +28,11 @@ type DraftEditCandidate = CoCreateEdit & {
   sourceRange?: PromptContextRange;
 };
 
+type LiteralBulkReplacePlan = {
+  replacement: string;
+  target: string;
+};
+
 export type SendChatPromptInput = {
   content: string;
   contextPills: PromptContextPill[];
@@ -419,7 +424,10 @@ function compactPlainText(text: string, maxChars: number) {
 function createPendingDraftEdits(edits: CoCreateEdit[], input: SendChatPromptInput): ChatDraftEdit[] {
   const createdAt = Date.now();
   const selectedRangePill = input.contextPills.find((pill) => pill.kind === "selection" && pill.range);
-  const candidates = expandRepeatedLiteralEdits(edits, input, selectedRangePill);
+  const deterministicCandidates = buildDeterministicLiteralReplacementCandidates(input, selectedRangePill);
+  const candidates = deterministicCandidates.length
+    ? deterministicCandidates
+    : expandRepeatedLiteralEdits(edits, input, selectedRangePill);
   return candidates.map((edit, index) => {
     const selectedSourceRange = edit.sourceRange ?? (selectedRangePill?.value.trim() === edit.target.trim()
       ? selectedRangePill.range
@@ -435,6 +443,27 @@ function createPendingDraftEdits(edits: CoCreateEdit[], input: SendChatPromptInp
       target: openingFallback?.target ?? edit.target,
     };
   });
+}
+
+function buildDeterministicLiteralReplacementCandidates(
+  input: SendChatPromptInput,
+  selectedRangePill?: PromptContextPill,
+): DraftEditCandidate[] {
+  const plan = inferLiteralBulkReplacePlan(input.text);
+  if (!plan) return [];
+  const selectedRange = selectedRangePill?.range;
+  const selectedValue = selectedRangePill?.value.trim() ? selectedRangePill.value : "";
+  const useSelectionScope = Boolean(shouldScopeEditToSelection(input.text) && selectedValue && selectedRange);
+  const content = useSelectionScope ? selectedValue : input.content;
+  const baseOffset = useSelectionScope && selectedRange ? selectedRange.start : 0;
+  const ranges = findLiteralRanges(content, plan.target);
+  if (!ranges.length) return [];
+  return ranges.map((range) => ({
+    rationale: `按用户要求统一替换“${plan.target}”。`,
+    replacement: plan.replacement,
+    sourceRange: { start: baseOffset + range.start, end: baseOffset + range.end },
+    target: plan.target,
+  }));
 }
 
 function expandRepeatedLiteralEdits(
@@ -525,8 +554,56 @@ function isExplicitNewDocumentRequest(text: string) {
   return hasCreateIntent && hasDocumentTarget;
 }
 
+function inferLiteralBulkReplacePlan(text: string): LiteralBulkReplacePlan | null {
+  const quoted = text.match(/[“"'「『](.+?)[”"'」』][^。\n]*?(?:都|全部|全都|统一)?(?:改成|改为|替换成|替换为)[“"'「『](.+?)[”"'」』]/);
+  if (quoted) {
+    const target = normalizeReplacementTerm(quoted[1]);
+    const replacement = normalizeReplacementTerm(quoted[2]);
+    return isValidLiteralBulkReplacePlan(target, replacement) ? { target, replacement } : null;
+  }
+
+  const compact = text.replace(/\s+/g, "");
+  const rawMatch = compact.match(/(?:把|将)(.+?)(?:全部|全都|都|统一)?(?:改成|改为|替换成|替换为)(.+)/);
+  if (!rawMatch) return null;
+  const target = normalizeReplacementTarget(rawMatch[1]);
+  const replacement = normalizeReplacementTerm(rawMatch[2]);
+  return isValidLiteralBulkReplacePlan(target, replacement) ? { target, replacement } : null;
+}
+
 function normalizeIntentText(text: string) {
   return text.trim().replace(/\s+/g, "");
+}
+
+function normalizeReplacementTarget(text: string) {
+  let value = normalizeReplacementTerm(text)
+    .replace(/^(?:第[0-9一二三四五六七八九十百零两]+(?:章|节|集|部|卷|回|幕|场|段)里?的?|当前(?:正文|稿件|文档|文章)?里?的?|全文里?的?|文中?的?|文里?的?|这(?:段|一段|几段|部分)里?的?|选中内容里?的?|选区里?的?)+/, "")
+    .replace(/^(?:角色名|角色名字|名字|称呼|称谓|人名|人物名|角色|人物)+/, "")
+    .replace(/(?:全部|全都|都|统一)+$/, "");
+  if (!value) return value;
+  const quoted = value.match(/[“"'「『](.+?)[”"'」』]/);
+  if (quoted) {
+    value = quoted[1];
+  }
+  return value;
+}
+
+function normalizeReplacementTerm(text: string) {
+  return text
+    .trim()
+    .replace(/^[：:，,。；;！？!?、\s]+/, "")
+    .replace(/[：:，,。；;！？!?、\s]+$/g, "");
+}
+
+function isValidLiteralBulkReplacePlan(target: string, replacement: string) {
+  return Boolean(
+    target
+      && replacement
+      && target !== replacement
+      && target.length <= 80
+      && replacement.length <= 200
+      && !target.includes("\n")
+      && !replacement.includes("\n\n"),
+  );
 }
 
 function findLiteralRanges(content: string, target: string) {

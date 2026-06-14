@@ -38,7 +38,7 @@ async function main() {
   await page.locator(".chat-markdown-table-wrap table").first().waitFor({ timeout: 10_000 });
 
   await testSelectionToPromptAndSend(page);
-  await testModelFreeSemanticDraftEdit(page);
+  await testDeterministicLiteralDraftEdit(page);
   await testOrderedModelFileWrite(page, fixture);
   await testEditedUserMessageResends(page);
 
@@ -64,12 +64,12 @@ async function main() {
   console.log(JSON.stringify({ ok: true, fixture, screenshotPath }, null, 2));
 }
 
-async function testModelFreeSemanticDraftEdit(page) {
+async function testDeterministicLiteralDraftEdit(page) {
   await runMockedPrompt(page, {
-    text: "把第1集里的牛魔王都改成猪八戒",
+    text: "把第1集里的角色名牛魔王，都改成猪八戒",
     response: {
-      reply: "已识别为正文批量替换，生成 2 处待确认修改。",
-      edits: [{ target: "牛魔王", replacement: "猪八戒", rationale: "按用户要求统一角色名" }],
+      reply: "已梳理第1集全文，建议把相关称呼统一调整。",
+      edits: [],
       fileOperations: [],
       memories: [],
     },
@@ -81,7 +81,10 @@ async function testModelFreeSemanticDraftEdit(page) {
   const inlineDeleted = await page.locator(".inline-diff del").filter({ hasText: "牛魔王" }).count();
   const inlineInserted = await page.locator(".inline-diff ins").filter({ hasText: "猪八戒" }).count();
   if (inlineDeleted < 2 || inlineInserted < 2) {
-    throw new Error(`Model-free semantic edit did not render repeated diffs: del=${inlineDeleted}, ins=${inlineInserted}`);
+    throw new Error(`Deterministic literal edit did not render repeated diffs: del=${inlineDeleted}, ins=${inlineInserted}`);
+  }
+  if (await page.getByText("需重新定位").count()) {
+    throw new Error("Deterministic literal edit still produced blocked replacements");
   }
 }
 
