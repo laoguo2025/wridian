@@ -1,4 +1,4 @@
-use crate::runtime::{ensure_workspace, runtime_root, vault_root, wridian_data_dir};
+use crate::runtime::{ensure_workspace, runtime_root, wridian_data_dir};
 use crate::workspace::{read_active_work_root, resolved_knowledge_root};
 use serde::Deserialize;
 use std::fs;
@@ -62,10 +62,6 @@ fn allowed_open_roots(data_dir: &Path) -> Result<Vec<PathBuf>, String> {
         if path.is_dir() {
             roots.push(canonical_dir(&path, "作品库目录")?);
         }
-    }
-    let default_work_root = vault_root(data_dir).join("works");
-    if default_work_root.is_dir() {
-        roots.push(canonical_dir(&default_work_root, "默认作品库目录")?);
     }
     let knowledge_root = resolved_knowledge_root(data_dir)?;
     if knowledge_root.is_dir() {

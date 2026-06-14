@@ -2674,9 +2674,9 @@ fn apply_model_file_operation(
                 &path,
                 operation.content.as_deref().unwrap_or(""),
             )
-            .map(|path| format!("已写入 {}", path.to_string_lossy())),
+            .map(|_| format!("已写入 {}", path)),
             "createFolder" => apply_workspace_create_folder(data_dir, &library, &path)
-                .map(|path| format!("已创建文件夹 {}", path.to_string_lossy())),
+                .map(|_| format!("已创建文件夹 {}", path)),
             "rename" => {
                 let new_name = operation
                     .new_name
@@ -2685,12 +2685,17 @@ fn apply_model_file_operation(
                     .filter(|value| !value.is_empty())
                     .ok_or_else(|| "rename 操作缺少 newName。".to_string());
                 new_name.and_then(|new_name| {
-                    apply_workspace_rename_node(data_dir, &library, &path, new_name)
-                        .map(|path| format!("已重命名为 {}", path.to_string_lossy()))
+                    apply_workspace_rename_node(data_dir, &library, &path, new_name).map(|path| {
+                        let display = path
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| new_name.to_string());
+                        format!("已重命名为 {}", display)
+                    })
                 })
             }
             "trash" => apply_workspace_trash_node(data_dir, &library, &path)
-                .map(|path| format!("已移到系统回收站 {}", path.to_string_lossy())),
+                .map(|_| format!("已移到系统回收站 {}", path)),
             _ => Err("未知文件操作 action。".to_string()),
         }
     });

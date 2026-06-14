@@ -93,13 +93,14 @@ export function createSelectionPromptPill(value: string, range?: PromptContextRa
 }
 
 export function createFilePromptPill(name: string, path: string, relativePath?: string): PromptContextPill {
+  const displayPath = relativePath || name;
   return {
     id: `file:${path}`,
     kind: "file",
     label: name,
     relativePath,
     sourcePath: path,
-    value: `路径：${path}`,
+    value: `路径：${displayPath}`,
   };
 }
 
@@ -109,7 +110,7 @@ export function createFileContentPromptPill(name: string, path: string, content:
     kind: "file",
     label: name,
     sourcePath: path,
-    value: `路径：${path}\n\n${content}`,
+    value: `路径：${name}\n\n${content}`,
   };
 }
 

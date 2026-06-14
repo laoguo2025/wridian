@@ -57,6 +57,7 @@ pub(crate) struct SaveFileInput {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CreateNodeInput {
+    library: Option<String>,
     parent_path: String,
     name: String,
 }
@@ -64,6 +65,7 @@ pub(crate) struct CreateNodeInput {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RenameNodeInput {
+    library: Option<String>,
     path: String,
     new_name: String,
 }
@@ -223,7 +225,7 @@ pub(crate) fn wridian_save_file(input: SaveFileInput) -> Result<SaveFileResponse
 pub(crate) fn wridian_create_work_file(input: CreateNodeInput) -> Result<WorkspaceInfo, String> {
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
-    let parent = resolve_allowed_folder(&data_dir, &input.parent_path)?;
+    let parent = resolve_allowed_folder(&data_dir, input.library.as_deref(), &input.parent_path)?;
     let file_name = normalize_file_name(&input.name)?;
     let path = unique_child_path(&parent, &file_name);
     fs::write(&path, "").map_err(|error| format!("文件创建失败：{error}"))?;
@@ -234,7 +236,7 @@ pub(crate) fn wridian_create_work_file(input: CreateNodeInput) -> Result<Workspa
 pub(crate) fn wridian_create_work_folder(input: CreateNodeInput) -> Result<WorkspaceInfo, String> {
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
-    let parent = resolve_allowed_folder(&data_dir, &input.parent_path)?;
+    let parent = resolve_allowed_folder(&data_dir, input.library.as_deref(), &input.parent_path)?;
     let folder_name = normalize_node_name(&input.name)?;
     let path = unique_child_path(&parent, &folder_name);
     fs::create_dir_all(&path).map_err(|error| format!("文件夹创建失败：{error}"))?;
@@ -245,7 +247,7 @@ pub(crate) fn wridian_create_work_folder(input: CreateNodeInput) -> Result<Works
 pub(crate) fn wridian_duplicate_work_node(input: FilePathInput) -> Result<WorkspaceInfo, String> {
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
-    let source = resolve_allowed_existing_node(&data_dir, &input.path)?;
+    let source = resolve_allowed_existing_node(&data_dir, None, &input.path)?;
     let parent = source
         .parent()
         .ok_or_else(|| "无法复制工作区根目录。".to_string())?;
@@ -266,7 +268,7 @@ pub(crate) fn wridian_duplicate_work_node(input: FilePathInput) -> Result<Worksp
 pub(crate) fn wridian_rename_work_node(input: RenameNodeInput) -> Result<WorkspaceInfo, String> {
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
-    let source = resolve_allowed_existing_node(&data_dir, &input.path)?;
+    let source = resolve_allowed_existing_node(&data_dir, input.library.as_deref(), &input.path)?;
     let parent = source
         .parent()
         .ok_or_else(|| "无法重命名工作区根目录。".to_string())?;
@@ -292,7 +294,7 @@ pub(crate) fn wridian_trash_work_node(input: FilePathInput) -> Result<WorkspaceI
 }
 
 fn trash_workspace_node(data_dir: &Path, path: &str) -> Result<(), String> {
-    let source = resolve_allowed_existing_node(data_dir, path)?;
+    let source = resolve_allowed_existing_node(data_dir, None, path)?;
     let root = containing_work_root(&data_dir, &source)?
         .ok_or_else(|| "文件不在当前 Wridian 工作目录内。".to_string())?;
     if source == root {
@@ -815,7 +817,11 @@ fn resolve_allowed_workspace_file_path(data_dir: &Path, path: &Path) -> Result<P
     }
 }
 
-fn resolve_allowed_folder(data_dir: &Path, raw_path: &str) -> Result<PathBuf, String> {
+fn resolve_allowed_folder(
+    data_dir: &Path,
+    library: Option<&str>,
+    raw_path: &str,
+) -> Result<PathBuf, String> {
     let path = PathBuf::from(raw_path.trim());
     if !path.is_dir() {
         return Err("请选择一个存在的文件夹。".to_string());
@@ -823,14 +829,25 @@ fn resolve_allowed_folder(data_dir: &Path, raw_path: &str) -> Result<PathBuf, St
     let canonical_path = path
         .canonicalize()
         .map_err(|error| format!("文件夹路径解析失败：{error}"))?;
-    if containing_work_root(data_dir, &canonical_path)?.is_some() {
+    if let Some(library) = clean_library(library) {
+        let root = workspace_library_root(data_dir, library)?;
+        if canonical_path.starts_with(&root) {
+            Ok(canonical_path)
+        } else {
+            Err("文件夹不在当前所选文件库内。".to_string())
+        }
+    } else if containing_work_root(data_dir, &canonical_path)?.is_some() {
         Ok(canonical_path)
     } else {
         Err("文件夹不在当前 Wridian 工作目录内。".to_string())
     }
 }
 
-fn resolve_allowed_existing_node(data_dir: &Path, raw_path: &str) -> Result<PathBuf, String> {
+fn resolve_allowed_existing_node(
+    data_dir: &Path,
+    library: Option<&str>,
+    raw_path: &str,
+) -> Result<PathBuf, String> {
     let path = PathBuf::from(raw_path.trim());
     if !(path.is_file() || path.is_dir()) {
         return Err("文件或文件夹不存在。".to_string());
@@ -842,11 +859,24 @@ fn resolve_allowed_existing_node(data_dir: &Path, raw_path: &str) -> Result<Path
     let canonical_path = path
         .canonicalize()
         .map_err(|error| format!("路径解析失败：{error}"))?;
-    if containing_work_root(data_dir, &canonical_path)?.is_some() {
+    if let Some(library) = clean_library(library) {
+        let root = workspace_library_root(data_dir, library)?;
+        if canonical_path.starts_with(&root) {
+            Ok(canonical_path)
+        } else {
+            Err("文件不在当前所选文件库内。".to_string())
+        }
+    } else if containing_work_root(data_dir, &canonical_path)?.is_some() {
         Ok(canonical_path)
     } else {
         Err("文件不在当前 Wridian 工作目录内。".to_string())
     }
+}
+
+fn clean_library(library: Option<&str>) -> Option<&str> {
+    library
+        .map(str::trim)
+        .filter(|value| matches!(*value, "works" | "knowledge"))
 }
 
 fn reject_link_or_reparse_node(path: &Path, label: &str) -> Result<(), String> {
@@ -1559,7 +1589,9 @@ mod tests {
         let root = workspace_library_root(&data_dir, "works").expect("work root");
 
         assert!(resolve_existing_relative_workspace_node(&root, "linked.md").is_err());
-        assert!(resolve_allowed_existing_node(&data_dir, &link_file.to_string_lossy()).is_err());
+        assert!(
+            resolve_allowed_existing_node(&data_dir, None, &link_file.to_string_lossy()).is_err()
+        );
         assert!(real_file.exists());
     }
 
@@ -1680,6 +1712,7 @@ mod tests {
         assert!(resolve_allowed_workspace_file(&data_dir, &pdf.to_string_lossy()).is_ok());
         assert!(resolve_allowed_folder(
             &data_dir,
+            Some("knowledge"),
             &knowledge_root.join("01原始资料").to_string_lossy()
         )
         .is_ok());

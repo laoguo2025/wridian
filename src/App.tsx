@@ -886,14 +886,14 @@ function App() {
     if (!parentPath) return;
     const name = window.prompt("新建文件", "未命名.md");
     if (!name) return;
-    await runWorkspaceAction(() => createWorkFile(parentPath, name));
+    await runWorkspaceAction(() => createWorkFile(parentPath, name, libraryTab));
   };
 
   const createFolder = async (parentPath = workspaceRootPath) => {
     if (!parentPath) return;
     const name = window.prompt("新建文件夹", "新建文件夹");
     if (!name) return;
-    await runWorkspaceAction(() => createWorkFolder(parentPath, name));
+    await runWorkspaceAction(() => createWorkFolder(parentPath, name, libraryTab));
   };
 
   const duplicateNode = async (node: WorkFileNode) => {
@@ -903,7 +903,7 @@ function App() {
   const renameNode = async (node: WorkFileNode) => {
     const name = window.prompt("重命名", node.name);
     if (!name || name === node.name) return;
-    await runWorkspaceAction(() => renameWorkNode(node.path, name));
+    await runWorkspaceAction(() => renameWorkNode(node.path, name, node.library));
   };
 
   const trashNode = async (node: WorkFileNode) => {

@@ -26,20 +26,22 @@ export function saveWorkFile(path: string, content: string) {
   return invoke<SaveFileResponse>("wridian_save_file", { input: { path, content } });
 }
 
-export function createWorkFile(parentPath: string, name: string) {
-  return invoke<WorkspaceInfo>("wridian_create_work_file", { input: { parentPath, name } });
+export type WorkspaceLibrary = "works" | "knowledge";
+
+export function createWorkFile(parentPath: string, name: string, library: WorkspaceLibrary) {
+  return invoke<WorkspaceInfo>("wridian_create_work_file", { input: { library, parentPath, name } });
 }
 
-export function createWorkFolder(parentPath: string, name: string) {
-  return invoke<WorkspaceInfo>("wridian_create_work_folder", { input: { parentPath, name } });
+export function createWorkFolder(parentPath: string, name: string, library: WorkspaceLibrary) {
+  return invoke<WorkspaceInfo>("wridian_create_work_folder", { input: { library, parentPath, name } });
 }
 
 export function duplicateWorkNode(path: string) {
   return invoke<WorkspaceInfo>("wridian_duplicate_work_node", { input: { path } });
 }
 
-export function renameWorkNode(path: string, newName: string) {
-  return invoke<WorkspaceInfo>("wridian_rename_work_node", { input: { path, newName } });
+export function renameWorkNode(path: string, newName: string, library: WorkspaceLibrary) {
+  return invoke<WorkspaceInfo>("wridian_rename_work_node", { input: { library, path, newName } });
 }
 
 export function trashWorkNode(path: string) {

@@ -38,6 +38,17 @@ struct ChatTranscriptMessage {
     selected_text: Option<String>,
     context_pills: Option<Vec<ChatContextPill>>,
     context_load_status: Option<Vec<ChatContextLoadStatus>>,
+    file_operations: Option<Vec<ChatFileOperation>>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ChatFileOperation {
+    action: String,
+    library: String,
+    message: String,
+    ok: bool,
+    path: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -467,6 +478,26 @@ fn render_chat_transcript(input: &SaveChatTranscriptInput) -> String {
         }
         content.push_str(&fenced_block(&message.text));
         content.push_str("\n\n");
+        if let Some(operations) = &message.file_operations {
+            if !operations.is_empty() {
+                content.push_str("### 文件操作\n\n");
+                for operation in operations {
+                    let status = if operation.ok {
+                        "已执行"
+                    } else {
+                        "未执行"
+                    };
+                    content.push_str(&format!(
+                        "- {} {} / {}：{}\n",
+                        status,
+                        operation.library.trim(),
+                        operation.path.trim(),
+                        operation.message.trim()
+                    ));
+                }
+                content.push('\n');
+            }
+        }
     }
 
     content
@@ -555,6 +586,13 @@ mod tests {
                     relative_path: None,
                 }]),
                 context_load_status: None,
+                file_operations: Some(vec![ChatFileOperation {
+                    action: "writeFile".to_string(),
+                    library: "works".to_string(),
+                    message: "已写入 测试/第2集.md".to_string(),
+                    ok: true,
+                    path: "测试/第2集.md".to_string(),
+                }]),
             }],
         });
 
@@ -562,6 +600,8 @@ mod tests {
         assert!(transcript.contains("#### \\# pill"));
         assert!(transcript.contains("````text\n---\ntype: injected\n```\n````"));
         assert!(transcript.contains("```text\n- fake list\n```"));
+        assert!(transcript.contains("### 文件操作"));
+        assert!(transcript.contains("已执行 works / 测试/第2集.md"));
     }
 
     #[test]
@@ -692,6 +732,7 @@ mod tests {
             selected_text: None,
             context_pills: None,
             context_load_status: None,
+            file_operations: None,
         }
     }
 }
