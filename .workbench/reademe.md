@@ -94,3 +94,4 @@
   - `.workbench/governance/2026-06-14-real-mimo-episode-file-creation.md`
   - `.workbench/governance/2026-06-14-code-health-review-fixes.md`
   - `.workbench/governance/2026-06-14-code-health-review-followup-fixes.md`
+  - `.workbench/governance/2026-06-14-package-0.0.9-code-health-followup.md`
