@@ -3840,41 +3840,99 @@ fn extract_json_string_field(payload: &str, field: &str) -> Option<String> {
 }
 
 fn read_json_string_lossy(input: &str) -> Option<String> {
-    let mut chars = input.char_indices();
-    let (_, quote) = chars.next()?;
-    if quote != '"' {
+    let bytes = input.as_bytes();
+    if bytes.first().copied() != Some(b'"') {
         return None;
     }
+    // 按字节扫描：所有结构字符（引号/反斜杠/逗号/花括号/方括号）都是 ASCII，
+    // 十六进制位也都是 ASCII，因此字节级推进是安全的；非 ASCII 多字节字符
+    // 直接复制到输出（它们不可能是转义符或结构分隔符）。
+    let mut cursor: usize = 1;
     let mut output = String::new();
     let mut escaped = false;
-    for (index, char) in input[1..].char_indices() {
+    while cursor < bytes.len() {
+        let byte = bytes[cursor];
         if escaped {
-            match char {
-                '"' => output.push('"'),
-                '\\' => output.push('\\'),
-                '/' => output.push('/'),
-                'b' => output.push('\u{0008}'),
-                'f' => output.push('\u{000c}'),
-                'n' => output.push('\n'),
-                'r' => output.push('\r'),
-                't' => output.push('\t'),
-                'u' => output.push_str("\\u"),
-                other => output.push(other),
+            match byte {
+                b'"' => output.push('"'),
+                b'\\' => output.push('\\'),
+                b'/' => output.push('/'),
+                b'b' => output.push('\u{0008}'),
+                b'f' => output.push('\u{000c}'),
+                b'n' => output.push('\n'),
+                b'r' => output.push('\r'),
+                b't' => output.push('\t'),
+                b'u' => {
+                    // 读后续 4 个十六进制字节并解码为 Unicode 标量值；
+                    // 支持 UTF-16 代理对合并。cursor 进入时指向 'u'，hex 占 cursor+1..cursor+5。
+                    let hex_end = (cursor + 5).min(bytes.len());
+                    let candidate = &bytes[cursor + 1..hex_end];
+                    // 只把连续的十六进制位计入 hex，避免把字符串结束引号也当 hex。
+                    let hex_count = candidate
+                        .iter()
+                        .take_while(|b| (**b as char).is_ascii_hexdigit())
+                        .count();
+                    let hex = std::str::from_utf8(&candidate[..hex_count]).unwrap_or("");
+                    match decode_unicode_escape(hex) {
+                        Some(DecodedUnicode::Char(c)) => {
+                            output.push(c);
+                            // cursor+4 是第 4 个 hex 字节（最后一个被消费的字节）；
+                            // 外层 cursor += 1 会跳到其后。
+                            cursor += 4;
+                        }
+                        Some(DecodedUnicode::HighSurrogate(high)) => {
+                            // 高代理 4 个 hex 已识别；尝试紧跟的 \uXXXX 低代理。
+                            // 低代理的 '\' 位于 cursor+5。
+                            if let Some(combined) =
+                                consume_low_surrogate_bytes(bytes, cursor + 5, high)
+                            {
+                                output.push(combined);
+                                // u+4hex（5 字节）+ \uXXXX（6 字节）= 11 字节；
+                                // 最后一个被消费字节在 cursor+10。
+                                cursor += 10;
+                            } else {
+                                // 孤立高代理（无配对低代理）：按字面保留，不写坏 UTF-8。
+                                output.push_str("\\u");
+                                output.push_str(hex);
+                                cursor += 4;
+                            }
+                        }
+                        None => {
+                            // 非 4 位合法 hex：原样保留已读到的十六进制位，不丢字。
+                            output.push_str("\\u");
+                            output.push_str(hex);
+                            cursor += hex.len();
+                        }
+                    }
+                }
+                _ => {
+                    // 未知转义：按字面字符处理（保持原行为）。
+                    // 多字节字符在 escaped 状态下出现属异常，按整字符复制。
+                    let (ch, len) = decode_char_at(input, cursor);
+                    output.push(ch);
+                    cursor += len.saturating_sub(1);
+                }
             }
             escaped = false;
+            cursor += 1;
             continue;
         }
-        if char == '\\' {
+        if byte == b'\\' {
             escaped = true;
+            cursor += 1;
             continue;
         }
-        if char == '"' {
-            let rest = input[index + 2..].trim_start();
+        if byte == b'"' {
+            // 判断是否为合法字符串结束符：后面紧跟 , } ] （允许空白）。
+            let rest = input[cursor + 1..].trim_start();
             if rest.starts_with(',') || rest.starts_with('}') || rest.starts_with(']') {
                 return Some(output.trim().to_string());
             }
         }
-        output.push(char);
+        // 普通字符：整字符复制（多字节安全）。
+        let (ch, len) = decode_char_at(input, cursor);
+        output.push(ch);
+        cursor += len;
     }
     let text = output.trim().to_string();
     if text.is_empty() {
@@ -3882,6 +3940,56 @@ fn read_json_string_lossy(input: &str) -> Option<String> {
     } else {
         Some(text)
     }
+}
+
+/// 取 `s[byte_index..]` 起首的一个 `char` 及其字节长度。
+fn decode_char_at(s: &str, byte_index: usize) -> (char, usize) {
+    let mut iter = s[byte_index..].chars();
+    match iter.next() {
+        Some(ch) => (ch, ch.len_utf8()),
+        None => (' ', 1),
+    }
+}
+
+enum DecodedUnicode {
+    Char(char),
+    HighSurrogate(u32),
+}
+
+fn decode_unicode_escape(hex: &str) -> Option<DecodedUnicode> {
+    if hex.len() != 4 {
+        return None;
+    }
+    let code = u32::from_str_radix(hex, 16).ok()?;
+    // 基本多文种平面内普通字符。
+    if (0x0000..=0xD7FF).contains(&code) || (0xE000..=0xFFFF).contains(&code) {
+        char::from_u32(code).map(DecodedUnicode::Char)
+    } else if (0xD800..=0xDBFF).contains(&code) {
+        // 高代理：char::from_u32 会拒绝代理码点，因此保留为 u32 等待低代理合并。
+        Some(DecodedUnicode::HighSurrogate(code))
+    } else {
+        // 孤立低代理（0xDC00..=0xDFFF）无对应标量值，按失败处理。
+        None
+    }
+}
+
+/// 在 `low_slash_byte` 位置（应指向低代理的 `\`）若存在 `\uXXXX` 形式的低代理，
+/// 与 `high` 合并为一个标量值并返回。仅校验，不计算游标推进（由调用方处理）。
+fn consume_low_surrogate_bytes(bytes: &[u8], low_slash_byte: usize, high: u32) -> Option<char> {
+    // 需要形如 \uXXXX，共 6 字节。
+    if low_slash_byte + 6 > bytes.len() {
+        return None;
+    }
+    if bytes[low_slash_byte] != b'\\' || bytes[low_slash_byte + 1] != b'u' {
+        return None;
+    }
+    let low_hex = std::str::from_utf8(&bytes[low_slash_byte + 2..low_slash_byte + 6]).ok()?;
+    let low = u32::from_str_radix(low_hex, 16).ok()?;
+    if !(0xDC00..=0xDFFF).contains(&low) {
+        return None;
+    }
+    let combined = 0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00);
+    char::from_u32(combined)
 }
 
 fn extract_cocreation_edits_lossy(payload: &str) -> Option<Vec<CoCreateEdit>> {
@@ -5481,6 +5589,33 @@ mod tests {
             .unwrap_or_default()
             .contains("开场"));
         assert!(!parsed.reply.contains("fileOperations"));
+    }
+
+    #[test]
+    fn read_json_string_lossy_decodes_unicode_escapes() {
+        // 输入模拟真实调用上下文：从字段开引号开始，闭引号后带结构分隔符。
+        // 基本 CJK 与 ASCII 转义。
+        let ascii = read_json_string_lossy(r#""\u0041\u00e9","next""#).expect("ascii+latin1");
+        assert_eq!(ascii, "Aé");
+
+        // CJK：\u4e2d\u6587 -> 中文。
+        let cjk = read_json_string_lossy(r#""\u4e2d\u6587"}"#).expect("cjk");
+        assert_eq!(cjk, "中文");
+
+        // 表情符号（代理对）：\ud83d\ude00 -> 😀。
+        let emoji = read_json_string_lossy(r#""\ud83d\ude00"}"#).expect("surrogate pair");
+        assert_eq!(emoji, "😀");
+
+        // 混合：明文 + 转义。
+        let mixed = read_json_string_lossy(r#""主角\u201c说了\u201d"}"#).expect("mixed");
+        assert_eq!(mixed, "主角“说了”");
+    }
+
+    #[test]
+    fn read_json_string_lossy_preserves_invalid_unicode_escape() {
+        // 非 4 位 hex：原样保留，不静默丢字。
+        let bad = read_json_string_lossy(r#""\uXYZ"}"#).expect("bad escape kept");
+        assert_eq!(bad, r"\uXYZ");
     }
 
     #[test]
