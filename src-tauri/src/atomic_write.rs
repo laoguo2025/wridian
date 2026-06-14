@@ -5,7 +5,7 @@
 
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// 将 `content` 原子写入 `path`。
 ///
@@ -120,6 +120,7 @@ fn write_temp_and_rename(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn temp_dir(name: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(

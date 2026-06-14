@@ -280,7 +280,10 @@ async fn run_cocreation(
             let mut model_output =
                 route_new_work_files_to_current_folder(&data_dir, &input, model_output);
             let file_operations =
-                apply_model_file_operations(&data_dir, &model_output.file_operations);
+                execute_or_stage_file_operations(&data_dir, &model_output);
+            if model_output.recovered {
+                annotate_recovered_reply(&mut model_output.reply, &file_operations);
+            }
             model_output.reply = model_output.reply.trim().to_string();
 
             return Ok(CoCreateResponse {
@@ -335,7 +338,10 @@ async fn run_cocreation(
                 let mut model_output =
                     route_new_work_files_to_current_folder(&data_dir, &input, model_output);
                 let file_operations =
-                    apply_model_file_operations(&data_dir, &model_output.file_operations);
+                    execute_or_stage_file_operations(&data_dir, &model_output);
+                if model_output.recovered {
+                    annotate_recovered_reply(&mut model_output.reply, &file_operations);
+                }
                 model_output.reply = model_output.reply.trim().to_string();
 
                 return Ok(CoCreateResponse {
@@ -370,18 +376,21 @@ async fn run_cocreation(
     .await?;
     check_cocreation_cancelled(request_id)?;
     let model_output = route_current_file_writes_to_edits(&data_dir, &input, model_output);
-    let mut model_output = route_new_work_files_to_current_folder(&data_dir, &input, model_output);
+    let model_output = route_new_work_files_to_current_folder(&data_dir, &input, model_output);
 
     let memories_written = write_memory_leaves(&data_dir, &model_output.memories)?
         .into_iter()
         .map(|path| path.to_string_lossy().into_owned())
         .collect();
-    let file_operations = apply_model_file_operations(&data_dir, &model_output.file_operations);
-    model_output.reply = model_output.reply.trim().to_string();
+    let file_operations = execute_or_stage_file_operations(&data_dir, &model_output);
+    let mut reply = model_output.reply.trim().to_string();
+    if model_output.recovered {
+        annotate_recovered_reply(&mut reply, &file_operations);
+    }
 
     Ok(CoCreateResponse {
         context_load_status,
-        reply: model_output.reply,
+        reply,
         edits: model_output.edits,
         file_operations,
         memories_used,
@@ -479,6 +488,10 @@ struct ParsedCoCreateResponse {
     edits: Vec<CoCreateEdit>,
     file_operations: Vec<ModelFileOperation>,
     memories: Vec<MemoryLeafDraft>,
+    /// 是否经由“尽力恢复”路径解析（严格 JSON 失败后的兜底）。
+    /// 为 true 时，run_cocreation 不会自动执行 file_operations，而是把它们作为待确认候选返回，
+    /// 避免破损/截断的模型输出触发文件写入。正常路径（干净 JSON）永远为 false。
+    recovered: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -643,6 +656,7 @@ async fn cocreate_plain_chat_with_model(
         edits: Vec::new(),
         file_operations: Vec::new(),
         memories: Vec::new(),
+        recovered: false,
     })
 }
 
@@ -704,6 +718,7 @@ fn build_direct_local_write_response(input: &CoCreateInput) -> Option<ParsedCoCr
             new_name: None,
             content: Some(content),
         }],
+        recovered: false,
     })
 }
 
@@ -853,6 +868,7 @@ async fn generate_planned_local_write_file(
             new_name: None,
             content: Some(content),
         }],
+        recovered: false,
     }))
 }
 
@@ -3147,6 +3163,71 @@ fn apply_model_file_operations(
         .collect()
 }
 
+/// 把“经尽力恢复路径解析出的”文件操作转换为“未执行”的占位结果，
+/// 不真正写盘，并让前端以“未执行”红条形式展示，等待用户确认。
+///
+/// 只有当模型输出是从破损 JSON 里恢复出来的（`recovered == true`）且包含文件操作时才会触发：
+/// 破损/截断的输出可能携带不完整甚至错误的路径与内容，贸然写盘会污染用户的文件树。
+/// 严格的正常路径（`recovered == false`）永远会真正执行。
+fn stage_recovered_file_operations_as_pending(
+    operations: &[ModelFileOperation],
+) -> Vec<AppliedFileOperation> {
+    operations
+        .iter()
+        .map(|operation| AppliedFileOperation {
+            action: operation.action.trim().to_string(),
+            library: operation.library.trim().to_string(),
+            path: normalize_model_operation_relative_path(
+                operation.library.trim(),
+                &operation.path,
+            ),
+            ok: false,
+            message: "模型回复结构不完整，已暂停执行，请核对后再确认。".to_string(),
+        })
+        .collect()
+}
+
+/// 根据 `parsed.recovered` 决定是否真正执行文件操作。
+/// 返回 `(待返回给前端的执行结果, 解析出来的恢复标记)`。
+fn execute_or_stage_file_operations(
+    data_dir: &Path,
+    parsed: &ParsedCoCreateResponse,
+) -> Vec<AppliedFileOperation> {
+    if parsed.recovered && !parsed.file_operations.is_empty() {
+        stage_recovered_file_operations_as_pending(&parsed.file_operations)
+    } else {
+        apply_model_file_operations(data_dir, &parsed.file_operations)
+    }
+}
+
+/// 给恢复路径下的回复追加一条提醒，提示用户这些文件操作未被执行。
+fn annotate_recovered_reply(reply: &mut String, pending: &[AppliedFileOperation]) {
+    if pending.is_empty() {
+        return;
+    }
+    let summary = pending
+        .iter()
+        .map(|op| format!("{}（{}/{}）", file_operation_action_label(&op.action), op.library, op.path))
+        .collect::<Vec<_>>()
+        .join("、");
+    let note = format!(
+        "\n\n⚠️ 模型回复结构不完整，下列文件操作暂未执行，请核对后手动确认：{summary}。"
+    );
+    if !reply.ends_with(&note) {
+        reply.push_str(&note);
+    }
+}
+
+fn file_operation_action_label(action: &str) -> &'static str {
+    match action.trim() {
+        "writeFile" => "写入文件",
+        "createFolder" => "创建文件夹",
+        "rename" => "重命名",
+        "trash" => "移到回收站",
+        _ => "文件操作",
+    }
+}
+
 fn apply_model_file_operation(
     data_dir: &Path,
     operation: &ModelFileOperation,
@@ -3669,6 +3750,7 @@ fn parse_cocreation_model_output(output: &str) -> Result<ParsedCoCreateResponse,
         edits,
         file_operations: parsed.file_operations,
         memories,
+        recovered: false,
     })
 }
 
@@ -3678,6 +3760,7 @@ fn plain_text_cocreation_response(output: &str) -> ParsedCoCreateResponse {
         edits: Vec::new(),
         file_operations: Vec::new(),
         memories: Vec::new(),
+        recovered: false,
     }
 }
 
@@ -3797,6 +3880,7 @@ fn recover_malformed_cocreation_response(
             .unwrap_or_default(),
         file_operations,
         memories: Vec::new(),
+        recovered: true,
     }
 }
 
@@ -5405,6 +5489,7 @@ mod tests {
         assert_eq!(parsed.reply, "我会把动机提前到进门动作里。");
         assert_eq!(parsed.edits.len(), 1);
         assert_eq!(parsed.edits[0].target, "她没有立刻喊人。");
+        assert!(!parsed.recovered, "strict JSON must keep recovered=false");
     }
 
     #[test]
@@ -5556,6 +5641,7 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("开场"));
+        assert!(parsed.recovered, "malformed JSON must set recovered=true");
     }
 
     #[test]
@@ -5589,6 +5675,114 @@ mod tests {
             .unwrap_or_default()
             .contains("开场"));
         assert!(!parsed.reply.contains("fileOperations"));
+        assert!(parsed.recovered, "unclosed structured output must set recovered=true");
+    }
+
+    #[test]
+    fn stage_recovered_file_operations_as_pending_marks_unexecuted() {
+        let operations = vec![ModelFileOperation {
+            action: "writeFile".to_string(),
+            library: "works".to_string(),
+            path: "第二集.md".to_string(),
+            new_name: None,
+            content: Some("残缺正文".to_string()),
+        }];
+        let pending = stage_recovered_file_operations_as_pending(&operations);
+        assert_eq!(pending.len(), 1);
+        assert!(!pending[0].ok, "recovered operations must be marked unexecuted");
+        assert_eq!(pending[0].action, "writeFile");
+        assert_eq!(pending[0].library, "works");
+        assert_eq!(pending[0].path, "第二集.md");
+        assert!(pending[0].message.contains("暂停执行"), "recovered message should warn about paused execution");
+    }
+
+    #[test]
+    fn execute_or_stage_file_operations_stages_when_recovered() {
+        let parsed = ParsedCoCreateResponse {
+            reply: "已续写第二集。".to_string(),
+            edits: Vec::new(),
+            file_operations: vec![ModelFileOperation {
+                action: "writeFile".to_string(),
+                library: "works".to_string(),
+                path: "第二集.md".to_string(),
+                new_name: None,
+                content: Some("残缺正文".to_string()),
+            }],
+            memories: Vec::new(),
+            recovered: true,
+        };
+        let data_dir = temp_data_dir("execute_or_stage_stages_when_recovered");
+        let results = execute_or_stage_file_operations(&data_dir, &parsed);
+        assert_eq!(results.len(), 1);
+        assert!(
+            !results[0].ok,
+            "recovered response with file ops must not write to disk"
+        );
+        assert!(
+            !data_dir.join("第二集.md").exists(),
+            "recovered file operation must not create the target file"
+        );
+    }
+
+    #[test]
+    fn execute_or_stage_file_operations_does_not_touch_disk_when_recovered() {
+        // 即便 library 根目录真实存在，recovered 路径也不应落盘。
+        let data_dir = temp_data_dir("execute_or_stage_no_touch_disk_when_recovered");
+        let parsed = ParsedCoCreateResponse {
+            reply: "已续写第二集。".to_string(),
+            edits: Vec::new(),
+            file_operations: vec![ModelFileOperation {
+                action: "writeFile".to_string(),
+                library: "works".to_string(),
+                path: "子目录/第二集.md".to_string(),
+                new_name: None,
+                content: Some("残缺正文".to_string()),
+            }],
+            memories: Vec::new(),
+            recovered: true,
+        };
+        let results = execute_or_stage_file_operations(&data_dir, &parsed);
+        assert!(results.iter().all(|item| !item.ok));
+        assert!(
+            !data_dir.join("子目录").exists(),
+            "recovered path must not create intermediate folders"
+        );
+    }
+
+    #[test]
+    fn annotate_recovered_reply_appends_pending_summary() {
+        let pending = vec![AppliedFileOperation {
+            action: "writeFile".to_string(),
+            library: "works".to_string(),
+            path: "第二集.md".to_string(),
+            ok: false,
+            message: "模型回复结构不完整，已暂停执行，请核对后再确认。".to_string(),
+        }];
+        let mut reply = "已续写第二集。".to_string();
+        annotate_recovered_reply(&mut reply, &pending);
+        assert!(reply.contains("未执行"), "reply should mention pending ops");
+        assert!(reply.contains("第二集.md"), "reply should list target path");
+        assert!(reply.starts_with("已续写第二集。"), "original reply must remain");
+        // 幂等：再调一次不应重复追加。
+        let before = reply.clone();
+        annotate_recovered_reply(&mut reply, &pending);
+        assert_eq!(reply, before, "annotate must be idempotent");
+    }
+
+    #[test]
+    fn annotate_recovered_reply_noop_without_pending() {
+        let mut reply = "已续写第二集。".to_string();
+        annotate_recovered_reply(&mut reply, &[]);
+        assert_eq!(reply, "已续写第二集。", "empty pending must not annotate");
+    }
+
+    #[test]
+    fn file_operation_action_label_covers_known_actions() {
+        assert_eq!(file_operation_action_label("writeFile"), "写入文件");
+        assert_eq!(file_operation_action_label(" createFolder "), "创建文件夹");
+        assert_eq!(file_operation_action_label("rename"), "重命名");
+        assert_eq!(file_operation_action_label("trash"), "移到回收站");
+        assert_eq!(file_operation_action_label("unknown"), "文件操作");
     }
 
     #[test]
