@@ -35,6 +35,42 @@ pub(crate) fn atomic_write_text(path: &Path, content: &str) -> Result<(), String
     atomic_write(path, content.as_bytes())
 }
 
+/// 以“仅新建”语义原子创建文件：`OpenOptions::create_new(true)` 在打开时即拒绝已存在目标，
+/// 消除“先 exists 检查、再写”之间的 TOCTOU 竞态（符号链接替换可导致写到库外）。
+///
+/// 成功返回 `Ok(true)`；目标已存在返回 `Ok(false)`（由调用方决定如何报错）；
+/// 其他 IO 错误返回 `Err`。写完 `flush`+`sync_all` 后落盘。
+pub(crate) fn create_new_file(path: &Path, content: &str) -> Result<bool, String> {
+    let mut handle = match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(handle) => handle,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
+        Err(error) => {
+            return Err(format!(
+                "文件创建失败（{}）：{error}",
+                path.to_string_lossy()
+            ))
+        }
+    };
+    handle.write_all(content.as_bytes()).map_err(|error| {
+        format!(
+            "文件写入失败（{}）：{error}",
+            path.to_string_lossy()
+        )
+    })?;
+    handle.flush().map_err(|error| {
+        format!(
+            "文件 flush 失败（{}）：{error}",
+            path.to_string_lossy()
+        )
+    })?;
+    let _ = handle.sync_all();
+    Ok(true)
+}
+
 fn temporary_name(path: &Path) -> String {
     let file_name = path
         .file_name()
@@ -152,5 +188,31 @@ mod tests {
 
         let read = fs::read_to_string(&target).expect("read back");
         assert_eq!(read, content);
+    }
+
+    #[test]
+    fn create_new_file_succeeds_when_absent() {
+        let dir = temp_dir("create-new");
+        let target = dir.join("fresh.md");
+
+        let created = create_new_file(&target, "新内容").expect("create");
+
+        assert!(created, "新建应返回 true");
+        let read = fs::read_to_string(&target).expect("read back");
+        assert_eq!(read, "新内容");
+    }
+
+    #[test]
+    fn create_new_file_reports_false_when_present() {
+        let dir = temp_dir("create-exists");
+        let target = dir.join("exists.md");
+        fs::write(&target, "old").expect("seed");
+
+        let created = create_new_file(&target, "new").expect("no io error");
+
+        assert!(!created, "已存在应返回 false 而非报错");
+        // 原文件内容必须保持不变（create_new 不应覆盖）。
+        let read = fs::read_to_string(&target).expect("read back");
+        assert_eq!(read, "old", "已存在文件不应被改动");
     }
 }

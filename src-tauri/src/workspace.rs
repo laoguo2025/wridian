@@ -1,5 +1,5 @@
-use crate::atomic_write::atomic_write_text;
-use crate::path_safety::{is_symlink_or_reparse, safe_child_path};
+use crate::atomic_write::{atomic_write_text, create_new_file};
+use crate::path_safety::{ensure_acceptable_external_root, is_symlink_or_reparse, safe_child_path};
 use crate::runtime::{
     default_knowledge_root, ensure_workspace, iso_timestamp, vault_root, workspace_config_path,
     wridian_data_dir,
@@ -128,9 +128,9 @@ pub(crate) fn wridian_set_work_root(input: SetWorkRootInput) -> Result<Workspace
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
     let root = PathBuf::from(input.path.trim());
-    if !root.is_dir() {
-        return Err("请选择一个存在的本地文件夹。".to_string());
-    }
+    // 校验根目录：拒绝符号链接、系统目录、凭据目录、盘符根。
+    // 存原始用户路径（canonical 在 Windows 上带 \\?\ 前缀会影响展示），校验仅作守门。
+    ensure_acceptable_external_root(&root)?;
     write_workspace_roots_config(
         &data_dir,
         Some(&root),
@@ -148,9 +148,7 @@ pub(crate) fn wridian_set_knowledge_root(
     let data_dir = wridian_data_dir()?;
     ensure_workspace(&data_dir)?;
     let root = PathBuf::from(input.path.trim());
-    if !root.is_dir() {
-        return Err("请选择一个存在的本地文件夹。".to_string());
-    }
+    ensure_acceptable_external_root(&root)?;
     write_workspace_roots_config(
         &data_dir,
         read_active_work_root(&data_dir)?.as_deref().map(Path::new),
@@ -332,14 +330,14 @@ pub(crate) fn apply_workspace_write_file(
         return Err("只能写入 md、txt、docx 文件。".to_string());
     }
     ensure_safe_workspace_parent(&root, &path, "写入文件")?;
-    if path.exists() {
-        return Err(
+    // 用 create_new 原子新建，消除“先 exists 检查、再写”之间的 TOCTOU 竞态。
+    // create_new 在打开时即拒绝已存在目标，也拒绝通过符号链接落点。
+    match write_editable_file_content_new(&path, content)? {
+        NewFileOutcome::Created => Ok(path),
+        NewFileOutcome::AlreadyExists => Err(
             "writeFile 只用于新建文件；修改已有文件内容请返回 edits 并由前端内联确认。".to_string(),
-        );
+        ),
     }
-    ensure_safe_workspace_write_target(&root, &path, "写入文件")?;
-    write_editable_file_content(&path, content)?;
-    Ok(path)
 }
 
 pub(crate) fn apply_workspace_create_folder(
@@ -491,22 +489,6 @@ fn ensure_safe_workspace_parent(root: &Path, path: &Path, label: &str) -> Result
         }
     }
     Ok(())
-}
-
-fn ensure_safe_workspace_write_target(root: &Path, path: &Path, label: &str) -> Result<(), String> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) => {
-            if is_symlink_or_reparse(&metadata) {
-                return Err(format!("{label}目标不能是链接或重解析点。"));
-            }
-            if !metadata.is_file() {
-                return Err(format!("{label}目标不是普通文件。"));
-            }
-            ensure_safe_existing_workspace_path(root, path, label)
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(format!("{label}目标路径信息读取失败：{error}")),
-    }
 }
 
 fn ensure_safe_existing_workspace_path(
@@ -1043,6 +1025,33 @@ fn write_editable_file_content(path: &Path, content: &str) -> Result<(), String>
         return write_new_docx_plain_text(path, content);
     }
     atomic_write_text(path, content).map_err(|error| format!("文件保存失败：{error}"))
+}
+
+/// `writeFile` 的“仅新建”结果：`Created` 表示成功落盘，`AlreadyExists` 表示目标已存在
+/// （由调用方映射为既有中文错误，不再静默覆盖）。
+enum NewFileOutcome {
+    Created,
+    AlreadyExists,
+}
+
+/// 以“仅新建”语义写入可编辑文件，供 `writeFile` 使用。
+///
+/// md/txt 走 `create_new_file`（`OpenOptions::create_new` 原子拒绝已存在目标）；
+/// docx 先做一次 `path.exists()` 前置 guard，再用 `write_new_docx_plain_text` 写整包。
+/// docx 走 `create_new` 需要重写整个 zip 打包流程，前置 guard 已在 `ensure_docx_plain_text_editable`
+/// 的复杂文档拦截之外再加一道存在性判断，与既有“仅新建”语义一致。
+fn write_editable_file_content_new(path: &Path, content: &str) -> Result<NewFileOutcome, String> {
+    if file_extension(path).as_deref() == Some("docx") {
+        if path.exists() {
+            return Ok(NewFileOutcome::AlreadyExists);
+        }
+        write_new_docx_plain_text(path, content)?;
+        return Ok(NewFileOutcome::Created);
+    }
+    match create_new_file(path, content)? {
+        true => Ok(NewFileOutcome::Created),
+        false => Ok(NewFileOutcome::AlreadyExists),
+    }
 }
 
 fn workspace_preview_type(path: &Path) -> String {
