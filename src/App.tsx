@@ -1154,6 +1154,13 @@ function App() {
   };
 
   const updateChatMessageText = (message: ChatMessage, text: string) => {
+    if (message.role === "user") {
+      const contextPills = restorePromptPillsFromMessage(message);
+      chatManager.truncateAfterMessage(message.id);
+      updatePromptPills(contextPills);
+      void sendPrompt({ contextPills, text, selectedText: message.selectedText });
+      return;
+    }
     const selection = draftSelectionRef.current;
     const selectedText = editorContent.slice(selection.start, selection.end).trim();
     const updated = chatManager.updateMessageText(message.id, text, {

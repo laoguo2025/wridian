@@ -40,6 +40,7 @@ async function main() {
   await testSelectionToPromptAndSend(page);
   await testModelFreeSemanticDraftEdit(page);
   await testOrderedModelFileWrite(page, fixture);
+  await testEditedUserMessageResends(page);
 
   await page.evaluate(() => window.__WRIDIAN_E2E__.setNextCocreation(JSON.stringify({
     reply: "已生成 1 处待确认正文修改。",
@@ -104,6 +105,36 @@ async function testOrderedModelFileWrite(page, fixture) {
   const content = await readFile(targetPath, "utf8");
   if (!content.includes("## 第2集-顺序测试") || !content.includes("广播声来自火焰山深处")) {
     throw new Error(`Ordered model file write saved wrong content: ${content}`);
+  }
+}
+
+async function testEditedUserMessageResends(page) {
+  await runMockedPrompt(page, {
+    text: "先写一句错误消息",
+    response: {
+      reply: "旧回复不应保留。",
+      edits: [],
+      fileOperations: [],
+      memories: [],
+    },
+  });
+  await page.evaluate(() => window.__WRIDIAN_E2E__.setNextCocreation(JSON.stringify({
+    reply: "这是编辑后重新发送得到的新回复。",
+    edits: [],
+    fileOperations: [],
+    memories: [],
+  })));
+  const lastUserMessage = page.locator(".chat-message.user").last();
+  await lastUserMessage.getByRole("button", { name: "修改" }).click();
+  const editor = page.locator(".chat-message.user.editing .chat-message-editor");
+  await editor.waitFor({ timeout: 10_000 });
+  await editor.fill("编辑后重新发送的消息");
+  await page.locator(".chat-message.user.editing").getByRole("button", { name: "提交修改" }).click();
+  await waitForChatIdle(page);
+  await page.getByText("编辑后重新发送的消息").last().waitFor({ timeout: 10_000 });
+  await page.getByText("这是编辑后重新发送得到的新回复。").last().waitFor({ timeout: 10_000 });
+  if (await page.getByText("旧回复不应保留。").count()) {
+    throw new Error("Edited user message kept the stale assistant reply");
   }
 }
 

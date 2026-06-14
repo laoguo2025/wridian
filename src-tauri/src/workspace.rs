@@ -1035,8 +1035,11 @@ fn read_editable_file_content(path: &Path) -> Result<String, String> {
 
 fn write_editable_file_content(path: &Path, content: &str) -> Result<(), String> {
     if file_extension(path).as_deref() == Some("docx") {
-        ensure_docx_plain_text_editable(path)?;
-        return write_docx_plain_text(path, content);
+        if path.exists() {
+            ensure_docx_plain_text_editable(path)?;
+            return write_docx_plain_text(path, content);
+        }
+        return write_new_docx_plain_text(path, content);
     }
     fs::write(path, content).map_err(|error| format!("文件保存失败：{error}"))
 }
@@ -1168,6 +1171,32 @@ fn write_docx_plain_text(path: &Path, content: &str) -> Result<(), String> {
         if !replaced_document {
             return Err("DOCX 缺少 word/document.xml。".to_string());
         }
+        writer
+            .finish()
+            .map_err(|error| format!("DOCX 保存失败：{error}"))?;
+    }
+    fs::write(path, output.into_inner()).map_err(|error| format!("DOCX 保存失败：{error}"))
+}
+
+fn write_new_docx_plain_text(path: &Path, content: &str) -> Result<(), String> {
+    let document = crate::docx_xml::minimal_docx_document_xml(content);
+    let mut output = Cursor::new(Vec::new());
+    {
+        let mut writer = zip::ZipWriter::new(&mut output);
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        writer
+            .start_file("[Content_Types].xml", options)
+            .map_err(|error| format!("DOCX 写入失败：{error}"))?;
+        writer
+            .write_all(br#"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#)
+            .map_err(|error| format!("DOCX 写入失败：{error}"))?;
+        writer
+            .start_file("word/document.xml", options)
+            .map_err(|error| format!("DOCX 写入失败：{error}"))?;
+        writer
+            .write_all(document.as_bytes())
+            .map_err(|error| format!("DOCX 正文写入失败：{error}"))?;
         writer
             .finish()
             .map_err(|error| format!("DOCX 保存失败：{error}"))?;
@@ -1456,6 +1485,32 @@ mod tests {
         assert_eq!(
             read_docx_plain_text(&path).expect("read saved docx"),
             "第二场\n新对白"
+        );
+    }
+
+    #[test]
+    fn new_docx_write_creates_readable_plain_text_docx() {
+        let data_dir = temp_data_dir("new-docx-write");
+        let work_root = data_dir.join("user-works");
+        fs::create_dir_all(&work_root).expect("create work root");
+        fs::create_dir_all(crate::runtime::runtime_root(&data_dir)).expect("create runtime");
+        fs::write(
+            workspace_config_path(&data_dir),
+            serde_json::json!({
+                "schemaVersion": 1,
+                "activeWorkRoot": work_root.to_string_lossy()
+            })
+            .to_string(),
+        )
+        .expect("write workspace config");
+
+        let path = apply_workspace_write_file(&data_dir, "works", "测试/第2集.docx", "第2集\n\n新剧情")
+            .expect("create docx through workspace write");
+
+        assert!(path.exists());
+        assert_eq!(
+            read_docx_plain_text(&path).expect("read created docx"),
+            "第2集\n\n新剧情"
         );
     }
 

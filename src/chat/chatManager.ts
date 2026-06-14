@@ -133,7 +133,8 @@ export function useChatManager({
       selectedText: input.selectedText,
       text: userInput,
     });
-    const messagesWithUser = [...messagesRef.current, userMessage];
+    const baseMessages = messagesRef.current;
+    const messagesWithUser = [...baseMessages, userMessage];
     messagesRef.current = messagesWithUser;
     setMessages(messagesWithUser);
     void persistChat(
@@ -245,6 +246,15 @@ export function useChatManager({
     return true;
   }, []);
 
+  const truncateAfterMessage = useCallback((messageId: string) => {
+    const index = messagesRef.current.findIndex((message) => message.id === messageId);
+    if (index < 0) return false;
+    const nextMessages = messagesRef.current.slice(0, index);
+    messagesRef.current = nextMessages;
+    setMessages(nextMessages);
+    return true;
+  }, []);
+
   const stopPrompt = useCallback(() => {
     stopActivePrompt();
     setError("");
@@ -258,6 +268,7 @@ export function useChatManager({
     setError,
     stopPrompt,
     switchProjectChat,
+    truncateAfterMessage,
     updateMessageText,
   };
 }
